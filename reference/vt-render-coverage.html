@@ -1,0 +1,1363 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>VT render coverage - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/reference/vt-render-coverage.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="vt-render-coverage"><a class="header" href="#vt-render-coverage">VT render coverage</a></h1>
+<p>This page is the repo-owned coverage ledger for the ISO 11783-6 Virtual
+Terminal renderer. It is deliberately a claim boundary, not a certification
+statement.</p>
+<p>The current renderer is a retained command-list renderer with an optional
+software framebuffer consumer. Hosted backends share the small
+<code>VtRenderBackend</code> scene-consumer contract:</p>
+<pre><code class="language-text">ObjectPool -&gt; LayoutEngine -&gt; Scene -&gt; GtuiRenderer -&gt; RenderCommand[]
+                                                └── FramebufferRenderer -&gt; RGB pixels
+VtRenderRuntime -&gt; RenderCommand[] -&gt; FramebufferRenderer -&gt; RGB pixels
+</code></pre>
+<p>That is enough to load a pool, choose a mask, lay out many common objects, and
+produce deterministic draw commands for a host backend. The hosted
+<code>FramebufferRenderer</code> can also rasterise those commands into an RGB buffer for
+snapshots or framebuffer experiments, then export packed RGB888 or RGB565 bytes
+for display-driver handoff. Scenes retain the effective palette produced by the
+base renderer palette, active Colour Palette object, and active Colour Map, so
+mask/group background indices, Graphics Context colours, and hosted
+Picture/Scaled Graphic framebuffer expansion use the same palette selection
+rather than falling back to the repo default approximation. When callers have a
+live <code>VtRenderRuntime</code>,
+<code>FramebufferRenderer::render_runtime</code> uses the runtime command stream so
+runtime-only Graphics Context replay/primitive expansion is included. Backends
+consume <code>Scene</code>/runtime command output; they do not parse object pools or own
+VT protocol state. This is still not a calibrated pixel/font/bitmap VT
+terminal, and profile/display calibration remains future backend work.</p>
+<h2 id="status-vocabulary"><a class="header" href="#status-vocabulary">Status vocabulary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Status</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>drawable</code></td><td>The object becomes a scene node and draw command.</td></tr>
+<tr><td><code>interactive</code></td><td>The object is drawable and also participates in input/focus handling.</td></tr>
+<tr><td><code>soft-key</code></td><td>The object is resolved into the soft-key area rather than the data-mask node list.</td></tr>
+<tr><td><code>reference-resolved</code></td><td>The object is consumed as value, style, palette, label, or pointer metadata.</td></tr>
+<tr><td><code>parsed-but-not-rendered</code></td><td>The object model exists, but faithful visual output is still missing or placeholder-only.</td></tr>
+<tr><td><code>missing-object-model</code></td><td>The object family is in the render inventory but has no <code>ObjectType</code> model yet.</td></tr>
+<tr><td><code>out-of-scope</code></td><td>The renderer intentionally does not draw this family; another VT protocol layer owns it.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="current-ledger"><a class="header" href="#current-ledger">Current ledger</a></h2>
+<p>The machine-readable ledger lives at:</p>
+<pre><code class="language-text">book/src/reference/assets/vt_object_render_coverage.csv
+</code></pre>
+<p>The ledger now includes first-class rows for the formerly missing standard
+families:</p>
+<ul>
+<li><code>OutputList</code> is parsed, resolves its selected index from its inline value or
+Number Variable, materialises selected drawable items as scene nodes clipped
+to the Output List rectangle, including selected <code>Key</code> objects as
+display-only key designators, updates that rectangle through Change Size,
+treats the one-byte Value AID as Get-Attribute-only/read-only for Change
+Attribute while accepting Change Numeric Value for selected-index changes,
+follows the standard blank/no-display cases without fabricating an
+index/count fallback label, and draws compact text for simple selected
+<code>OutputString</code>/<code>OutputNumber</code> item values.
+Selected
+<code>ObjectPointer</code> entries may also target an
+<code>ExternalObjectPointer</code>; when the host-registered external pool grants
+access, the resolved external object is materialised inside the Output List
+clip, while an unavailable external item with no local default stays blank
+instead of creating an unsupported placeholder. Upload validation, Change List
+Item replay, and Object Pointer
+retargeting now reject Output List item references to style/reference
+metadata objects that cannot be presented.</li>
+<li><code>OutputNumber</code> and <code>InputNumber</code> fixed-field Change Attribute replay now
+includes the raw Value AIDs as well as formatting/geometry fields, so
+variable-reference-NULL numeric fields redraw from the new inline value.
+Their formatted text also rejects non-finite scale values before retained
+mutation, rejects decimal counts outside the standard <code>0..=7</code> range, rejects
+the reserved non-standard hexadecimal format selector, and observes the
+standard fixed/exponential, leading-zero, zero-as-blank, and truncate option
+bits.</li>
+<li><code>InputAttributes</code> and <code>ExtendedInputAttributes</code> are parsed as reference
+metadata and enforced for hosted <code>InputString</code> edits. Change String Value
+against an <code>InputAttributes</code> object updates its validation string and rebuilds
+the hosted input-validation state without increasing the fixed validation
+string length; shorter transfers are padded with spaces. When an Input String
+references a String Variable, classic Input Attributes are applied only to
+8-bit strings and Extended Input Attributes only to ISO WideStrings. Classic
+validation remains byte-oriented in the hosted edit path, so blacklist rules
+cannot admit non-single-byte characters into an 8-bit field, while Extended
+Input Attributes enforce both whitelist and blacklist code-plane ranges.
+Validation type is readable through Get Attribute Value, but it is not
+Change Attribute mutable for either validation-reference object.
+Extended Input Attributes reject duplicate code-plane records during encode
+and decode so each Unicode plane is represented at most once.</li>
+<li><code>WorkingSetSpecialControls</code> applies initial colour-map and colour-palette
+selections before first render, updates retained colour selections through
+Select Colour Map/Palette and Change Attribute, and exposes advertised
+language/country pairs on <code>Scene</code> so a host VT can make a deterministic
+language-selection decision; pool validation rejects malformed language pairs
+before render/runtime use while accepting the standard two-space country
+not-applicable sentinel. Scene language matching now treats that sentinel as
+language-only support in either the advertised pair or the host query, while
+still requiring exact country matches when both sides provide country codes.
+<code>Scene::select_language</code> gives hosts a deterministic first-preference match
+with exact-country matches preferred over language-only fallback.
+The object parser also honours the standard
+number-of-bytes-to-follow extension shape: known VT6 language pairs are
+decoded, unknown trailing extension bytes are preserved and skipped so the
+next object in the pool is still found, and Get Attribute Value AID 1 reports
+the retained byte count including those extension bytes. Server Get Attribute
+Value AID 2 and AID 3 report the live retained colour selection, so a later
+Select Colour Map/Palette command clears or replaces earlier WSSC Change
+Attribute overlays instead of returning stale colour references.</li>
+<li><code>ColourPalette</code> uses the ISO 11783-6:2018 Table B.73 body shape:
+reserved <code>Options</code>, a two-byte ARGB-entry count, and repeated little-endian
+ARGB entries in B,G,R,A byte order. Pool decoding rejects nonzero reserved
+options, count/body mismatches, and counts above the 256-entry palette range;
+Change Attribute admits only the reserved Options AID with value zero. The
+hosted palette overlay applies entries from colour index 0 upward; alpha is
+retained in the object model but ignored by the current opaque RGB renderer.</li>
+<li>AUX object families (<code>AuxFunction</code>, <code>AuxInput</code>, <code>AuxFunction2</code>,
+<code>AuxInput2</code>, and <code>AuxControlDesignator</code>) are deliberately <code>out-of-scope</code> for
+retained rendering. They are object-pool/protocol state used by auxiliary
+routing and assignment; they are not data-mask draw nodes or placeholder
+graphics to complete in the render backend.</li>
+<li><code>WorkingSet</code> now uses the standard object/macro/language tail order for
+serialization and pool walking. Its two-byte language-code list is parsed,
+validated as ASCII letter pairs, and exposed as language-only
+<code>SceneLanguage</code> entries unless <code>WorkingSetSpecialControls</code> supplies one or
+more language/country pairs, in which case the special-controls list
+supersedes the Working Set list.</li>
+<li><code>ObjectLabelRef</code> is parsed as a counted object-label list, validated for one
+list per pool, unique labelled targets, String Variable label references,
+standard Annex K font-type values, and output/drawable graphic-designator
+references, and materialised as runtime metadata for VT popup/editor labels.</li>
+<li><code>ExternalObjectDefinition</code>, <code>ExternalReferenceName</code>, and
+<code>ExternalObjectPointer</code> now use the standard VT5 record shapes: enabled/NAME
+metadata for definition/reference objects, counted object IDs on
+definitions, and default-object/reference-NAME/external-object-id fields on
+pointers. Change Attribute updates the mutable metadata fields, Change List
+Item updates External Object Definition object-list entries, and the
+four-byte External Object Pointer Change Numeric Value payload updates both
+the External Reference NAME object ID and the referenced external object ID;
+Change Attribute AID 2 may set the External Reference NAME to NULL to restore
+the local default fallback. Hosted layout and live render runtimes can be
+given the local Working Set NAME plus
+referenced Working Set pools; an External Object Pointer placed in the scene
+then materialises the referenced object only when the local External Reference
+NAME is enabled, the registered referenced pool NAME matches, an enabled
+External Object Definition grants that local NAME access to the requested
+object, and the target object exists. Live runtime registration is keyed by
+the referenced NAME, so refreshed pools replace stale copies, and hosts can
+unregister a referenced pool on disconnect. Local Working Set NAME changes
+revalidate external grants, repeated same-NAME announcements, identical
+referenced-pool registrations, and missing-pool unregisters are no-ops, and
+referenced-pool register/unregister events respect active-mask locks: the
+resolver state changes immediately, but a locked active mask keeps its
+current pixels until unlock or timeout materialises the external/default
+object swap. If any check fails, or if the validated external target is an
+<code>ObjectPointer</code> chain ending at NULL, the pointer draws its local default
+object. A NULL local default draws nothing without creating an unsupported
+placeholder, matching the same standard no-object handling used for local
+<code>ObjectPointer</code> NULL values.</li>
+</ul>
+<p>The object-type bytes were also aligned to ISO 11783-6:2018 Table A.1 for the
+VT4/VT6 range: Graphics Context is type 36, Output List is 37, Extended Input
+Attributes is 38, Colour Palette is 45, Graphic Data is 46, Working Set Special
+Controls is 47, and Scaled Graphic is 48. The repo still carries
+<code>ScaledBitmap</code> and <code>GraphicsContext</code> compatibility-extension rows; those are not
+full standard-rendering claims.</p>
+<p>The legacy plural <code>GraphicsContext</code> row is scoped as an machbus compatibility
+extension rather than an ISO 11783-6 completion target. The standard graphics
+context family is the singular <code>GraphicContext</code> row.</p>
+<p>The standard <code>GraphicContext</code> row now exposes its visible canvas surface,
+Change Background Colour, including macro replay, updates the opaque canvas
+backing colour and the canvas command’s initial indexed background, accepted
+subcommands expand to backend-neutral primitives, and Copy
+Canvas/Viewport can emit indexed Picture Graphic pixel payloads when the
+bounded software canvas can replay the supported point/line/rectangle/ellipse/
+polygon/text-cell/Draw-VT-object subset. Replay honours the placed scene
+position of the <code>GraphicContext</code>, while Copy Viewport samples from the canvas
+viewport instead of using placed screen coordinates and applies the current
+viewport zoom to the copied pixel payload. Full persistent pixel-raster
+semantics still need a real raster/graphics backend before a full VT display
+claim is safe.</p>
+<p><code>PictureGraphic</code> now emits backend-neutral indexed-image commands for
+uncompressed payloads and valid count/value RLE payloads whose decoded byte
+length covers the standard source dimensions, using per-row byte strides for
+packed 1-bit and 4-bit rows. Unused packed bits at the end of each row are
+ignored instead of becoming pixels in the next row. Short decoded payloads stay
+explicit placeholders; extra bytes beyond the expected row-padded bitmap
+length are ignored/truncated as the Picture Graphic raw-data rule requires
+instead of inventing additional pixels. Its target display width drives the
+render rectangle while the actual bitmap dimensions remain the source image
+dimensions in the command. The command stream carries the
+transparent/opaque option separately from the transparency colour index, so
+opaque pictures still draw pixels that happen to equal the transparency colour.
+Change Attribute updates to Picture Graphic options preserve the uploaded
+raw/RLE data-shape bit and only change the runtime transparent/flashing bits,
+so command replay cannot reinterpret the stored bitmap payload.
+<code>ScaledGraphic</code> now resolves <code>PictureGraphic</code> and valid <code>ObjectPointer</code> graphic
+value chains into the same command shape after optional RLE decode and the same
+row-padded decoded length check plus Picture Graphic extra-byte truncation,
+applies the standard ScaleType byte for scaling mode
+and horizontal/vertical justification inside the Width/Height field, preserves
+the source bitmap dimensions in the command, and keeps a Picture Graphic
+source’s transparent option distinct from RLE compression. Upload,
+server-retained mutation, and direct hosted-runtime
+replay all reject Scaled Graphic value chains whose ObjectPointer indirection
+reaches a non-graphic object or cycles. Standard <code>GraphicData</code> objects are now
+decoded with their PNG/u32-length body shape; a <code>ScaledGraphic</code> that points at
+<code>GraphicData</code> can emit backend-neutral RGBA image commands for non-interlaced
+or Adam7-interlaced grayscale, indexed-colour, grayscale-alpha, RGB, or RGBA
+PNG payloads, including 16-bit grayscale/grayscale-alpha within the 32-bit
+RGBA maximum, using
+zlib DEFLATE streams, including stored, fixed-Huffman, and dynamic-Huffman
+blocks with literal and length/distance-copy data plus
+PNG chunk CRC checks, scanline filters 0..4, and
+palette/grayscale/true-colour transparency metadata,
+and it keeps unsupported PNG format variants, including 16-bit RGB and RGBA
+payloads that exceed the standard 32-bit RGBA maximum, as explicit placeholders
+instead of misinterpreting PNG bytes as indexed bitmap data. The placeholder
+path inspects the PNG signature, IHDR, basic chunk shape, dimensions, bit
+depth, colour type, and the 32-bit-per-pixel limit, so malformed PNG payloads
+and unsupported-but-well-formed PNG payloads report different reasons.
+<code>ScaledBitmap</code> is still an machbus compatibility extension, not a
+standard-completeness claim. The coverage ledger marks it out of scope, and
+standard PNG <code>GraphicData</code> is likewise kept as unsupported there rather than
+drawn through the old indexed shortcut.
+Indexed-image commands carry the producing VT object ID so backends
+can correlate later resource updates with the visible object that draws them.
+The hosted framebuffer consumes copied <code>GraphicsContextPictureData</code> in
+command-stream order, so a Copy Canvas/Viewport update affects subsequent
+Picture Graphic draws without retroactively changing an earlier draw of the
+same Picture Graphic object. When the command stream contains only bare
+Copy Canvas/Viewport intent, including the standard Graphics Context copy
+replay subcommands, it also keeps a per-Graphics Context indexed canvas for
+direct replay, so later Picture Graphic updates use GC-owned pixels rather than
+framebuffer outline/background pixels, including viewport zoom carried on the
+copy intent or remembered from earlier viewport/zoom replay. Those updates are
+applied in target Picture Graphic pixel coordinates, not stretched over the
+later display rectangle, so copied sources clip to smaller Picture Graphics and
+extra pixels in larger Picture Graphics keep their existing bitmap contents. If
+the direct framebuffer path has no valid GC-owned backing canvas, such as an
+oversized canvas refused by the bounded software-canvas guard, Copy
+Canvas/Viewport produces no Picture Graphic update rather than sampling visible
+framebuffer/debug pixels.
+It can also consume bare <code>GraphicsContextCanvas</code> plus
+<code>GraphicsContextReplay</code> command slices for the basic cursor/colour,
+erase-rectangle, point, line, rectangle-outline, ellipse-outline, and polygon
+polyline subset plus default-cell DrawText and viewport position/size updates.
+For text replay, a standard NULL Font Attributes selector resets DrawText to
+the default text colour instead of leaking the current drawing foreground into
+text or copied Picture Graphic pixels. NULL/non-NULL line-attribute selection
+is clipped to the current Graphic Context viewport. Non-NULL fill-attribute
+selection fills rectangle, ellipse, and closed polygon primitives into the
+visible framebuffer and the GC-owned copy canvas. This gives simple pixel
+backends a direct replay path even when the hosted runtime has not pre-expanded
+the replay into ordinary drawing commands.
+The active scene palette is carried with the retained scene; hosted command and
+framebuffer paths therefore apply Select Colour Map/Palette and Working Set
+Special Controls palette selections to indexed Picture/Scaled Graphic pixels,
+not just to style attributes. Colour Map object-pool records use the standard
+two-byte colour-index count and reject non-standard entry counts outside the
+defined 2, 16, and 256-entry forms.
+The public client API exposes both <code>select_colour_map</code> and
+<code>select_colour_palette</code>; both helpers emit the same standard function code while
+leaving object-family validation to the VT server/runtime admission path.
+When <code>GraphicContext</code> Draw VT Object replays those image commands into the
+hosted bounded software canvas, the canvas expands packed 1-bit, packed 4-bit,
+and byte-per-pixel 8-bit indexed Picture Graphic payloads, quantises decoded
+standard PNG/RGBA <code>GraphicData</code> pixels to the nearest active VT palette entry,
+normalises colours outside the Graphics Context canvas format to the configured
+transparency/no-copy index, then uses nearest-neighbour scaling before Copy
+Canvas/Viewport emits concrete pixel data. Change Generic Attribute now updates the render-affecting fixed fields for
+<code>PictureGraphic</code> and <code>ScaledGraphic</code>; standard <code>GraphicData</code> has no render-time
+Change Attribute path in the server/runtime. Payload-byte replacement remains a
+separate object-pool/update operation. Malformed compressed payloads still fall
+back to explicit placeholders. Decoded bitmap payloads are also length-checked against
+their 1-bit, 4-bit, or 8-bit source dimensions before an image command is
+emitted, so short payloads and unsupported bitmap formats produce explicit
+placeholders instead of malformed image commands.</p>
+<p><code>Animation</code> now uses the standard fixed body and positional child-list layout:
+<code>Value</code>, <code>Enabled</code>, first/default/last child indices, sequence mode, and the
+disabled-behaviour option bits are decoded from the object body while frame
+object IDs and X/Y locations come from the standard child records. The selected
+frame is rendered through the same backend-neutral node path as a normal child
+object and clipped to the Animation area, so a frame that is still
+placeholder-backed remains an explicit placeholder. Change Numeric Value updates
+the selected child index, Change List Item updates positional Animation frame
+slots through server/runtime/macro replay, and Change Attribute covers the
+standard Animation AIDs. Upload validation plus server/runtime Change Attribute
+and Change Numeric Value admission now reject selected/default/first/last child
+indices that do not resolve inside the positional child list, while still accepting
+Value <code>255</code> as the standard no-selected-item value. A valid selected child
+outside the First/Last animation sequence remains visible until the next
+refresh tick; at refresh time, the animation value is range-checked before the
+standard single-shot or loop advancement is applied. <code>VtRenderRuntime</code> owns the
+per-object animation clocks and exposes a refresh-interval hint plus
+clock-advance APIs so hosted backends can schedule deterministic redraws.
+Animation clocks advance only for visible, enabled Animation objects, so an
+inactive or hidden animation resumes from the frame where it was suspended.
+Multiple visible instances of the same Animation object share the same
+referenced frame. Hosts can also call
+<code>tick_animation</code> from a terminal/UI/display timer to advance elapsed time and
+receive the next scheduler
+hint with the render update. Clock advances that stay inside the same visible
+active frame update elapsed time without dirtying/rebuilding the scene; crossing
+to a different visible frame rebuilds deterministically. The <code>vt_gtui_server</code>
+example now uses <code>VtRenderRuntime</code> and <code>tick_animation</code> directly, giving the
+host-loop scheduler path a concrete command-list backend demonstration while
+leaving real UI/window/GPU product work deferred.</p>
+<p>Input String generic attribute replay now covers the standard options AID and
+the object codec accepts the VT4+ wrap-on-hyphen option bit. Those
+transparency/wrapping option bits are not treated as the field enable flag;
+runtime Enable/Disable overlays control whether the field is operator-enabled.
+The Enable/Disable Object command path is now target-gated the same way in the
+server, direct hosted runtime replay, and macro helper reports: only input
+fields, Buttons, and Animation objects can create enabled-state overlays.
+Other drawable/style/reference objects are ignored before retained replay state
+changes, avoiding stale inert enable metadata.
+Input Boolean generic attribute replay covers geometry and the typed
+foreground/variable-reference fields. Its fixed value AID 5 and enabled-state
+AID 6 are Get-Attribute-only/read-only for Change Attribute; value changes use
+Change Numeric Value and enabled-state overlays use Enable/Disable Object.
+Input List and Output List selected-value AID 4 are likewise
+Get-Attribute-only/read-only for Change Attribute, so selected-index changes
+stay on the standard Change Numeric Value path. Output List width/height now
+also participate in the Change Size path instead of relying only on generic
+attributes. Server-side Change
+List Item replay is now bounded by the uploaded Input List, Output List, or
+External Object Definition item count before retaining a mutation, and Output
+List item retargets additionally preserve the renderer-presentable item type
+set instead of accepting inert metadata objects. Change Polygon Point is
+likewise bounded by the uploaded Polygon point list before the server retains
+the point update for runtime replay.
+Selected Object Pointer items resolve to their pointed object text, and the
+standard no-display cases for NULL placeholders, NULL Object Pointers, and
+hidden Container items produce an empty selected item instead of a misleading
+index label. For Input List operator navigation, true NULL item slots remain
+invisible and unselectable, while the standard empty Object Pointer-NULL and
+hidden-Container item positions remain selectable even though they draw blank.
+Placed Object Pointer objects also rebuild through the standard
+Change Numeric Value path, so the numeric pointer value can retarget the
+materialised child just like the generic target-id attribute.
+Scaled Graphic also consumes Change Numeric Value as its standard graphic
+Value-object reference update; setting that value to NULL removes the graphic
+without reporting an unsupported/missing Graphic Data placeholder, while setting
+it to an ObjectPointer is accepted only if that pointer chain still resolves to
+NULL, GraphicData, or PictureGraphic.
+Hosted runtime and pool-owned macro-helper Change Numeric Value replay now use
+the same one-/two-/four-byte numeric target width and scalar/pointer checks as
+the server path, so direct runtime tests and macro helper tests cannot truncate
+high bytes or bypass value-source validation for Input List, Output List,
+Object Pointer, Scaled Graphic, External Object Pointer, Meter, bar-graph, or
+Animation state.
+Output Meter, Linear Bar Graph, and Arched Bar Graph min/max semantics now
+follow the standard render clamp: object pools and Change Attribute replay may
+retain min values that are not less than max values, and the framebuffer draws
+the value and target-value indicators as the minimum rather than rejecting the
+pool or mutating to an arbitrary range.
+Macro Change String Value replay also uses strict UTF-8 admission before
+retained text mutation in both the hosted runtime and the pool-owned macro
+helper, matching the server-side wire path instead of applying lossy
+replacement decoding. The pool-owned helper also uses the same fixed-length
+target set as the server/runtime command path: String Variable, inline Output
+String, and Input Attributes validation string; variable-backed Output String
+objects are not silently retargeted through the display object.
+Fill Attributes pattern references are typed at upload time, during fixed
+Change Fill Attributes, during macro replay, and during server/runtime Change
+Attribute replay: non-NULL pattern IDs must resolve to PictureGraphic objects
+before they can be retained as fill-pattern state. When Fill Type 3 is active,
+monochrome pattern rows must end on whole bytes and 16-colour pattern rows must
+contain an even number of pixels, so row widths that would leave unused packed bits
+are rejected before upload or retained runtime mutation. For normal output shapes,
+Fill Type 1 now follows the standard line-colour fill rule instead of using the
+Fill Colour field or skipping the fill; Fill Type 2 keeps using the Fill Colour
+field; and Fill Type 3 now tiles the referenced PictureGraphic raw/RLE pixel
+data through backend-neutral commands, the hosted framebuffer, and the Graphics
+Context canvas path. Pattern tiling is anchored to the active mask origin rather
+than each shape’s local origin, and PictureGraphic transparency/flashing options
+are ignored for fill-pattern use.
+Font Attributes font-type values are likewise kept on the standard-coded path:
+object-pool validation and Change Attribute replay reject reserved font-type
+codes before a retained style can drift away from ISO-defined values.
+Font size validation now follows the proportional-style split: fixed
+non-proportional sizes stay on the 0..=14 enumeration, while proportional font
+style admits standard height values from 8 upward and rejects state transitions
+that would leave size/style inconsistent.</p>
+<p>Macro objects are reference objects, not direct drawables. The hosted render
+runtime decodes and applies the modelled render-affecting command subset in
+order: visibility, enabled state, numeric/string values, child
+location/position, size, Output Line end-point geometry/direction, background
+colour, option- and target-checked input selection, mask-type-checked soft-key mask/list-item changes,
+Alarm Mask priority,
+Object Label metadata, mask-lock runtime state, generic-attribute replay,
+Font/Line/Fill Attributes object-value mutations, audio terminal side effects,
+Delete Object Pool lifecycle clearing, Macro-object-gated bounded nested Execute Macro calls,
+polygon point/scale changes, colour-map/palette selection, and
+server/runtime current-working-set-checked Change Active Mask. The standalone
+macro helper rejects wrong-family colour-selection targets and active-mask
+targets before reporting hosted runtime replay work. Macro
+Change Attribute replay now shares the same supported-AID table used by server
+admission and direct hosted runtime replay, so unsupported or missing generic
+attribute targets are skipped instead of leaking inert replay records. The
+Data Mask and Alarm Mask Soft Key Mask attribute accepts <code>NULL</code> as the standard
+“no associated Soft Key Mask” clear in all three paths, and the server updates
+its active Soft Key Mask selection state as well as the retained Get Attribute
+Value result.
+Text and numeric field Font Attributes references are treated as required
+object IDs: Change Attribute replay now rejects <code>NULL</code> for AID 4 on
+Output String, Output Number, Input String, and Input Number, and for
+Input Boolean foreground AID 3, instead of silently retaining a non-standard
+nullable style selector.
+Output Polygon Line Attributes are also treated as a required object ID:
+Change Attribute replay rejects <code>NULL</code> for Polygon AID 3 in server admission,
+direct runtime replay, and macro reporting, matching the standard
+0..=65534 range while leaving nullable fill references to mean no fill.
+Fill Attributes generic replay now applies the same pattern-buffer gate before
+retaining type-3 pattern updates or macro reports: monochrome Picture Graphic
+patterns must have byte-aligned raw rows, and 16-colour patterns must have
+whole-byte row pairs, so invalid packed rows do not leak into render replay.
+The standalone macro helper also rejects invalid one-/two-byte payload widths,
+typed references, scalar/range values, and Window Mask generic-attribute
+values, including type changes whose retained required-object list does not
+match the target typed-window form and wrong-family Window Mask
+Name/Title/Icon designators, before reporting runtime replay work. Macro
+Change Soft Key Mask replay now uses the standard Mask Type parameter
+(<code>1</code> Data Mask, <code>2</code> Alarm Mask) rather than the older object-id-at-byte-1
+shortcut, so wrong mask-type/object combinations are skipped before retained
+pool mutation. Get Attribute Value for Data Mask / Alarm Mask AID 2 reads that
+retained soft-key-mask selection, including NULL clears, instead of reporting
+only the uploaded object-pool body. The client command surface has helpers for
+both the common Data Mask form and the standard Alarm Mask form, so hosts do not
+need to hand-build a Mask Type <code>2</code> frame. Object
+macro-reference lists can also be executed for a caller-supplied
+raw VT event byte, preserving the object-pool macro order while leaving
+profile-specific event-name mapping to the host. Recursive macro loops are
+guarded instead of recursing forever. Unknown or too-short macro commands
+remain explicit unsupported effects instead of being guessed.
+The standalone macro helper applies the same pool-owned value, geometry,
+background, attribute-object, and polygon mutations that it can represent
+without runtime state, reports generic Change Attribute effects for the render
+runtime’s validated replay path, applies Delete Object Pool by clearing the
+pool, and reports overlay/input/audio/object-label/mask/nested-macro changes
+for the scene/runtime layer. Those reports are target-gated for the modelled
+standard overlay effects: Hide/Show remains Container-only and Lock/Unlock Mask
+is limited to Data Mask / Window Mask objects before the hosted runtime
+consumes the effect. Colour-map and palette selection is reported as runtime
+state rather than mutating the object pool.</p>
+<p>Lock/Unlock Mask follows the ISO command-byte polarity (<code>0</code> unlocks and <code>1</code>
+locks), admits only data/user-layout mask targets, and does not apply to Soft
+Key Masks or Alarm Masks. In the hosted render runtime, locking the active data
+mask freezes the retained visible scene while accepted ECU commands continue to
+mutate the backing pool; explicit unlock or host-driven timeout expiry rebuilds
+the scene and materialises the queued visual changes. A zero timeout remains
+locked until the ECU sends an explicit unlock, while non-zero timeouts are
+advanced deterministically through <code>VtRenderRuntime::advance_mask_lock_time</code>.
+The server records the same lock state in the no_std-safe working-set state so
+hosted render replay can observe it without making <code>VTServer</code> depend on
+renderer types.</p>
+<p>Text drawing now carries a renderer-ready <code>TextLayout</code> in each <code>DrawText</code>
+command. The layout decodes ISO WideString UTF-16LE values, substitutes
+non-printing control characters deterministically, normalises CR/LF line
+endings, applies horizontal and vertical offsets, hard-wraps where enabled,
+clips to the object box, and records hidden rows/columns for host backends
+that need faithful text placement. The hosted framebuffer consumes those
+resolved font metrics instead of a fixed-size debug cell and reflects the basic
+bold, italic, inverted, underline, and strikethrough decoration bits in
+deterministic text cell coverage. Output String, Output Number, Input String,
+and Input Number now admit the VT4+ horizontal/vertical justification bit pairs
+instead of only the VT3 horizontal values; reserved horizontal or vertical value
+<code>3</code> is still rejected. Those text fields also apply their background colour
+only when the transparent-background option is clear. Input String now also
+feeds the standard auto-wrap option into <code>TextLayout</code> so command and
+framebuffer backends see wrapped input-field rows instead of a clipped
+single-line preview. Numeric text fields now admit only the standard <code>0..=7</code>
+decimal counts and fixed/exponential format selector values; the old
+hosted-renderer hexadecimal shortcut is rejected during pool upload and Change
+Attribute replay.</p>
+<p>Graphics Context objects still do not fully rasterise every primitive into a
+GTUI canvas, but accepted canonical Graphics Context subcommands are now
+exposed as backend-neutral <code>GraphicsContextReplay</code> command-stream entries from
+<code>VtRenderRuntime</code>; malformed payloads for known subcommands are rejected before
+they mutate server/runtime state, and object-reference payloads for known
+line/fill/font selector, Draw VT Object, Copy Canvas, and Copy Viewport
+subcommands are type-checked before replay state is retained; Draw VT Object
+requires a drawable non-recursive standard/rendered target, explicitly rejects
+the machbus-only <code>ScaledBitmap</code> compatibility object, and copy subcommands
+require a non-NULL Picture Graphic target. Unknown subcommand IDs are rejected
+before they can become inert replay records. The VT server now also emits the
+F.57 Graphics Context response for commands whose object/subcommand bytes are
+present, using the standard invalid object, invalid subcommand, invalid
+parameter, and invalid-result bits, and accepts single-frame <code>FF16</code> padding
+without retaining that padding in replay state. F.56 Draw Text payloads use the
+standard counted-string range, so a zero-byte text body is accepted and retained
+as a no-text replay command rather than rejected as malformed. The standard <code>GraphicContext</code>
+line/fill/font attribute selectors, cursor/colour, erase-rectangle, point,
+line, rectangle, closed-ellipse, polygon, and DrawText subcommands are also
+expanded into backend-neutral primitives using the object’s viewport.
+Line-attribute colour
+selectors, non-zero stroke widths, and full two-byte line-art paintbrush
+patterns are preserved in those backend commands and in the bounded indexed canvas that
+produces Copy Canvas/Viewport Picture Graphic pixel payloads. The type-36
+<code>GraphicContext</code> object body now follows the full standard fixed record:
+viewport/canvas size and position, initial zoom/cursor, foreground and
+background colours, font/line/fill attribute references, canvas format,
+options, and transparency colour. Pool validation rejects missing or wrong-type
+font/line/fill attribute references before upload/runtime use. Options bit 1 is
+accepted, so an initial Graphics Context can draw from its referenced
+line/font/fill attribute colours instead of only from object foreground/
+background colours. Pan, zoom,
+pan-and-zoom, and viewport-size subcommands now update and emit
+backend-neutral viewport commands, so later primitives use the adjusted
+viewport origin/size; non-finite, zero, and out-of-range zoom values are
+rejected before command replay or retained-state mutation. Draw VT Object
+materialises the referenced drawable standard/rendered
+object at the current graphics cursor, advances the cursor to that object’s
+bottom right corner, and replays the referenced object’s supported backend
+primitives into the bounded software canvas, treating colours outside the
+Graphics Context canvas format as transparent. Copy Canvas and Copy Viewport now
+emit explicit
+<code>GraphicsContextCopyToPicture</code> commands carrying the target Picture Graphic,
+source selection, effective viewport, and raw zoom bits; when the supported
+primitive/text-cell/Draw-VT-object subset was replayed into the bounded
+software canvas, the runtime also emits <code>GraphicsContextPictureData</code> with
+concrete indexed pixels for the target Picture Graphic. Copy Viewport uses the
+current viewport zoom for that copied pixel payload, so zoomed viewport copies
+do not collapse back to unzoomed canvas coordinates. That software canvas now
+covers point, line, rectangle, ellipse, polygon, text-cell coverage, and Draw
+VT Object primitives that lower to those same backend-neutral commands.
+Generic attribute changes to the standard <code>GraphicContext</code> writable viewport,
+initial zoom/cursor, colours, attribute references, format, options, and
+transparency colour now also rebuild the visible canvas surface. Canvas
+Width/Height AIDs 5 and 6 are read-only and remain Get-Attribute-only, so
+Change Attribute cannot resize the persistent canvas allocation.
+The canvas command carries the transparency colour, and hosted runtime/
+framebuffer copy paths initialize transparent Graphics Context backing pixels
+with that colour. Copy Canvas/Viewport payloads also carry that colour as the
+standard do-not-copy index, so copied pixels leave the target Picture Graphic’s
+existing pixels in place instead of overwriting them with palette index 0.
+Copied palette indexes outside the target Picture Graphic format are also
+normalised to that do-not-copy colour before the runtime payload is emitted.
+The hosted <code>FramebufferRenderer</code> can consume the resulting command stream for
+deterministic RGB snapshots and display-handoff byte exports, including via the
+runtime-aware framebuffer path. It preloads copied Picture Graphic pixels from
+<code>GraphicsContextPictureData</code> only for later target-object <code>IndexedImage</code>
+commands, can also copy bare Copy Canvas/Viewport intent, including standard
+Graphics Context copy replay subcommands, from the current per-Graphics Context
+indexed canvas into later Picture Graphic updates while applying copy-time or
+remembered viewport zoom, and expands indexed
+Picture/Scaled Graphic pixels
+through the active scene palette while still preserving the copy intent command
+for backends with their own canvas/resource cache. Opaque Graphics Context
+canvas surfaces fill their visible backing area in the software framebuffer;
+transparent canvases leave existing framebuffer pixels untouched apart from the
+debug/coverage outline. Basic Graphics Context replay records can also be
+interpreted directly by the framebuffer for cursor/colour, erase-rectangle,
+point, line, rectangle-outline, ellipse-outline, polygon polyline, and
+default-cell counted DrawText drawing, including zero-length no-text replay,
+with viewport position/size updates; NULL
+line-attribute selection disables subsequent line primitives until a non-NULL
+line-attribute selector restores them, and non-NULL fill-attribute selection
+fills rectangle, ellipse, and closed polygon primitives into both the visible
+framebuffer and the GC-owned copy canvas. Copy Canvas/Viewport intent can
+update later visible Picture Graphic draws from GC-owned indexed canvas pixels
+instead of sampling the visible framebuffer, while preserving Picture Graphic
+target dimensions for clipping, unchanged extra target pixels, and transparent
+handling of copied colours outside the target bitmap format. Direct copy
+intent without a valid owned canvas backing is ignored rather than converted
+from visible framebuffer pixels. Framebuffer
+text-cell coverage
+uses resolved font metrics and basic decoration bits including bold, italic,
+inverted, underline, and strikethrough; it is still not a calibrated glyph
+rasterizer.
+Both
+it and <code>GtuiRenderer</code> implement the shared <code>VtRenderBackend</code> trait. Full
+calibrated display/font/graphics rasterisation remains a backend gap.</p>
+<p>Soft-key masks support an initial physical-key paging model. <code>LayoutConfig</code>
+can reserve physical soft-key positions for navigation and render only the
+selected application-key page; <code>VtRenderRuntime</code> tracks and clamps the current
+soft-key page. Reserved navigation cells are exposed separately from
+application keys, and host navigation events now move between pages with a
+<code>SoftKeyPageChanged</code> event. Visible soft-key cells also carry a zero-based
+physical cell index, so keypad/backlit-button hosts can send
+<code>PhysicalSoftKey</code> events without synthesising pointer coordinates; application
+cells emit <code>SoftKeyActivated</code>, while enabled navigation cells page locally.
+Hosts that need hardware-style activation timing can instead send
+<code>PhysicalSoftKeyDown</code> and <code>PhysicalSoftKeyUp</code>: application cells emit
+<code>Pressed</code>, host-driven <code>Held</code>, and matching <code>Released</code> transitions, while
+navigation cells wait until physical release before changing the page and keep
+that pending cell from being overwritten by another pointer, tap, one-shot
+physical, direct semantic soft-key, or direct navigation activation. Stray
+pointer releases do not clear a hardware-origin application or navigation
+soft-key press; only the matching physical release completes or aborts it.
+Two-cell navigation profiles keep both previous/next cells visible for stable
+hardware-cell layout, but disable the previous cell on the first page and the
+next cell on the final page so boundary physical-key presses cannot synthesize
+a local page turn. Navigation-cell reservation is clamped so malformed or
+over-reserved host profiles cannot consume every physical soft-key position and
+overlap the remaining application key cell. Pointer hits on visible soft-key
+cells are routed through the render runtime too: application cells emit
+<code>SoftKeyActivated</code>, and navigation cells change pages on tap/matching release
+instead of on press; stray or drag-off releases are ignored. The renderer does
+not reserve
+navigation keys when the whole Soft Key Mask fits on the reported physical
+keys, and validation rejects Soft Key Masks above 64 virtual keys. Soft Key
+Mask children may now be direct Keys, Object Pointers, or External Object
+Pointers; local pointers resolve to Key objects, and External Object Pointers
+can resolve through the host-registered referenced Working Set pool when the
+external NAME, local Working Set NAME, enabled External Object Definition, and
+target Key all validate. Invalid or unavailable external soft-key targets fall
+back to the local default Key/NULL-slot rule. NULL pointers reserve the physical
+slot without drawing a visible key, and trailing NULL slots are trimmed before
+paging so they do not create empty pages; the runtime page-count and
+next/previous helpers use the same trimmed view as the renderer. Soft Key Mask
+background changes update the backing colour for cells, while a Key’s own
+background colour overrides the mask background for that cell. Soft-key cell
+geometry now follows the configured VT profile for both vertical side columns
+and horizontal/landscape soft-key rows; normal Soft Key Mask cells, navigation
+cells, placed Key Group cells, pointer hit-testing, and zero-based physical-key
+events all use the same configured physical-cell rectangles. The render runtime
+now has an initial VT/operator-selected user-layout mapping layer:
+available Window Masks and Key Groups can be placed into data-mask grid cells
+or soft-key cells, unavailable interactive selections and out-of-grid
+placements are rejected, and Key Groups cannot claim active Soft Key Mask
+application cells or the active profile’s VT-reserved soft-key navigation cells
+when the current Soft Key Mask requires
+paging. That exclusion now follows the navigation cells actually rendered after
+Soft Key Mask child resolution and trailing NULL trimming, not the raw child
+count, so non-paged profiles keep the remaining soft-key cells available for
+Key Groups. Accepted placement overrides survive normal scene rebuilds while
+they remain valid; if a later active Soft Key Mask claims those cells as
+application or navigation soft keys, the runtime removes the stale Key Group
+mapping before exposing the rebuilt scene. If a changed Window Mask or Key
+Group grows or otherwise makes its remembered placement invalid, rebuild
+revalidation removes that changed mapping before stable unchanged mappings are
+reconsidered, preserving still-valid operator placements in their original
+cells; the changed-object priority is retained across Lock/Unlock Mask
+deferrals and applied when the locked scene finally refreshes. If several
+deferred changed placements conflict with each other, the runtime uses Object
+ID order as the tie-break rather than hash-map or ECU command order. Hosts can
+export and restore deterministic logical-cell placement snapshots for
+their own non-volatile storage; exported snapshots are sorted by object ID
+rather than hash-map iteration order, while restore still admits currently
+unavailable objects so recalled cells can be blanked. Available Key Group
+objects can now be placed by the layout engine as one-to-four normal
+soft-key-sized cells; their children may be direct Keys, Object Pointers that
+resolve to Keys, or External Object Pointers that resolve through a
+host-registered referenced Working Set to a granted external Key. The resulting
+user-layout cells activate the resolved local or external Key IDs. Runtime
+operator-placement validation and overlap rectangles use the same resolver, so
+Key Groups whose only available child is a valid external Key can still be
+placed into user-layout soft-key cells. If an External Object Pointer Key Group
+child cannot currently resolve because the referenced Working Set pool is not
+registered and its local default is NULL, that child now remains a blank
+non-activating physical cell instead of collapsing later Key slots upward.
+Runtime Object Pointer retargeting keeps those slot rules after upload: Key
+Group pointer children must continue to resolve to non-NULL Keys, while Soft
+Key Mask pointer children may resolve to NULL reserved cells or Keys only.
+External Object Pointer children in Soft Key Masks and Key Groups keep the same
+local fallback-slot rule during Change Attribute replay: default-object AID 1
+accepts NULL or Key objects and rejects arbitrary uploaded objects in both
+server and direct hosted-runtime paths.
+Key Group mapping-screen designators are typed too: the Name field must
+resolve to an Output String or an Object Pointer to an Output String, while the
+Icon field is NULL or an Object Label graphic-representation output object.
+Upload validation and Generic Attribute replay use the same checks.
+Window Mask mapping-screen designators use the same hosted admission checks:
+non-NULL Name and Window Title references must resolve to Output String
+directly or through an Object Pointer, while non-NULL Window Icon references
+must resolve to Object Label graphic-representation output objects. Upload,
+server-retained replay, direct runtime replay, and macro replay all reject
+wrong-family designators before they become retained render state.
+Soft-key and Key Group labels now prefer display text from child output
+objects, including Object Pointer indirection, before falling back to the Key
+code. Pointer taps on those cells activate the contained Key IDs with the same
+backend-neutral <code>SoftKeyActivated</code> event used by normal
+application soft keys. Zero-based <code>PhysicalSoftKey</code> host events also activate
+placed Key Group cells when no normal Soft Key Mask cell owns that physical
+position, so hardware/backlit-button hosts do not need to synthesize pointer
+coordinates for operator-placed Key Groups. Resolved external soft-key and Key
+Group slots retain the referenced Key Number, so Soft Key Activation payloads
+do not lose the external Working Set’s Key Code. Select Input Object focus
+replay can now focus visible Key IDs inside available Key Group cells as
+focus-only targets, matching the VT4+ Key focus path without opening an edit
+transaction. Explicit Commit on a selected visible soft-key or Key Group key
+now activates that focus-only target, or changes pages for a selected
+navigation cell, while open input edits still keep their normal commit path.
+Pointer press/move/release paths now emit the same
+activation-code <code>Pressed</code>/<code>Released</code>/<code>Aborted</code> events as normal application
+soft-key cells, including immediate <code>Aborted</code> emission when the pointer slides
+off the pressed Key Group key. The physical soft-key down/up path works for
+placed Key Group cells too, so real key hardware can get <code>Pressed</code>, held
+repeat, and <code>Released</code> transitions without manufacturing pointer coordinates;
+stray pointer move/release events do not abort that hardware-origin Key Group
+press.
+Unavailable Key Groups are placed but do not emit key cells or activation
+events; the renderer blanks/fills the remembered cells even when the Key Group
+has the transparent option set. Transparent available Key Groups still leave
+the underlying user-layout/window area unpainted and emit their key cells. Window Mask
+bodies now use the VT4+ user-layout record shape;
+available free-form windows size themselves from the fixed 2 × 6 user-layout
+cell grid. Width, height, window-type, and options updates are admitted only
+inside their standard scalar ranges before server/runtime state is mutated;
+window-type updates also have to match the retained required-object list for
+the target typed-window form. Standard typed windows 1..18 materialise their
+required objects into VT-controlled slots both when nested and when selected as
+the active mask. Active and nested Window Mask children are now lowered with a
+Window Mask clip rectangle, so oversized free-form or typed-window child output
+cannot paint outside the assigned window region. Window clips are intersected
+with object-local clips such as Output List selected-item viewports and
+Animation frame boxes.
+Available transparent windows preserve the underlying user-layout pixels instead
+of painting their background colour. Unavailable windows blank their cell
+region without rendering children. The runtime can also generate VT On
+User-Layout Hide/Show
+notifications for currently placed Window Mask and Key Group nodes, packing two
+visibility records per payload, sorting those Window Mask / Key Group records
+by Object ID before packing, and preserving optional VT v6 TAN bits in the
+full-message path. A separate active-mask helper emits the same H.20 message
+shape for the active Data Mask plus active Soft Key Mask, so hosts can notify
+an inactive-but-still-visible Working Set or hide those masks before making it
+active again. The matching H.21 response is modelled as a separate
+<code>UserLayoutHideShowResponse</code> helper that parses/builds checked ECU-to-VT
+payloads, including NULL-second-record, status-bit, VT5 reserved-byte, and VT6
+TAN-nibble validation. Runtime placement helpers reject overlapping physical
+placement rectangles before mutating the operator layout snapshot, including
+custom VT profiles where the soft-key area overlaps the data-mask/user-layout
+area rather than sitting outside the main canvas. <code>VTServer</code> now also answers
+the standard Get Window Mask Data technical-data request with configurable
+VT-owned user-layout Data Mask and user-layout Soft Key cell background colours,
+so Working Sets can colour-match free-form Window Mask and Key Group content
+without guessing from one of their own object colours. The same technical-data
+path now distinguishes the standard Get Supported Objects query from the AUX
+type-2 capability subquery: the standard response returns a numerically sorted
+supported-object byte list, omits Auxiliary Function/Input type-1 objects, and
+does not advertise local reserved compatibility object codes as standard VT
+objects. Get Supported WideChars now reports the ISO WideChar minimum
+character set ranges for code plane 0, clipped to the requested inquiry range,
+and returns standard error bits for invalid code planes or inverted ranges
+instead of falling through to Unsupported Function. The client-side
+<code>get_supported_widechars</code> builder emits a canonical code-plane-0 full-range
+query, and <code>get_supported_widechars_range</code> exposes the standard code-plane plus
+first/last range fields. Parameterless technical-data requests on the server
+side are canonical as well: Get Hardware, Get Number of Soft Keys, Get Text
+Font Data, and Get Window Mask Data only answer fixed <code>[code][FF×7]</code> requests,
+so malformed reserved bytes cannot be accepted as prefix-compatible capability
+queries. Pool/session-control requests reject hidden reserved-byte garbage too:
+Get Memory must preserve the <code>0xFF</code> tail after its requested memory-size field,
+while Get Versions and End Of Object Pool must arrive as <code>[code][FF×7]</code>.
+Malformed forms cannot open the upload window, return a prefix-compatible
+versions response, or activate a pending pool.</p>
+<p>Input handling now separates selected input state from open edit transactions.
+Typing emits edit-preview events, while <code>Commit</code> emits the final value-change
+event and <code>Cancel</code> aborts the open edit with a VT ESC semantic event instead of
+a final value. Rebinding the hosted input runtime to a rebuilt scene preserves
+the selected/open transaction by VT object ID rather than by the previous
+focus-order index, so mask changes, user-layout placement, or external object
+materialisation cannot move an in-progress edit to a different reordered node.
+Disabled input nodes are also rejected before tap handling can focus them, open
+an edit transaction, or emit a list/boolean value event; runtime Enable/Disable
+overlays use the same path after scene rebind. If a previously focused/open
+input later disappears or becomes hidden/disabled, typing, backspace, and
+commit clear the stale selected/open/edit state before any value event can be
+emitted.
+Hosted <code>InputString</code>
+edits enforce both resolved input-validation attributes and the object’s fixed
+maximum string length before mutating the edit buffer. The resolved validation
+keeps classic Input Attributes byte-oriented and uses Extended Input Attributes
+for WideString code-plane ranges, including blacklist ranges. Validation
+failures are rejected before opening the input transaction, and hardware
+characters delivered to a focused non-editable object stay ignored without
+creating open input state. Hosted <code>InputNumber</code>
+now uses the standard secondary options byte for enabled and real-time-editing
+state and replays the raw Value attribute when the field stores its value
+inline: host key input accepts only decimal digits before mutating the edit
+buffer, normal number edits preview until commit, commits reject raw values
+outside the declared min/max range without closing the transaction, and
+real-time number edits emit complete numeric value-change events immediately
+while rejecting non-decimal or out-of-range edits without mutating the edit buffer. Input
+String enabled state now follows runtime Enable/Disable overlays rather than
+the object’s transparency/wrapping options byte, while the transparent bit still
+controls whether the field paints its background colour and the auto-wrap bit
+controls text layout wrapping. Tapping an
+enabled <code>InputList</code> respects its real-time-editing option too: normal lists emit
+a backend-neutral selection preview until commit/cancel, while real-time lists
+emit a complete next-selection event immediately. Input List upload validation
+now requires its optional variable reference to resolve to a Number Variable
+and each non-NULL item slot to resolve to an uploaded object before
+render/runtime use, while preserving NULL slots as standard no-item
+placeholders.
+Input List rendering now resolves the selected item’s display text through the
+same output/variable/pointer/external-pointer/container paths as list-like
+display objects and leaves non-displayable selections blank instead of
+fabricating an index/count diagnostic label. Host-registered referenced pools
+can supply External Object Pointer item text; unresolved external items with no
+local default stay blank. Selected non-interactive drawable items can also
+materialise as clipped display-value scene nodes, with the parent Input List
+remaining the interactive hit target and the compact text fallback suppressed.
+Accepted Change List Item effects rebuild that visible label or materialised
+item when the selected item slot is retargeted. Accepted
+Change Numeric Value effects for an Input List now retain the selected index
+and rebuild the visible selected item too. Value <code>255</code> and out-of-range
+Number Variable values now preserve the standard blank selected-item display
+instead of clamping to a valid item; the next operator selection restarts at the
+first selectable list entry. Selected NULL item slots are blank as well, and
+operator selection skips true NULL and unavailable external slots while keeping
+the standard empty Object Pointer-NULL and hidden-Container item positions
+selectable; all of those positions still preserve their indexes for Working
+Set values. Input List bodies also carry the standard inline selected
+value and one-byte item count, so lists with
+a NULL variable reference use that inline value for rendering, Change Numeric
+Value replay, and Get Attribute Value. Enabled Button objects use
+activation-code-aware pointer sequencing: press latches the candidate button and
+emits <code>Pressed</code>, matching release emits <code>Released</code>, pointer slide-off or
+drag-off emits <code>Aborted</code>, and stray releases without a preceding press are
+ignored. Button
+labels now resolve display text from child output objects, including Object
+Pointer indirection, before emitting backend-neutral <code>DrawText</code>. Button
+activation payloads use the scene-resolved Key Number, so Buttons materialised
+from a registered external Working Set do not lose their external Key Code.
+Button option bit 4 (<code>0x10</code>) is treated as the standard Disabled bit for
+initial scene state, while bit 6 (<code>0x40</code>) remains reserved object-pool data.
+Button rendering resolves the Button background and border colour fields
+through the active palette, skips the Button face fill when the transparent
+background option is set, and suppresses the hosted border stroke when either
+the suppress-border or no-border option is set.
+Hardware Enter and explicit Commit on a focused/selected enabled Button emit
+the same <code>ButtonActivated</code> semantic event as a one-shot button activation,
+without opening an edit transaction.
+Application
+soft-key pointer paths follow the same <code>Pressed</code>/<code>Released</code>/<code>Aborted</code> model.
+Direct host-provided <code>SoftKeyActivate(id)</code> events are checked against the
+active scene first, so hidden, disabled, or stale Key IDs cannot produce a
+semantic activation event.
+<code>VtRenderRuntime</code> now has a first bus-message bridge for completed semantic
+events: boolean/list/number final changes lower to Numeric Value Change
+payloads, final strings lower to String Value Change payloads, focus and
+edit-open/close state changes lower to Select Input Object payloads, and
+accepted soft-key or button activations lower to deterministic press+release
+activation payload pairs using scene/object-pool parent IDs and key-code fields.
+Pointer activation-code events lower directly to the matching activation-code
+payload. Direct semantic soft-key/button activation lowering re-checks the
+active scene’s visible/enabled state before building payloads, so caller-built
+<code>VtEvent</code> values cannot bypass disabled Buttons, stale Soft Key Mask cells, or
+unavailable Key Group slots. Held-repeat timing is runtime-owned through
+<code>ActivationHoldTiming</code> and
+<code>advance_activation_hold_time</code>: after a press, host event loops advance the
+timer and receive deterministic repeated <code>Held</code> events plus optional bus
+payloads or full PGN/addressed messages. Invalid full-message endpoints are
+rejected before repeat timing is consumed.
+The stateful <code>handle_operator_event_with_bus_messages</code> path emits selected/open
+input transitions before edit previews or value changes, lowers cancel aborts
+to VT ESC payloads, and emits close transitions after commit/cancel. The cancel
+sequence is VT ESC followed by a selected-but-not-open Select Input Object
+notification. Edit previews, local soft-key page navigation, and ignored events
+otherwise remain local-only. The ECU-side client also parses VT ESC as an
+aborted-input event and can build matching VT ESC response payloads, including
+explicit error-code variants for hosts that need to acknowledge a concrete
+abort/error reason. The no_std-safe <code>VTServer</code> also responds to a canonical
+ECU ESC Input command with a VT ESC response frame for the selected input
+object, and rejects malformed reserved bytes without mutating retained input
+escape state.
+<code>VtBusMessage</code> can also wrap these payloads in full <code>PGN_VT_TO_ECU</code> messages
+with explicit VT source and ECU destination addresses, and
+<code>VtRenderRuntime</code> exposes full-message lowering helpers for both direct
+semantic events and stateful operator events. Those helpers preserve the same
+event order as the payload-only path. The checked full-message path rejects
+null/broadcast VT sources and null/broadcast ECU destinations before stateful
+operator-event mutation or emission, so a host cannot accidentally turn a valid
+payload into an unusable VT message envelope. Payload-only and full-message
+lowering also reject semantic value/input/activation/ESC events that target the
+NULL object ID before any bus payload is emitted. The stateful operator-event
+and held-activation bus helpers snapshot the runtime before applying local state
+changes and restore it if semantic-event lowering fails, keeping focus, edit,
+and held-repeat state atomic with bus emission.
+The bus-message helper is split into the semantic
+<code>src/isobus/vt/render/bus_message.rs</code> module and now supports the receive-side
+admission path too: command bytes map back to typed message families,
+payload-only and addressed <code>PGN_VT_TO_ECU</code> messages parse through one checked
+path, Soft Key/Button/Numeric Value Change have explicit VT6 TAN constructors,
+and malformed reserved bytes, bad TAN low nibbles, string length/UTF-8
+mismatches, inconsistent Select Input Object state, NULL concrete-object IDs,
+and invalid Pointing Event parent-mask/touch-state shapes are rejected before a
+host treats the payload as render-runtime bus evidence.
+ECU-to-VT Select Input Object and ESC Input effects are replayed into the
+hosted <code>InputRuntime</code>: option <code>FF</code> selects input fields or VT4+ Button/Key
+targets for focus only, NULL+<code>FF</code> removes focus, option <code>0</code> opens only input
+field objects for data input, and invalid option/target combinations do not
+mutate retained state. The ECU-side client decodes VT Select Input Object
+messages using the standard byte-4 selection plus byte-5 open bit layout, and
+the VT server emits/VT client parses the paired Select Input Object response
+with selected/opened response codes plus disabled, invalid-object,
+not-on-active-mask-or-hidden (<code>0x04</code>), busy, and invalid-option error bits.
+Targets outside the active Data/Alarm Mask or inside a hidden Container are
+rejected without mutating retained focus/open state. ESC aborts an open edit
+transaction without producing a final value. Pointer and
+hardware key events are present as backend-neutral host
+inputs, including Enter/Commit activation for focused Buttons and selected
+focus-only soft-key or Key Group keys. The stateful bus bridge lowers those
+hardware/profile activations to the same checked Button/Soft Key press+release
+payload pairs as pointer/tap activations. Pointer activity in non-interactive
+Data Mask or free-form Window Mask areas is reported as VT Pointing Event
+semantic events and can be lowered to payload-only or addressed VT-to-ECU
+messages; button, input, soft-key, and Key
+Group hits keep their activation/select-input semantics instead of being
+misreported as pointing. VT ESC carries optional VT v6 transfer sequence
+numbers through the semantic event, VT-to-ECU payload builder, client parser,
+and ECU-to-VT response builder; the response builder also preserves an explicit
+error-code byte when requested. <code>VTServer</code> emits the corresponding VT ESC
+response for accepted ESC Input commands. Ordered full-message lowering keeps
+VT ESC TAN payloads in caller order and rejects malformed TAN values instead of
+returning a partial addressed-message prefix. User-layout hide/show
+notifications use the same
+payload-only and addressed-message lowering path, including NULL object-id and
+four-bit TAN validation. Control Audio Signal Termination has checked
+payload/full-message helpers too: H.22 VT-to-ECU notifications support the VT5
+reserved-byte and VT6 TAN forms, and the H.23 response helper is VT6-only with
+strict cause-byte, reserved-byte, TAN-nibble, and destination-specific envelope
+validation. Operator-event ECU responses are checked too:
+<code>ControlActivationResponse</code> builds/parses H.3/H.5 Soft Key/Button Activation
+responses with VT5 reserved-byte or VT6 TAN payloads, and
+<code>PointingEventResponse</code> builds/parses H.7 Pointing Event responses across VT3
+implied-press, VT4/VT5 touch-state, and VT6 TAN-plus-parent-mask forms before
+wrapping them in addressed <code>PGN_ECU_TO_VT</code> messages. H.9 Select Input Object
+and H.11 VT ESC responses are modelled as strict helpers too, including the
+VT4/prior versus VT5+ open-input byte split, ESC reserved bytes, selected/open
+consistency, VT6 TAN handling, and full-message envelope validation. H.13
+Numeric Value Change and H.19 String Value Change ECU responses are also
+checked helpers: numeric responses preserve the exact four value bytes and the
+VT5/VT6 reserved/TAN split, while string responses enforce the standard
+reserved-byte-only shape before full-message wrapping/parsing. H.14/H.15
+Change Active Mask and H.16/H.17 Change Soft Key Mask error
+notification/response helpers cover active-mask and soft-key-mask drawing or
+reference failure reports, reserved error-bit/tail-byte checks, and
+destination-specific VT-to-ECU / ECU-to-VT envelopes.</p>
+<p>Change Object Label handling is now gated by the uploaded Object Label
+Reference List and by the same output/drawable graphic-designator type check
+used during pool validation. A hosted <code>VtRenderRuntime</code> starts with labels from
+the object pool, and accepted label changes override that metadata without
+forcing a data-mask redraw. Server, direct runtime, and macro replay all reject
+undeclared label targets, bad String Variable references, invalid graphic
+designators, and reserved Annex K font-type bytes even when the label string
+reference is NULL.</p>
+<p>Working Set Special Controls colour startup is now part of both hosted render
+runtime construction and server upload acceptance. The renderer uses the
+specified initial Colour Palette object, overlays its standard B,G,R,A ARGB
+entries from index 0 upward, and then routes colours through the specified
+initial colour map unless a later Select Colour Map/Palette command overrides
+or resets those selections. When the Working Set Special Controls Colour
+Palette attribute is NULL or absent, the hosted renderer now keeps the VT
+default palette instead of falling back to the first Colour Palette object in
+the pool. The retained Working Set Special Controls colour references are
+updated as the standard requires. Change Attribute updates to the object’s
+colour-map and colour-palette attributes also rebuild the hosted scene and
+update server-retained render state. Server Get Attribute Value for AID 2 and
+AID 3 now reads that live retained selection, so a later Select Colour
+Map/Palette command overrides any earlier Change Attribute overlay instead of
+returning stale colour references. Its advertised language/country pairs are
+exposed on the scene with the two-space country sentinel preserved; host
+preference matching is deterministic and ASCII-case-insensitive, while the
+returned pair keeps the Working Set’s uploaded casing.</p>
+<p>Command-trace replay has initial fixture coverage. The repo-owned
+<code>tests/fixtures/isobus/vt_render_trace.hex</code> trace is replayed through
+<code>VTServer</code>, its accepted <code>ServerRenderEffect</code> stream, and
+<code>VtRenderRuntime::from_server_working_set</code> to prove that post-activation
+ECU-to-VT command bytes can update rendered scene state. The same constructor
+now folds the server-retained selected input object back into the hosted input
+runtime, so server snapshots preserve focus as well as draw state. It also
+materialises retained Change Priority state into Alarm Mask metadata; priority
+changes affect alarm ordering metadata, not the retained data-mask draw list.
+Runtime Hide/Show or Enable/Disable commands that match the current effective
+object state, plus Enable/Disable commands aimed at non-enableable object
+families, including the same effects executed from Macro commands, repeated
+overlays, background/size/style updates, child position, soft-key mask/end-point
+changes, list item replacement, polygon point changes, same-extents polygon
+scaling, and mapped Change Generic Attribute replay, Change Numeric Value, and
+Change String Value with the same encoded object body now stay <code>Unchanged</code>, so
+replayed duplicate or wrong-target state does not force a scene rebuild or dirty
+flag. Server-side Change Child Location/Position admission also now requires
+the parent object to actually own the target child before retaining geometry
+state, matching the hosted runtime helper instead of preserving inert
+non-parent overlays.
+Server-side Change Attribute admission now checks that the target object owns a
+mutable AID, that reference-valued AIDs point to admissible objects, and that
+scalar option-bit, format, justification, boolean-state, shape
+type/direction/suppression, half-degree angle, and state-relative min/max values
+stay inside the supported ranges before storing retained attribute state or
+appending render replay effects; unsupported AIDs, wrong-type object references,
+out-of-range scalar values, and read-only value AIDs such as Number Variable
+Value stay on their dedicated command paths instead of becoming inert retained
+state. Hosted runtime Change Generic Attribute replay now applies the same
+reference/scalar checks for the mapped render-affecting AIDs before mutating its
+retained pool, including macro replay and server-state import paths; the
+Graphics Context fixed-field gate includes 0..=32767 writable viewport
+dimensions, read-only canvas-size rejection, canonical two-byte signed
+viewport/cursor positions, finite in-range zoom, typed style references, and
+standard NULL style selectors.
+Server snapshot import applies retained generic attributes as
+a converged final state, so state-relative ranges such as Input Number min/max
+survive folding into a fresh hosted runtime even when their canonical map order
+differs from the command order that the server originally accepted.
+This is a local reduced fixture, not a substitute for the still-required
+independent <code>.iop</code> and reference-tool traces. The standard-suite also loads the
+reviewable <code>tests/fixtures/isobus/vt_object_pool.hex</code> pool through
+<code>IopDocument</code>, lowers it to backend commands, and renders it through the hosted
+framebuffer so the byte-walker and render pipeline stay covered by fixture
+bytes instead of only hand-built pools. The <code>iop_inspect</code> example can also load
+candidate raw <code>.iop</code> / <code>.bin</code> pools directly from disk, or a named entry from a
+reviewable <code>.hex</code> fixture file, so independent pools can be inspected before
+they are promoted into Phase 10 evidence fixtures. The report includes both the
+lowered GTUI command preview and a hosted framebuffer snapshot summary with
+RGB888/RGB565 export sizes, placeholder-pixel count, and a deterministic RGB888
+FNV-1a hash plus deterministic RGB565 big-/little-endian FNV-1a hashes. The
+inspector also records a deterministic pool-buffer FNV-1a hash and can run
+against an explicit target layout profile using <code>--canvas</code>,
+<code>--soft-key-area</code>, <code>--physical-soft-keys</code>, <code>--navigation-soft-keys</code>, and
+<code>--soft-key-page</code>, which is needed when promoting soft-key-paging or
+target-display evidence. <code>iop_inspect --expect-rgb888-fnv64 ...</code>,
+<code>--expect-rgb565-be-fnv64 ...</code>, and <code>--expect-rgb565-le-fnv64 ...</code> exit
+nonzero when the rendered snapshot hashes differ. <code>--expect-unsupported-records</code>
+and <code>--expect-placeholder-pixels</code> also let a promoted fixture pin explicit
+caveat counts instead of silently accepting renderer drift; <code>--write-rgb888</code>,
+<code>--write-rgb565-be</code>, and <code>--write-rgb565-le</code> write raw packed framebuffer
+snapshots for archiving, byte-for-byte comparison, or display-driver smoke
+tests. <code>--write-report-json</code> writes a stable machine-readable report with
+source, pool/object counts, layout profile, canvas, coverage totals, GTUI
+command count, framebuffer hash/size data, requested raw artifact paths in its
+<code>artifacts</code> object, and check failures for provenance notes or CI artifacts.
+The framebuffer hash data includes RGB888 plus both RGB565 byte orders so a
+promoted fixture can compare host snapshots and common display-driver handoff
+bytes without recomputing them out of band.
+<code>iop_inspect --strict</code>
+exits nonzero when unsupported scene records, framebuffer render errors, or
+placeholder pixels are present, making candidate pools usable as a repeatable
+pre-promotion evidence gate. The external-evidence manifest at
+<code>tests/fixtures/isobus/vt_external_evidence_requirements.txt</code> names the
+required independent pool categories. <code>vt_external_pool_basic</code> is now backed by
+<code>tests/fixtures/isobus/VT3TestPool.iop</code>, strict <code>iop_inspect</code> JSON, and
+checked-in RGB888/RGB565 raw framebuffer artifacts whose hashes are pinned in
+<code>tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.md</code>;
+<code>vt_external_pool_graphics</code> uses the same independent pool with
+<code>--active-mask 0x07D0</code> so its alarm mask renders a visible indexed
+<code>PictureGraphic</code>, with hashes pinned in
+<code>tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm.md</code>.
+<code>vt_external_command_trace</code> is now backed by a reduced ISO11783-CAN-Stack VT3
+alarm soft-key callback trace,
+<code>tests/fixtures/isobus/vt_external_trace_vt3_alarm.hex</code>, replayed through
+<code>vt_trace_inspect</code> after uploading <code>VT3TestPool.iop</code>; it records one accepted
+<code>ChangeActiveMask</code> effect, pinned initial/final RGB888/RGB565 hashes, and raw
+initial/final framebuffer artifacts in
+<code>tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm.md</code>.
+Reduced open-license seeder fixtures now close the remaining rows:
+<code>vt_external_pool_soft_keys_seeder_reduced.hex</code> covers more keys than physical
+soft-key cells, <code>vt_external_pool_inputs_seeder_reduced.hex</code> covers
+<code>InputBoolean</code> plus <code>InputList</code>, and
+<code>vt_external_pool_user_layout_seeder_reduced.hex</code> covers free-form
+<code>WindowMask</code> plus <code>KeyGroup</code> placement. The standard suite validates this
+manifest shape and checks every <code>complete</code> row for checked-in fixture/report
+artifacts plus source, licence, layout, RGB888/RGB565 hashes, strict-result,
+and caveat fields, so synthetic in-repo fixtures cannot be mistaken for
+Phase 10 completion evidence. For command traces,
+<code>vt_trace_inspect</code> replays named ECU-to-VT command payload rows through
+<code>VTServer</code>, builds <code>VtRenderRuntime</code> from the accepted server state, renders
+initial/final framebuffer snapshots, and writes
+<code>machbus-vt-trace-inspect-report-v1</code> JSON with pool/trace FNV-1a hashes,
+the explicit target layout profile, accepted render effects, and initial/final
+RGB888 plus RGB565 big-/little-endian hashes. It can also write tightly packed
+initial/final RGB888 plus RGB565 big-/little-endian frame dumps, and its JSON
+<code>artifacts</code> object records the requested report and raw frame paths, so
+promoted command traces can archive byte-for-byte display evidence and
+display-driver handoff bytes next to their JSON report. Its
+<code>--expect-accepted-effects</code>,
+<code>--expect-initial-placeholder-pixels</code>, and <code>--expect-final-placeholder-pixels</code>
+flags pin replay/caveat counts in the same promotion command. It also accepts
+named pools from reviewable <code>.hex</code> files via
+<code>--pool-fixture</code>, so promoted command traces can name the same checked-in pool
+fixture as their starting point. <code>make vt-evidence-smoke</code> runs the static pool
+inspector and command-trace inspector with strict/hash gates and raw trace frame
+dumps against repo-owned reduced fixtures; those smokes are repeatability
+checks, not external certification evidence. The hosted runtime also maps
+Change Attribute for the common visible shell objects: Data/Alarm/Window masks,
+Containers, Soft Key Masks, Keys, and Key Groups now update their retained body
+fields and rebuild the scene or soft-key area where those fields are visible;
+Key objects now reject non-standard AID 3 so Key Group options are not confused
+with Key fields.
+Placed Object Pointers now dereference their target into the retained scene, and
+Change Numeric Value on the pointer target field retargets the materialised
+object. Their target value remains Get Attribute Value readable; Change
+Attribute is rejected for Object Pointer retargeting. Server-side Change
+Numeric Value admission also rejects invalid render-affecting scalar/pointer
+values before retaining replay state, including non-boolean Input Boolean
+values, missing Object Pointer targets, invalid Scaled Graphic value-source
+chains, Animation selected-frame values outside the positional child list
+except <code>255</code>, and invalid External Object Pointer External Reference NAME
+targets. Server-side Input Boolean fixed value and enabled-state Change
+Attribute admission is also boolean-gated before retained replay state changes,
+and Input Boolean object-pool encode/decode rejects non-boolean fixed values.
+Input Boolean foreground/variable references are typed to Font Attributes /
+Number Variable.
+Alarm Mask fixed Priority and Acoustic Signal object-pool fields reject
+reserved values at encode/decode time, and AID 4 Acoustic Signal generic
+attribute replay is range-gated in the same server/runtime/macro paths.
+External Object Pointer reference-NAME Change Attribute replay accepts NULL as
+the standard fallback case, so a live pointer can stop resolving an external
+pool and redraw from its local default object. External Object Pointer
+default-object Change Attribute replay also preserves Soft Key Mask
+fallback-slot semantics by allowing only NULL or Key targets when the pointer is
+used as a soft-key child. Direct hosted-runtime replay uses the same checks
+before mutating its retained pool.</p>
+<h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
+<p>The ledger is checked by the VT render tests:</p>
+<pre><code class="language-sh">make standard-suite-check
+</code></pre>
+<p>The relevant assertions prove that:</p>
+<ul>
+<li>every implemented <code>ObjectType</code> has a render status;</li>
+<li>newly modelled standard families stay visible in the static ledger;</li>
+<li>document-specific coverage reports only the object types present in a loaded
+pool;</li>
+<li>unsupported/placeholder objects are recorded instead of silently dropped.</li>
+</ul>
+<p>Run the book and whitespace gates after editing this page or the CSV:</p>
+<pre><code class="language-sh">make book
+make whitespace-check
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../reference/protocol-coverage.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../reference/standard-gap-roadmap.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../reference/protocol-coverage.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../reference/standard-gap-roadmap.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

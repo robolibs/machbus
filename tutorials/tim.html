@@ -1,0 +1,584 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>TIM and automation - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/tim.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="tractor-implement-management-tim"><a class="header" href="#tractor-implement-management-tim">Tractor-Implement Management (TIM)</a></h1>
+<p>Tractor-Implement Management lets an implement ask the tractor for <strong>bounded,
+supervised, revocable authority</strong> to command certain tractor functions —
+vehicle speed, front and rear hitch, front and rear PTO, and auxiliary valves —
+so the implement can coordinate the whole machine instead of just itself. A
+baler that senses a heavy windrow can request authority and ask the tractor to
+slow down; a planter can ask the rear hitch to lift at a headland. The implement
+never seizes control: it requests, the tractor grants within limits it chooses,
+and either side can take the authority back at any instant.</p>
+<p>This tutorial explains why TIM exists, the authority lifecycle as a state
+machine, the interlocks the tractor uses to bound what it accepts, and how to
+drive the whole thing through <code>machbus</code>’s <code>isobus::tim</code> types and the
+<code>Tim</code> session plugin.</p>
+<blockquote>
+<h2 id="safety-framing--read-this-first"><a class="header" href="#safety-framing--read-this-first">Safety framing — read this first</a></h2>
+<p>TIM commands physical motion on a real machine, so it is <strong>safety-critical</strong>.
+Everything below is written assuming these non-negotiable properties:</p>
+<ul>
+<li><strong>Operator-supervised, never unattended.</strong> TIM is an operator-assistance
+feature. A present, attentive operator is part of the system, not optional.</li>
+<li><strong>Bounded.</strong> The tractor only ever accepts commands inside limits <em>it</em>
+enforces. The implement cannot exceed what the tractor allows.</li>
+<li><strong>Instantly revocable.</strong> Either side can withdraw authority at any moment,
+and the machine must fall back to a safe state on revocation, timeout, or
+loss of communication.</li>
+<li><strong><code>machbus</code> is not certified and is not a safety system.</strong> The types here
+model the <em>protocol shape</em> of TIM authority for development and testing on a
+virtual bus. They are not a substitute for certified hardware, functional-
+safety engineering, official AEF automation conformance, or the safety
+interlocks of a real tractor. Do not use <code>machbus</code> to control an actual
+machine without that engineering in place.</li>
+</ul>
+</blockquote>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>An implement often knows things the tractor cannot: how heavy the current load
+is, where the row ends, whether the bale chamber is full. Without TIM, a human
+operator is the only channel for that knowledge to reach the tractor’s controls,
+and reaction time and attention become the limit. TIM gives the implement a
+disciplined way to act on what it knows — but only inside a frame the tractor
+and operator define.</p>
+<p>The design follows the AEF automation principles and ISO 11783 Tractor-Implement
+Management: the implement is a <em>client</em> asking for control; the tractor is a
+<em>server</em> that owns the actuators and decides what it is willing to delegate. The
+server is always in charge. The client only ever borrows authority, and only for
+the specific functions it negotiated.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<pre><code>   implement (client)                         tractor (server)
+        │                                           │
+        │ 1. request authority (a set of options)   │
+        │ ─────────────────────────────────────────►│ checks: supported?
+        │                                           │ interlocks clear?
+        │ 2a. granted (within tractor limits)       │
+        │ ◄─────────────────────────────────────────│
+        │                                           │
+        │ 3. bounded commands (speed/hitch/PTO/aux) │
+        │ ─────────────────────────────────────────►│ clamps to limits,
+        │                                           │ actuates
+        │ 4. status broadcasts                      │
+        │ ◄─────────────────────────────────────────│
+        │                                           │
+   either side may revoke at any time ──► machine returns to a safe state
+        │                                           │
+        │ 2b. denied (not supported / blocked)      │
+        │ ◄─────────────────────────────────────────│ no authority granted
+</code></pre>
+<p>Authority is a lease, not a transfer. The implement holds it only while every
+condition stays true: the option was negotiated, the operator is present, no
+stop is active, the machine is not in road transport, and messages keep
+flowing. The moment any of those fails, the lease ends and the tractor returns
+to a safe state.</p>
+<h2 id="anatomy-options-commands-status"><a class="header" href="#anatomy-options-commands-status">Anatomy: options, commands, status</a></h2>
+<p><code>machbus</code> splits TIM into three concerns, each with its own types in
+<code>isobus::tim</code>.</p>
+<h3 id="options--what-may-be-controlled"><a class="header" href="#options--what-may-be-controlled">Options — what may be controlled</a></h3>
+<p>A TIM <em>option</em> names one controllable capability, such as “rear hitch position”
+or “vehicle speed in the forward direction”. They are listed in the <code>TimOption</code>
+enum (for example <code>TimOption::RearHitchPositionIsSupported</code>,
+<code>TimOption::VehicleSpeedInForwardDirectionIsSupported</code>,
+<code>TimOption::GuidanceCurvatureIsSupported</code>). The currently defined options occupy
+a fixed set of bits; <code>TimOptionSet</code> packs them into a three-byte bitset
+(<code>TIM_OPTION_BYTES</code>).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TimOption</code></td><td>One named controllable function (PTO, hitch, speed, guidance).</td></tr>
+<tr><td><code>TimOptionSet</code></td><td>A bitset of options — what a node <em>supports</em>, <em>requests</em>, or is <em>granted</em>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>You build a set from options and reason about it set-wise:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Illustrative shape — verify exact calls against isobus::tim.
+let available = TimOptionSet::from_options(&amp;[
+    TimOption::RearHitchPositionIsSupported,
+    TimOption::VehicleSpeedInForwardDirectionIsSupported,
+]);
+let requested = TimOptionSet::from_options(&amp;[TimOption::RearHitchPositionIsSupported]);
+assert!(requested.is_subset_of(&amp;available));        // can only request what is supported
+let missing = requested.missing_from(&amp;available);   // what would be refused
+<span class="boring">}</span></code></pre>
+<p><code>TimOptionSet::try_from_bytes</code> rejects reserved bits via
+<code>TimValidationError::ReservedOptionBits</code>, so a malformed capability payload
+cannot be smuggled in as granted authority.</p>
+<h3 id="commands--the-bounded-actions"><a class="header" href="#commands--the-bounded-actions">Commands — the bounded actions</a></h3>
+<p>A <code>TimCommand</code> is a concrete action the authority guard reasons about, such as
+<code>TimCommand::RearHitchPosition</code> or <code>TimCommand::RearPtoSpeedCw</code>. Every command
+maps to exactly one required option through <code>TimCommand::required_option()</code>, so
+the guard can check “is this command covered by what was granted?” without
+guesswork.</p>
+<h3 id="status--what-the-tractor-reports"><a class="header" href="#status--what-the-tractor-reports">Status — what the tractor reports</a></h3>
+<p>The state of each actuator travels as a small fixed-layout payload. <code>machbus</code>
+encodes and decodes these:</p>
+<ul>
+<li><code>PtoState</code> — engaged flag, direction, shaft speed in RPM.</li>
+<li><code>HitchState</code> — motion-enabled flag plus a position <code>0..=MAX_HITCH_POSITION</code>
+(<code>10_000</code>, i.e. <code>0.00%</code>–<code>100.00%</code> at <code>0.01%</code>/bit); out-of-range positions are
+rejected by <code>validate()</code> / <code>try_encode()</code> with
+<code>TimValidationError::HitchPositionOutOfRange</code>.</li>
+<li><code>AuxValveCommand</code> — a valve index <code>0..MAX_AUX_VALVES</code> (<code>32</code>), state, and flow;
+an out-of-range index yields <code>TimValidationError::AuxValveIndexOutOfRange</code>.</li>
+</ul>
+<p>These are deliberately strict: the decoders reject wrong lengths, bad padding,
+and non-boolean flag bytes, so a corrupt frame becomes “no value” rather than a
+plausible-looking wrong value.</p>
+<h2 id="lifecycle-and-state-machine"><a class="header" href="#lifecycle-and-state-machine">Lifecycle and state machine</a></h2>
+<p>The local authority guard is <code>TimAuthority</code>, and its lifecycle is the heart of
+TIM. Its states are <code>TimAuthorityState</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>State</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Idle</code></td><td>No request outstanding. Nothing may be commanded.</td></tr>
+<tr><td><code>Requested</code></td><td>The client asked for a set of options; awaiting a grant.</td></tr>
+<tr><td><code>Granted</code></td><td>Authority is active. Covered commands may be issued.</td></tr>
+<tr><td><code>Denied</code></td><td>The request was refused.</td></tr>
+<tr><td><code>Revoked</code></td><td>A previously granted authority was withdrawn.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The transitions and their triggers:</p>
+<pre><code>              request(set)            grant()
+   Idle ───────────────────► Requested ───────► Granted
+     ▲                          │  │               │
+     │                          │  │ deny()        │ revoke()
+     │                          │  └──────────────►│ or interlock trips
+     │                          │                  ▼
+     │                          └─────────────► Denied / Revoked
+     └──────────────────── request(set) again ◄────┘
+</code></pre>
+<ol>
+<li><strong>request.</strong> <code>TimAuthority::request(set)</code> moves <code>Idle → Requested</code>. It fails
+with <code>UnsupportedOptions</code> if the set is not a subset of what is available, or
+<code>ReservedOptionBits</code> if either set has undefined bits set. You cannot request
+what you do not support.</li>
+<li><strong>grant.</strong> <code>grant()</code> moves <code>Requested → Granted</code> — but only if no interlock
+is blocking. If a stop, road mode, or missing-operator condition is active,
+the grant is refused with <code>InterlockActive</code> and the machine stays safe. A
+<code>grant()</code> from any state other than <code>Requested</code> fails with
+<code>AuthorityNotRequested</code>.</li>
+<li><strong>deny.</strong> <code>deny()</code> records <code>Denied</code>. The client must not command anything.</li>
+<li><strong>command.</strong> While <code>Granted</code>, <code>ensure_command(cmd)</code> (or <code>ensure_option</code>)
+checks four things in order: the option is supported, it was part of the
+request, no interlock is blocking, and the state is still <code>Granted</code>. Only if
+all four hold does the command proceed.</li>
+<li><strong>revoke / forced safe state.</strong> <code>revoke()</code> moves to <code>Revoked</code>. Crucially,
+<code>set_interlocks(...)</code> also forces <code>Granted → Revoked</code> automatically the
+instant a blocking interlock appears — the client does not have to notice and
+react; the guard revokes for it. A revoked authority blocks every command
+until a fresh <code>request</code> + <code>grant</code> cycle re-establishes it.</li>
+</ol>
+<p>The one-way rule that makes this safe: <strong>anything that can go wrong drops you
+out of <code>Granted</code>, and nothing climbs back into <code>Granted</code> except an explicit new
+grant under clear interlocks.</strong></p>
+<h2 id="interlocks-and-limit-enforcement"><a class="header" href="#interlocks-and-limit-enforcement">Interlocks and limit enforcement</a></h2>
+<p>Two independent layers bound what TIM can do.</p>
+<p><strong>Local interlocks</strong> live in <code>TimInterlocks</code>, a snapshot the guard consults
+before granting and before every command. The blocking conditions, expressed as
+<code>TimInterlock</code>, are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Condition</th><th><code>TimInterlock</code></th><th>Why it blocks</th></tr>
+</thead>
+<tbody>
+<tr><td>Operator absent</td><td><code>OperatorNotPresent</code></td><td>TIM requires a supervising operator.</td></tr>
+<tr><td>Road transport mode</td><td><code>RoadTransportMode</code></td><td>Implement control on the road is unsafe.</td></tr>
+<tr><td>External stop active</td><td><code>ExternalStop</code></td><td>A stop request (e.g. a safe-state input) overrides everything.</td></tr>
+<tr><td>Implement not ready</td><td><code>ImplementNotReady</code></td><td>The implement itself is not in a state to be controlled.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>TimInterlocks::all_clear()</code> is the default “everything permits TIM” snapshot;
+you opt into a blocking condition explicitly
+(<code>all_clear().with_external_stop(true)</code>), and <code>blocking_reason()</code> returns the
+first active block, or <code>None</code> when clear. Because <code>set_interlocks</code> revokes a
+live grant the moment a block appears, an interlock change <em>is</em> the safe-state
+trigger.</p>
+<p><strong>Tractor-side limits</strong> are the second layer and they live on the tractor, not
+in the client. The implement can only ever ask for an option the tractor
+published as available, and the tractor clamps each command to the range it is
+willing to actuate. The client’s <code>TimAuthority</code> proves a command is <em>allowed to
+be sent</em>; the tractor still decides what it is <em>willing to do</em>. Never assume a
+sent command was accepted at full value — read the status broadcasts back.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The pure guard (<code>TimAuthority</code>, <code>TimOptionSet</code>, the codecs) has no networking.
+The <code>Tim</code> plugin wires it to real PGNs when you plug it into a <code>Session</code> with the
+options the node supports.</p>
+<p>A typical client flow — request, grant, command, observe — looks like this:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use machbus::session::{Session, EndpointTransport, plugins::Tim};
+
+let rear_hitch = TimOptionSet::from_options(&amp;[TimOption::RearHitchPositionIsSupported]);
+
+let (ctrl, mut driver) = Session::builder(name, 0x80)
+    .plug(Tim::new(TimAuthority::new(rear_hitch)))
+    .spawn(EndpointTransport::new(0, endpoint))?;
+ctrl.start()?;
+
+// ... after address claim ...
+
+ctrl.with_mut::&lt;Tim, _&gt;(|tim| {
+    // Before authority, a command is refused locally and never hits the bus:
+    assert!(tim.command_hitch_position(Hitch::Rear, 20_000, 12).is_err()); // OptionNotRequested
+
+    // Negotiate, then command:
+    tim.request_authority(rear_hitch)?;
+    tim.grant_authority()?;
+    tim.command_hitch_position(Hitch::Rear, 20_000, 12)   // now crosses the bus
+})?;
+<span class="boring">}</span></code></pre>
+<p>The guarded command helpers on the <code>Tim</code> plugin are <code>command_hitch_position</code>,
+<code>command_pto_engage</code>, and <code>command_pto_disengage</code>. Each one calls the guard
+first: if <code>ensure_command</code> fails,
+the helper emits a local <code>TimEvent::CommandBlocked</code> and returns an error
+<strong>without sending any CAN frame</strong>. Authority changes are surfaced as
+<code>TimEvent::AuthorityStateChanged</code>. Status the node observes from peers arrives as
+<code>TimEvent::PtoStatus</code>, <code>HitchStatus</code>, <code>PtoCommand</code>, <code>HitchCommand</code>, and
+<code>AuxValveCommand</code>, cached on the plugin (<code>last_front_pto_status</code>,
+<code>last_rear_hitch_status</code>, and so on). Drain them with <code>ctrl.drain::&lt;TimEvent&gt;()</code>.</p>
+<p>A tractor (server) side plugs TIM the same way and uses the broadcast helpers
+<code>broadcast_pto_status</code>, <code>broadcast_hitch_status</code>, and
+<code>broadcast_aux_valve_command</code> to publish actuator state; invalid payloads are
+rejected before send, so a bad value never leaves the node.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>Whatever role you play, these duties are not optional:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Responsibility</th><th>What you must do</th></tr>
+</thead>
+<tbody>
+<tr><td>Request only what you support</td><td>Build the requested <code>TimOptionSet</code> as a subset of available options.</td></tr>
+<tr><td>Honor revocation immediately</td><td>Stop commanding the instant authority leaves <code>Granted</code>.</td></tr>
+<tr><td>Go to a safe state on loss</td><td>On timeout, revocation, or interlock trip, command the machine to a defined safe state, not “last value”.</td></tr>
+<tr><td>Keep messages flowing</td><td>TIM is periodic; the tractor expects fresh authority/command/status traffic (around <code>TIM_UPDATE_INTERVAL_MS</code>). Silence must be treated as loss.</td></tr>
+<tr><td>Never command from <code>Denied</code>/<code>Revoked</code></td><td>Re-run <code>request</code> + <code>grant</code> before commanding again.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The guard helps with the first and the last by construction, but <strong>timeout and
+safe-state behavior are your application’s responsibility</strong> — the pure guard does
+not run a clock for you.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Authority denied.</strong> The request was not granted (<code>deny()</code>), or <code>grant()</code>
+failed because an interlock was active. The client must treat the function as
+unavailable and command nothing.</li>
+<li><strong>Revoked mid-command.</strong> The operator, the tractor, or an interlock withdrew
+authority while you were commanding. The next guarded helper returns an error
+and emits <code>CommandBlocked</code>; you must immediately drive the machine to a safe
+state rather than repeating the last command.</li>
+<li><strong>Timeout / loss of communication.</strong> If authority, command, or status traffic
+stops, both sides must assume the worst and fall back to safe — the tractor
+releases delegated control, the client stops asserting it.</li>
+<li><strong>Out-of-limit command.</strong> A position past <code>MAX_HITCH_POSITION</code> or a valve
+index past <code>MAX_AUX_VALVES</code> is rejected before encoding; even a well-formed
+command is still clamped by the tractor to its own limits, so observed state
+may differ from what you asked for.</li>
+<li><strong>Operator override.</strong> The operator can always take back control. An operator
+action that clears <code>operator_present</code> or asserts an external stop revokes the
+grant through <code>set_interlocks</code>, and the machine returns to a safe state.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Combining with guidance and speed.</strong> <code>TimOption::GuidanceCurvatureIsSupported</code>
+and the vehicle-speed options let an implement coordinate steering and travel
+speed together — for example holding a guidance line while slowing for load.
+Each function is still negotiated and bounded independently; granting hitch
+control says nothing about speed control. See <a href="guidance.html">Guidance</a>.</li>
+<li><strong>Who is liable.</strong> Because the implement is borrowing authority over a machine
+it does not own, the boundaries matter legally as well as technically. The
+tractor’s published limits and interlocks define what the implement is <em>able</em>
+to do; the operator’s supervision defines what is <em>permitted</em> to happen. The
+AEF automation framework and the official conformance process exist precisely
+to pin down these responsibilities — <code>machbus</code> carries none of that
+certification.</li>
+<li><strong>Why bounded authority instead of full control.</strong> A lease that the server
+clamps and either party can revoke means no single failure (a buggy implement,
+a dropped message, an inattentive operator) can drive the machine outside the
+envelope the tractor and operator agreed to. Bounded, revocable authority is
+what makes implement-driven automation tolerable on a safety-critical machine.</li>
+<li><strong>Pure guard vs. the session facade.</strong> Use <code>TimAuthority</code> directly in unit
+tests and embedded loops where you own timing and wiring. Use the <code>Tim</code> plugin
+in applications: it couples the same guard to the real PGNs and the unified
+event queue for you.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make test
+</code></pre>
+<p>The <code>tests/standard/aef_tim_automation.rs</code> and <code>tests/standard/session_harness.rs</code>
+checks drive the workflow over a two-node virtual bus: a command blocked before authority stays local and emits no frame, a
+granted command crosses the bus and is decoded by the peer, an external stop
+revokes authority and blocks the next command, and status/aux payloads round-
+trip and update the peer’s caches. The pure-guard unit tests live alongside the
+code in <code>src/isobus/tim.rs</code>. There is no dedicated <code>examples/</code> binary for TIM;
+the tests are the runnable reference.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the option negotiation, the request → grant → command → revoke
+lifecycle, interlock-driven revocation, and the strict status/command codecs
+behave deterministically in software, and that <code>machbus</code> refuses to emit a TIM
+command frame unless authority is granted and interlocks are clear.</p>
+<p>Does <strong>not</strong> prove — and this matters most for TIM — that any of this is <strong>safe
+for real, unattended, or production control</strong>. It proves nothing about real-
+hardware timing, functional-safety integrity, interoperability with a specific
+tractor, operator-presence enforcement on a real machine, or AEF automation
+certification. Controlling an actual tractor requires certified hardware, a
+functional-safety case, the official AEF conformance process, and a supervising
+operator — none of which <code>machbus</code> provides.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="sequence-control.html">Sequence control</a> — ordered, conditional command
+sequences that often drive TIM functions.</li>
+<li><a href="guidance.html">Guidance</a> — curvature and steering, frequently combined with TIM
+speed control.</li>
+<li>Shortcut button and safe state — the operator’s always-available path to stop
+automation and return the machine to safe.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/sequence-control.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/diagnostics.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/sequence-control.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/diagnostics.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

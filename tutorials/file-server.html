@@ -1,0 +1,618 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>File Server - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/file-server.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="file-server"><a class="header" href="#file-server">File Server</a></h1>
+<p>A <strong>File Server</strong> (FS) is a control function that owns a file-based storage
+device and lets any other control function on the implement bus store and
+retrieve data. The data plates of a tractor, the screenshots of a virtual
+terminal, a stored object pool, a harvest log a task controller wants to keep
+between power cycles — all of it can live on one shared server that speaks a
+small request/response protocol over the bus. This tutorial covers both roles:
+the <strong>client</strong> that browses and reads/writes files, and the <strong>server</strong> that
+exposes a namespace and enforces the rules. It explains the operation set,
+the file-handle lifecycle, the status and error model, and how to drive each
+side with <code>machbus</code> at the low level and through the session facade.</p>
+<p>The protocol is defined in ISO 11783-13 (File Server). <code>machbus</code> ports it as a
+pump-style client and an enhanced, TAN-idempotent server.</p>
+<h2 id="why-a-file-server-exists"><a class="header" href="#why-a-file-server-exists">Why a File Server exists</a></h2>
+<p>A CAN bus moves short frames, not files. Implements still need durable,
+shareable storage: a place to drop logs, configuration, calibration tables,
+and large blobs that outlive a single message. Building a flash chip into every
+ECU is wasteful and fragments the data across the machine. The FS model instead
+puts one storage device behind a network service. Any client can open a file,
+read or write at byte offsets, and close it again, exactly as if it had a local
+disk — except the disk is shared, the access is mediated, and the server
+decides what is visible and what is writable.</p>
+<p>Because the namespace is server-owned, the FS is also a safety boundary. A
+client only sees the paths the server chooses to expose, cannot escape that
+namespace with <code>..</code>, and cannot write to files the server marks read-only. The
+server is the single point that mounts media, names volumes, and reports when
+removable media comes and goes.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<pre><code>   client                                   server
+   ──────                                    ──────
+   connect ──────── GetProperties ─────────►  reply: version, caps, max files
+        ◄──────────  (Connected) ───────────  (status broadcasts begin)
+   open "\\logs\\a.txt" ───────────────────►  validate path, allocate handle
+        ◄──────────  handle = 7  ────────────
+   write @pos / read @pos (by handle) ─────►  advance file position, reply
+        ◄──────────  bytes + status ─────────
+   close 7 ────────────────────────────────►  release handle
+   ... every 2 s: CCM keepalive ───────────►  refresh connection liveness
+</code></pre>
+<p>Every transaction is <strong>client-initiated and server-terminated</strong>: the client
+sends a request tagged with a transaction number (TAN), the server does the
+work and answers with the same TAN. The client keeps a keepalive (CCM) flowing
+so the server knows it is still there; the server broadcasts its status so
+clients learn whether it is busy and how many files are open.</p>
+<h2 id="the-operation-set"><a class="header" href="#the-operation-set">The operation set</a></h2>
+<p><code>machbus</code> models each operation as an <code>FSFunction</code> code. The client builds the
+request payload; the server decodes it, executes, and encodes a response. The
+function set, in your own words:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Operation</th><th><code>FSFunction</code></th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td>Get file-server properties</td><td><code>GetFileServerProperties</code></td><td>Read the server version, the max number of simultaneous files, and capability bits (directories, volume management, attributes, move, delete). This is the first request the client sends on connect.</td></tr>
+<tr><td>Get file-server status</td><td><code>FileServerStatus</code></td><td>Read the busy flag and the count of currently open files. Also broadcast periodically.</td></tr>
+<tr><td>Get current directory</td><td><code>GetCurrentDirectory</code></td><td>Ask which directory this client’s session is currently in.</td></tr>
+<tr><td>Change current directory</td><td><code>ChangeDirectory</code></td><td>Move the client’s session to another directory, including <code>.</code> (stay), <code>..</code> (up), and <code>\</code> (root).</td></tr>
+<tr><td>Open file</td><td><code>OpenFile</code></td><td>Open or create a file (or open a directory for listing) and get back a handle. Carries the access mode and the create/append/exclusive flags.</td></tr>
+<tr><td>Seek</td><td><code>SeekFile</code></td><td>Set the absolute byte position of an open handle.</td></tr>
+<tr><td>Read</td><td><code>ReadFile</code></td><td>Read up to N bytes from an open handle at its current position; the position advances by the bytes returned. For a directory handle, returns listing entries instead.</td></tr>
+<tr><td>Write</td><td><code>WriteFile</code></td><td>Write a payload to an open handle at its current position; the file grows if needed and the position advances.</td></tr>
+<tr><td>Close</td><td><code>CloseFile</code></td><td>Release a handle.</td></tr>
+<tr><td>Move</td><td><code>MoveFile</code></td><td>Rename/relocate a file within the namespace.</td></tr>
+<tr><td>Delete</td><td><code>DeleteFile</code></td><td>Remove a file.</td></tr>
+<tr><td>Get attributes</td><td><code>GetFileAttributes</code></td><td>Read a file’s attribute byte (read-only, hidden, system, directory, archive, volume).</td></tr>
+<tr><td>Set attributes</td><td><code>SetFileAttributes</code></td><td>Set a file’s attribute byte.</td></tr>
+<tr><td>Get date/time</td><td><code>GetFileDateTime</code></td><td>Read the packed filesystem date and time for a path.</td></tr>
+<tr><td>Initialize volume</td><td><code>InitializeVolume</code></td><td>Reset the volume to an empty namespace (a service-tool operation).</td></tr>
+<tr><td>Volume status</td><td><code>VolumeStatus</code></td><td>Server-to-client broadcast of volume presence/removal state.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="access-modes-and-open-flags"><a class="header" href="#access-modes-and-open-flags">Access modes and open flags</a></h3>
+<p><code>OpenFile</code> carries an <code>OpenFlags</code> byte. The low two bits are the access mode;
+the upper bits are independent flags you OR in:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Bits</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Read</code></td><td>mode <code>0x00</code></td><td>Open for reading.</td></tr>
+<tr><td><code>Write</code></td><td>mode <code>0x01</code></td><td>Open for writing.</td></tr>
+<tr><td><code>ReadWrite</code></td><td>mode <code>0x02</code></td><td>Open for both.</td></tr>
+<tr><td><code>OpenDir</code></td><td>mode <code>0x03</code></td><td>Open a directory for listing (read its entries with <code>ReadFile</code>).</td></tr>
+<tr><td><code>Create</code></td><td><code>0x04</code></td><td>Create the file if it does not exist.</td></tr>
+<tr><td><code>Append</code></td><td><code>0x08</code></td><td>Start the position at end-of-file. Invalid for read-only or directory opens.</td></tr>
+<tr><td><code>Exclusive</code></td><td><code>0x10</code></td><td>With <code>Create</code>, fail if the file already exists.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>OpenFlags::Write | OpenFlags::Create</code> is the idiom for “create or open a file
+to write into”; adding <code>Exclusive</code> turns it into “create, but only if new”.
+The server rejects reserved bits with <code>InvalidAccess</code> and rejects an
+unsupported directory open with <code>NotSupported</code>.</p>
+<h2 id="the-file-handle-lifecycle"><a class="header" href="#the-file-handle-lifecycle">The file-handle lifecycle</a></h2>
+<p>A handle is a one-byte token (<code>FileHandle</code>) the server assigns on a successful
+<code>OpenFile</code>. <code>0x00</code> and <code>0xFF</code> are reserved sentinels (<code>RESERVED_FILE_HANDLE_0</code>,
+<code>INVALID_FILE_HANDLE</code>), so live handles run <code>0x01..=0xFE</code>. The handle is the
+only thing read/write/seek/close refer to — paths are resolved exactly once, at
+open time.</p>
+<pre><code>        open(path, flags)
+              │  server validates path, checks caps,
+              │  allocates handle (or errors out)
+              ▼
+        ┌───────────┐   seek(pos)        ┌───────────┐
+        │   OPEN    │ ─────────────────► │   OPEN    │   position moved
+        │ (handle)  │ ◄───────────────── │ (handle)  │
+        └───────────┘   read/write       └───────────┘
+              │         (position advances by bytes moved)
+              │
+              │  close(handle)  ──►  handle released, slot freed
+              ▼
+        ┌───────────┐
+        │  CLOSED   │   handle is now stale; reuse → InvalidHandle
+        └───────────┘
+</code></pre>
+<p>The handle is <strong>owner-scoped</strong>: the server records the owning client address on
+each <code>OpenFile</code> and only honours read/write/seek/close from that same client.
+A handle from one client is meaningless to another. The handle also dies if the
+client times out (no CCM) or the volume is removed — in both cases the server
+drops the open file and the next use of that handle returns <code>InvalidHandle</code>.</p>
+<p>On the client side, <code>FileClient</code> mirrors the server’s bookkeeping in an
+<code>OpenFileInfo</code> per handle (path, flags, local position) so the application can
+track where each file cursor sits without a round trip.</p>
+<h2 id="the-status-and-error-model"><a class="header" href="#the-status-and-error-model">The status and error model</a></h2>
+<p>Every server response carries an <code>FSError</code> byte. <code>machbus</code> exposes the standard
+set as the <code>FSError</code> enum; <code>Success</code> is <code>0</code>. The categories, and how a client
+should react:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>FSError</code></th><th>Category</th><th>Client reaction</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Success</code></td><td>OK</td><td>Proceed; use the returned data.</td></tr>
+<tr><td><code>NotFound</code></td><td>Path</td><td>The file or directory is not there. Create it (if you meant to) or correct the path.</td></tr>
+<tr><td><code>WrongType</code></td><td>Path</td><td>You asked for a file but the path is a directory, or vice versa. Pick the right operation.</td></tr>
+<tr><td><code>InvalidSourceName</code> / <code>InvalidDestName</code></td><td>Path</td><td>The name is illegal (bad characters, traversal, host-absolute). Fix the path before retrying.</td></tr>
+<tr><td><code>AccessDenied</code></td><td>Permission</td><td>The file is read-only, is open elsewhere, or the target already exists for an exclusive create. Do not retry blindly.</td></tr>
+<tr><td><code>InvalidAccess</code></td><td>Permission</td><td>The requested access mode or flag combination is not allowed. Fix the flags.</td></tr>
+<tr><td><code>TooManyOpen</code></td><td>Resource (per client)</td><td>You hit your own open-file cap. Close something and retry. Retryable.</td></tr>
+<tr><td><code>MaxHandles</code></td><td>Resource (server-wide)</td><td>The server is out of handle slots. Back off and retry later. Retryable.</td></tr>
+<tr><td><code>InvalidHandle</code></td><td>Handle</td><td>The handle is unknown, stale, or not yours. Re-open the file.</td></tr>
+<tr><td><code>NoSpace</code></td><td>Storage</td><td>The volume is full. Free space or stop.</td></tr>
+<tr><td><code>WriteFail</code></td><td>Storage / I/O</td><td>A write failed at the media. Retryable.</td></tr>
+<tr><td><code>MediaNotPresent</code></td><td>Volume</td><td>Removable media is gone. Fatal for the in-flight transfer; wait for the volume to return.</td></tr>
+<tr><td><code>NotInitialized</code></td><td>Volume</td><td>The file system did not mount. Fatal.</td></tr>
+<tr><td><code>NotSupported</code></td><td>Capability</td><td>The server does not implement this operation (check the properties first).</td></tr>
+<tr><td><code>InvalidLength</code></td><td>Framing</td><td>A length field in the request or response is wrong.</td></tr>
+<tr><td><code>OutOfMemory</code></td><td>Resource</td><td>The server could not allocate. Fatal.</td></tr>
+<tr><td><code>EndOfFile</code></td><td>Read</td><td>The read started at or past end-of-file. <code>machbus</code> surfaces this on the client as <code>Ok(empty)</code> so a read loop ends cleanly.</td></tr>
+<tr><td><code>TANError</code></td><td>Protocol</td><td>The transaction number was the reserved sentinel or otherwise invalid.</td></tr>
+<tr><td><code>MalformedRequest</code></td><td>Framing</td><td>The request could not be parsed. Fix the payload shape.</td></tr>
+<tr><td><code>OtherError</code></td><td>Catch-all</td><td>Unspecified failure.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>FSError::is_fatal()</code> flags <code>OutOfMemory</code>, <code>NotInitialized</code>, and
+<code>MediaNotPresent</code> — conditions a retry will not fix. <code>FSError::is_retryable()</code>
+flags <code>TooManyOpen</code>, <code>MaxHandles</code>, and <code>WriteFail</code> — transient conditions where
+a backoff-and-retry is the right move.</p>
+<h3 id="idempotency-the-tan"><a class="header" href="#idempotency-the-tan">Idempotency: the TAN</a></h3>
+<p>The protocol cannot tell a lost request from a lost response, so every request
+carries a <strong>transaction number</strong>. The client increments its TAN for each new
+request (wrapping <code>0..=0xFE</code>; <code>0xFF</code> is the <code>INVALID_TAN</code> sentinel). The server
+caches the last response per TAN per client: if the same TAN arrives again it
+<strong>replays the cached response instead of re-executing</strong>. That is what makes a
+retry safe — re-sending a <code>ReadFile</code> with the same TAN cannot accidentally
+advance the file twice. In <code>machbus</code> the server keeps a <code>TANResponse</code> cache
+that expires on a timer; the client tracks each outstanding request and matches
+the reply by TAN before firing the event.</p>
+<h2 id="large-files-over-the-transport"><a class="header" href="#large-files-over-the-transport">Large files over the transport</a></h2>
+<p>A single CAN frame holds eight data bytes. Anything longer — a read of more than
+a few bytes, a directory listing, a write payload — is segmented by the
+transport layer. The FS messages ride <code>PGN_FILE_CLIENT_TO_SERVER</code> and
+<code>PGN_FILE_SERVER_TO_CLIENT</code>; when a payload exceeds eight bytes the stack uses
+the transport or extended transport protocol automatically. Two consequences
+for your code: large transfers take time (so the per-request timeout matters,
+and the server sends a busy status if it cannot answer promptly), and you
+should size each <code>ReadFile</code>/<code>WriteFile</code> to the chunk your buffer can hold rather
+than trying to move a whole file in one call. See
+<a href="../standards/iso11783-datalink-transport.html">Transport protocol</a> for the segmentation details and
+<a href="../standards/iso11783-file-server.html">File Server and large data</a>
+for the conceptual primer.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<h3 id="the-client-low-level"><a class="header" href="#the-client-low-level">The client (low level)</a></h3>
+<p><code>fs::FileClient</code> is pump-style. Operation methods build the outbound payload and
+return it as <code>FSClientOutbound</code>; you ship it on the bus. Responses arrive
+through <code>handle_server_response</code>, which decodes the frame and fires a
+per-operation <code>Event</code> carrying <code>Result&lt;T, FSError&gt;</code>. <code>update</code> paces the CCM
+keepalive, retries expired requests, and disconnects on a server-status
+timeout. The fallible <code>try_*</code> variants return a precise local error instead of
+a silent <code>None</code> when a request cannot even be built (not connected, bad path,
+unknown handle, oversized payload).</p>
+<p>The handshake is: <code>connect_to_server</code> (which emits the initial
+<code>GetFileServerProperties</code> request), then a properties response transitions the
+client from <code>WaitingForStatus</code> to <code>Connected</code> and fires <code>on_connected</code>. Only
+then will <code>open_file</code>, directory operations, and the rest produce frames.</p>
+<h3 id="the-server-low-level"><a class="header" href="#the-server-low-level">The server (low level)</a></h3>
+<p><code>fs::FileServer</code> is the enhanced, TAN-idempotent server. You pre-load files and
+directories with <code>add_file</code> / <code>add_directory</code>, name the volume with
+<code>set_volume_name</code>, and tune limits through <code>FileServerConfig</code> (per-client cap,
+server-wide cap, CCM timeout, status cadence). Feed inbound frames to
+<code>handle_client_message</code>, which returns the response frame(s) to ship; call
+<code>update</code> to advance timers, run the volume state machine, prune timed-out
+clients, and emit periodic status broadcasts. The server also exposes volume
+management — <code>prepare_volume_for_removal</code>, <code>set_volume_removed</code>,
+<code>reinsert_volume</code> — and fires events (<code>on_client_connected</code>, <code>on_file_opened</code>,
+<code>on_volume_removed</code>, and so on).</p>
+<p>The <code>file_server_demo</code> example drives a full open/write/seek/read round trip
+against a <code>FileServer</code> directly. The client (<code>0x42</code>) creates a file with
+<code>Write | Create</code>, gets a handle back, and writes into it:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Client (0x42) opens a new file with Create+Write.
+    let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
+    let path = b"data.bin";
+    req.push(path.len() as u8);
+    req.push(OpenFlags::Write | OpenFlags::Create);
+    req.extend_from_slice(path);
+    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, req, 0x42));
+    let handle = out[0].data[3];
+    assert_eq!(out[0].data[2], FSError::Success.as_u8());
+    println!("[open ] handle = {handle}");
+<span class="boring">}</span></code></pre>
+<p>It then writes five bytes, seeks back to the start, and reads them again:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Write 5 bytes.
+    let mut wreq = vec![FSFunction::WriteFile.as_u8(), 0x02, handle];
+    wreq.extend_from_slice(&amp;5u16.to_le_bytes());
+    wreq.extend_from_slice(b"hello");
+    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, wreq, 0x42));
+    println!(
+        "[write] wrote {} bytes (success={})",
+        u16::from_le_bytes([out[0].data[3], out[0].data[4]]),
+        out[0].data[2] == 0
+    );
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Read 5 bytes back.
+    let mut rreq = vec![0xFF; 8];
+    rreq[0] = FSFunction::ReadFile.as_u8();
+    rreq[1] = 0x04;
+    rreq[2] = handle;
+    rreq[3..5].copy_from_slice(&amp;5u16.to_le_bytes());
+    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, rreq, 0x42));
+    let read_count = u16::from_le_bytes([out[0].data[3], out[0].data[4]]) as usize;
+    let read_data = &amp;out[0].data[5..5 + read_count];
+    println!(
+        "[read ] {} bytes: {:?}",
+        read_count,
+        std::str::from_utf8(read_data).unwrap_or("?")
+    );
+    assert_eq!(read_data, b"hello");
+<span class="boring">}</span></code></pre>
+<h3 id="the-session-facade-recommended-for-applications"><a class="header" href="#the-session-facade-recommended-for-applications">The session facade (recommended for applications)</a></h3>
+<p>The <a href="../getting-started/first-node.html">session facade</a> exposes both roles
+through the <code>FsClient</code> and <code>FsServer</code> plugins. Inbound frames are routed and
+keepalives / status broadcasts are shipped automatically on each
+<code>driver.poll()?</code>. The client plugin turns each operation into an async-style
+request: <code>open</code>, <code>read</code>, <code>write</code>, <code>seek</code>, <code>close</code>, <code>current_directory</code>, and
+<code>change_directory</code> each return the TAN immediately, and the matching reply
+arrives later as an <code>FsEvent</code> (<code>OpenResponse</code>, <code>ReadResponse</code>, <code>WriteResponse</code>, …)
+you drain with <code>ctrl.drain::&lt;FsEvent&gt;()</code>. The shape on the client side:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use machbus::session::{Session, EndpointTransport, plugins::FsClient};
+
+let (ctrl, mut driver) = Session::builder(name, 0x80)
+    .plug(FsClient::new(FileClientConfig::default()))
+    .spawn(EndpointTransport::new(0, endpoint))?;
+ctrl.start()?;
+
+ctrl.with_mut::&lt;FsClient, _&gt;(|fs| fs.connect_to(server_addr))?;
+// ... poll until FsEvent::Connected ...
+let tan = ctrl.with_mut::&lt;FsClient, _&gt;(|fs| fs.open("\\logs\\a.txt", OpenFlags::Read.bit()))?;
+// ... poll; then match FsEvent::OpenResponse { tan, result } ...
+<span class="boring">}</span></code></pre>
+<p>The server side plugs the <code>FsServer</code> plugin, configured with a <code>root</code>, a
+<code>volume_name</code>, and a <code>max_clients</code>, then populated through fine control. A session
+with <code>FsServer</code> plugged pre-loads two files and a directory, claims an address,
+and polls the server idle. <code>ctrl.with_mut::&lt;FsClient, _&gt;(|fs| ...)</code> and
+<code>ctrl.with_mut::&lt;FsServer, _&gt;(|fs| ...)</code> reach the underlying <code>FileClient</code> /
+<code>FileServer</code> for the methods not surfaced directly.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p><strong>Client responsibilities.</strong> Connect before doing anything else and wait for the
+properties response. Keep ticking so CCM keepalives flow — if they stop for the
+timeout window the server drops you and your handles. Match every response to
+its request by TAN, and on a timeout re-send with the <em>same</em> TAN so the server’s
+idempotency cache protects you. Close handles you open; on disconnect the client
+emits close-file frames for anything still open, but you should not rely on that
+as your only cleanup.</p>
+<p><strong>Server responsibilities.</strong> Validate every path and reject traversal,
+host-absolute paths, and illegal characters. Scope each handle to its owner and
+never honour a cross-client handle. Enforce both the per-client and the
+server-wide open-file caps, and keep the advertised properties consistent with
+the real limits. Cache responses by TAN for idempotent retries. Broadcast status
+on cadence (slower when idle, faster when busy) and announce volume state
+changes so clients can react to removal.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Handle exhaustion.</strong> When a client hits its per-client cap the open returns
+<code>TooManyOpen</code>; when the whole server is out of slots it returns <code>MaxHandles</code>.
+Both are retryable after closing files or waiting.</li>
+<li><strong>Path not found.</strong> A non-existent path returns <code>NotFound</code> unless the open
+carries <code>Create</code>. A <code>..</code> or host-absolute path is rejected as an invalid name
+before it ever reaches the filesystem.</li>
+<li><strong>Permission denied.</strong> Writing or deleting a read-only file, moving onto an
+existing name, or an exclusive create over an existing file all return
+<code>AccessDenied</code>. So does touching a file that is currently open elsewhere.</li>
+<li><strong>Volume removed mid-transfer.</strong> Once the volume goes to the removed state the
+server clears all open handles and rejects file operations with
+<code>MediaNotPresent</code>. In-flight handles are gone; the client must wait for the
+volume to return and re-open.</li>
+<li><strong>Busy server.</strong> If a request takes long enough, the server flips to busy and
+broadcasts that status faster, so the client knows the delay is the server
+working, not a lost message — and should keep waiting rather than retry early.</li>
+<li><strong>Stale handle.</strong> Using a handle after close, after a client timeout, or after
+a volume removal returns <code>InvalidHandle</code>. Re-open to get a fresh one.</li>
+<li><strong>Lost request or response.</strong> Indistinguishable to the client; the cure is the
+same — retry with the same TAN and let the server replay or execute exactly
+once.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Multiple clients.</strong> The server tracks each client independently: separate
+current directory, separate handle set, separate TAN cache. There is no
+interference between sessions, and the connection manager caps the number of
+simultaneous clients.</li>
+<li><strong>Handle ownership scope.</strong> Handles never cross client boundaries. Two clients
+can hold handles to the <em>same</em> file, but each has its own position; the server
+blocks a move/delete/attribute change while a file is open by anyone.</li>
+<li><strong>Concurrency.</strong> Both the client and the server are single-threaded pump
+state machines — you advance them with <code>update</code>/<code>tick</code> and they never block.
+Concurrency between nodes is mediated entirely by the request/response and TAN
+rules, not by locks.</li>
+<li><strong>Persistence.</strong> <code>machbus</code>’s server keeps files in memory (pre-loaded with
+<code>add_file</code>); a real deployment backs the namespace with actual media and is
+responsible for mounting, naming volumes, and reporting removal. The protocol
+surface is identical either way.</li>
+<li><strong>Session facade vs the bare codecs.</strong> Use the <code>FsClient</code> / <code>FsServer</code> plugins
+for applications — they route frames, ship keepalives, and fan out events for
+you. Use the raw <code>FileClient</code> / <code>FileServer</code> for tests and tightly controlled
+loops where you own every frame and every millisecond.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=file_server_demo
+make test
+</code></pre>
+<p><code>file_server_demo</code> runs an open/write/seek/read round trip against a
+<code>FileServer</code> and asserts the bytes come back intact. The session tests build the
+<code>FsServer</code> plugin on a virtual bus, pre-load files, claim an address, and poll
+idle without a client. <code>make test</code> runs the unit and protocol-fixture
+suites, including the path-safety, owner-scoping, TAN-idempotency, and
+malformed-request rejection tests in the FS modules.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the FS operation set, the handle lifecycle, the TAN-idempotency cache,
+the path-safety rules, and the error mapping behave correctly in software, and
+the <code>machbus</code> client and server drive each other to a clean round trip.</p>
+<p>Does not prove: real-hardware media behavior, real transport timing across a
+loaded bus, interoperability with a specific third-party file server or client,
+or any conformance/certification claim. Those still require official standards,
+real hardware, and interoperability evidence.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="../standards/iso11783-file-server.html">File Server and large data</a>
+— the conceptual primer on why files (not frames) need their own service.</li>
+<li><a href="../standards/iso11783-datalink-transport.html">Transport protocol</a> — how multi-frame FS payloads are
+segmented and reassembled.</li>
+<li><a href="vt-object-pools.html">VT object pools</a> — a common use of the FS: a stored
+object pool a virtual terminal can load.</li>
+<li><a href="address-claim.html">Address claim</a> — the claim every FS node does before it
+may send or answer.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/diagnostics.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/nmea-2000.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/diagnostics.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/nmea-2000.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

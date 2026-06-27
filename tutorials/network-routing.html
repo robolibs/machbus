@@ -1,0 +1,620 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Network routing - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/network-routing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="network-routing"><a class="header" href="#network-routing">Network routing</a></h1>
+<p>Most ISOBUS machines are not one bus. A tractor carries its own segment, the
+implement hanging off the back carries another, and something has to sit between
+them deciding which traffic crosses and which stays local. That something is a
+<strong>Network Interconnect Unit</strong> (NIU) — a router or bridge that joins two CAN
+segments and selectively forwards frames between them. This tutorial explains
+why those multi-segment networks exist, what an NIU actually does to each frame,
+and how to drive one with <code>machbus</code> through <code>Niu</code>, <code>Router</code>, and <code>NiuConfig</code>
+(ISO 11783-4).</p>
+<p>If you have read <a href="address-claim.html">Address claim</a>, you already know how a single
+node finds its place on one segment. This page is about what happens when there
+is more than one segment and the two have to be stitched together without
+flooding either side.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>A single CAN segment has hard limits. It can only be so long, carry so many
+nodes, and sustain so much traffic before arbitration latency and bus load make
+it unreliable. A working machine routinely exceeds what one segment can carry:</p>
+<ul>
+<li>The <strong>tractor segment</strong> hosts the tractor ECU, the operator’s terminal, engine
+and transmission controllers, and the network-management traffic that keeps
+them coordinated.</li>
+<li>The <strong>implement segment</strong> hosts whatever is mounted or towed — a sprayer, a
+seeder, a baler — with its own controllers, sensors, and high-rate sensor
+chatter that the tractor side never needs to see.</li>
+</ul>
+<p>Connectors get plugged and unplugged in the field, implements are swapped
+between tractors, and each side wants to keep its own dense local traffic
+private while still exchanging the handful of messages that matter across the
+join: ground speed, guidance, lighting, address claims. If you wired the two
+segments into one electrically, every frame on one side would burden the other,
+and the combined node count and cable length would blow past the physical
+limits. So instead you put a small forwarding device in the middle that listens
+to both sides and copies across only what should cross.</p>
+<p>That device is the NIU. Depending on how much it rewrites, the standard calls it
+a repeater (copies everything), a bridge (copies a filtered subset), a router
+(also rewrites addresses so a whole segment looks like a single node), or a
+gateway (repackages message content). <code>machbus</code> ships the two that matter most:
+the filtering bridge as <code>Niu</code>, and the address-translating router as <code>Router</code>.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<p>Picture two buses joined by one box. Frames flow in from either side; a filter in
+the middle decides each one’s fate; survivors are emitted on the opposite side.</p>
+<pre><code>   TRACTOR SEGMENT                              IMPLEMENT SEGMENT
+ ┌───────────────────┐                       ┌───────────────────┐
+ │ tractor ECU       │                       │ sprayer controller│
+ │ terminal (VT)     │        ┌───────┐      │ section valves    │
+ │ engine / trans    │ ─────► │  NIU  │ ────►│ rate sensors      │
+ │ ...               │ ◄───── │ filter│ ◄────│ ...               │
+ └───────────────────┘  Side  │ + rate│ Side └───────────────────┘
+                      Tractor  │ limit │ Implement
+                               │ (+ xlat
+                               │  table)│
+                               └───────┘
+                       for each frame:
+                       allow / block / monitor / rate-limit
+                       (router also rewrites src &amp; dst address)
+</code></pre>
+<p>The NIU is a <strong>pump</strong>, not a daemon. You hand it one frame at a time together
+with the side it arrived on; it returns either the frame to put on the <em>other</em>
+side, or nothing if the frame was dropped. The caller — typically the loop
+around your two <code>IsoNet</code> segments — is responsible for actually placing the
+returned frame on the destination bus. Nothing forwards itself.</p>
+<h2 id="anatomy-the-pieces-of-an-niu"><a class="header" href="#anatomy-the-pieces-of-an-niu">Anatomy: the pieces of an NIU</a></h2>
+<p>An NIU in <code>machbus</code> is built from a few well-separated parts.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Piece</th><th>Type</th><th>What it holds</th></tr>
+</thead>
+<tbody>
+<tr><td>The two sides</td><td><code>Side::Tractor</code>, <code>Side::Implement</code></td><td>A two-valued label for “which segment a frame came from”. <code>Side::other()</code> flips it.</td></tr>
+<tr><td>Configuration</td><td><code>NiuConfig</code></td><td>Name, default-forwarding policy, filter mode, and loop-guard tuning.</td></tr>
+<tr><td>Filter rules</td><td><code>Vec&lt;FilterRule&gt;</code></td><td>The per-PGN / per-NAME table of what to do.</td></tr>
+<tr><td>Forward decision</td><td><code>ForwardPolicy</code></td><td><code>Allow</code>, <code>Block</code>, or <code>Monitor</code> for a matched frame.</td></tr>
+<tr><td>The forwarder</td><td><code>Niu</code></td><td>Applies the rules, rate-limits, and counts forwarded vs. blocked.</td></tr>
+<tr><td>Translation table</td><td><code>AddressTranslationDb</code></td><td>Maps a NAME’s address on one side to its address on the other.</td></tr>
+<tr><td>The router</td><td><code>Router</code></td><td>A <code>Niu</code> plus an <code>AddressTranslationDb</code> — forwards <em>and</em> rewrites addresses.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>FilterRule</code> is the unit of policy. It carries the PGN it matches (<code>0</code> meaning
+“any PGN”, used by NAME-based rules), the <code>ForwardPolicy</code> to apply, a
+<code>bidirectional</code> flag (when false the rule only applies to tractor-originated
+frames), optional <code>source_name</code> / <code>destination_name</code> constraints, and an
+optional <code>max_frequency_ms</code> that throttles how often a matching frame may cross.
+Rules can also be marked <code>persistent</code>; local runtime reloads through
+<code>Niu::clear_filters</code> keep those rules as the baseline while removing temporary
+rules.</p>
+<p><code>NiuConfig</code> sets the defaults around those rules. The most important field is
+<code>filter_mode</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>NiuFilterMode</code></th><th>Default for unmatched frames</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PassAll</code></td><td>Forward unless a rule blocks it — open by default, block the noisy exceptions.</td></tr>
+<tr><td><code>BlockAll</code></td><td>Drop unless a rule allows it — closed by default, allow only the messages that must cross.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>PassAll</code> suits a bridge that should be mostly transparent; <code>BlockAll</code> suits a
+tight join where you enumerate exactly what is permitted to cross. <code>NiuConfig</code>
+also carries <code>forward_global_by_default</code> and <code>forward_specific_by_default</code>,
+which let broadcast and destination-specific traffic default differently under
+<code>PassAll</code>.</p>
+<h2 id="how-a-forwarding-decision-is-made"><a class="header" href="#how-a-forwarding-decision-is-made">How a forwarding decision is made</a></h2>
+<p>When a frame arrives, <code>Niu::process_frame(frame, origin, now_ms)</code> walks a fixed
+sequence before it ever consults a rule:</p>
+<ol>
+<li><strong>Inactive NIU.</strong> If the NIU has not been <code>start</code>ed, everything is dropped.</li>
+<li><strong>Bad source address.</strong> A frame whose source is the broadcast address, or the
+null address on anything other than an address-claim, is dropped as
+malformed. It never reaches the filter.</li>
+<li><strong>Loop echo.</strong> If this exact frame was just forwarded toward this side inside
+the loop-guard window, it is dropped (see <a href="#loop-prevention">Loop prevention</a>).</li>
+<li><strong>Learn NAMEs.</strong> Address-claim frames are recorded so the NIU knows which NAME
+owns which address on each side — this is what makes NAME-based rules work.</li>
+<li><strong>Resolve policy.</strong> Now the rule table is consulted.</li>
+</ol>
+<p>Rule matching runs top to bottom. A rule matches when its PGN matches (or is
+<code>0</code>), its direction matches the origin side, and any <code>source_name</code> /
+<code>destination_name</code> constraints are satisfied by the NAMEs the NIU has learned.
+The first matching rule wins, and its <code>ForwardPolicy</code> decides the outcome:</p>
+<ul>
+<li><strong><code>Allow</code></strong> — forward the frame to the other side; bump the forwarded counter.</li>
+<li><strong><code>Block</code></strong> — drop it; bump the blocked counter.</li>
+<li><strong><code>Monitor</code></strong> — forward it <em>and</em> additionally raise <code>on_monitored</code>, so you can
+observe a class of traffic without blocking it.</li>
+</ul>
+<p>If a matching rule carries a <code>max_frequency_ms</code>, the NIU also rate-limits: the
+first crossing always passes, and subsequent crossings are dropped until that
+many milliseconds have elapsed. Rate limiting is how you let a high-rate
+diagnostic or status PGN cross “occasionally” without relaying every frame. If
+<em>no</em> rule matches, the <code>filter_mode</code> default applies.</p>
+<h2 id="address-translation-across-segments"><a class="header" href="#address-translation-across-segments">Address translation across segments</a></h2>
+<p>A plain <code>Niu</code> forwards a frame’s bytes unchanged. That is fine when both
+segments share one address space, but a <code>Router</code> does more: it makes an entire
+segment appear, from the other side, as a single well-known node.</p>
+<p>The reason is addressing. A node’s source address is only meaningful on the
+segment where it claimed it. Address <code>0x80</code> on the implement side and address
+<code>0x80</code> on the tractor side can be two completely different control functions. If
+the router copied addresses across verbatim, replies would go to the wrong node.
+So the <code>Router</code> keeps an <code>AddressTranslationDb</code>: for each NAME it cares about, it
+stores that NAME’s <code>tractor_address</code> and its <code>implement_address</code>. On forward, it
+rewrites the source and destination so each segment sees the address that is
+valid <em>for that segment</em>.</p>
+<pre><code>implement side                 router                  tractor side
+ src=0x80 (sprayer) ──►  translate 0x80→0x21   ──►  src=0x21 (sprayer-as-seen)
+ dst=0x21 (tractor) ──►  translate 0x21→0x80   ──►  dst=0x80 (tractor-local addr)
+</code></pre>
+<p><code>Router::add_translation(name, tractor_addr, implement_addr)</code> populates the
+table; <code>AddressTranslationDb</code> enforces that a given side-local address belongs to
+only one active NAME, returning an <code>AddressConflict</code> error if you try to map two
+NAMEs onto the same address on the same side. Translation behaves differently for
+the two traffic shapes:</p>
+<ul>
+<li><strong>Broadcast frames</strong> — only the source is translated; the destination stays
+the broadcast address.</li>
+<li><strong>Destination-specific frames</strong> — both ends are translated, and if the
+destination has <em>no</em> translation, the frame is blocked. There is no point
+forwarding a directed frame to a node the other side cannot address.</li>
+</ul>
+<p>Address-claim frames get special care: the router checks that the NAME inside the
+claim matches the NAME the translation table expects for that address, and blocks
+the claim if it does not — preventing a node from impersonating another’s mapped
+identity across the bridge.</p>
+<h2 id="loop-prevention"><a class="header" href="#loop-prevention">Loop prevention</a></h2>
+<p>The standard requires that the physical network have exactly one path between any
+two control functions. If two NIUs accidentally create a second path, a single
+broadcast can circle forever, each NIU dutifully forwarding what the other just
+emitted. <code>machbus</code> adds a defensive <strong>loop guard</strong> so a misconfiguration
+degrades instead of melting the bus.</p>
+<p>Every forwarded frame is remembered — its identifier, length, and payload, tagged
+with the side it was sent toward and a timestamp. When a frame arrives that
+exactly matches something recently forwarded toward the side it just came from,
+the NIU treats it as an echo and drops it. Two <code>NiuConfig</code> knobs tune this:
+<code>loop_guard_window_ms</code> (how long a forwarded frame stays remembered) and
+<code>loop_guard_max_recent_forwards</code> (how many to remember). Setting either to <code>0</code>
+disables the guard. The guard is a safety net, not a substitute for a correct
+single-path topology — design the network so loops cannot form, and keep the
+guard as backstop.</p>
+<h2 id="the-niu-control-protocol"><a class="header" href="#the-niu-control-protocol">The NIU control protocol</a></h2>
+<p>An NIU is not only a silent forwarder; it is a node that other tools can
+configure over the bus. It participates in a dedicated control message,
+<code>NiuNetworkMsg</code>, carried on its own PGN. Each message names a <code>NiuFunction</code> and a
+port, and <code>Niu::handle_niu_message</code> reacts to it:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>NiuFunction</code></th><th>What the NIU does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AddFilterEntry</code></td><td>Install a new allow rule for the given PGN.</td></tr>
+<tr><td><code>DeleteFilterEntry</code></td><td>Remove the rule matching that PGN.</td></tr>
+<tr><td><code>DeleteAllEntries</code></td><td>Clear the whole filter table, including persistent rules.</td></tr>
+<tr><td><code>SetFilterMode</code></td><td>Switch between <code>PassAll</code> and <code>BlockAll</code>.</td></tr>
+<tr><td><code>RequestPortStats</code></td><td>Reply with forwarded / blocked counts.</td></tr>
+<tr><td><code>RequestFilterDb</code> / <code>FilterDbResponse</code></td><td>Read back the installed rules.</td></tr>
+<tr><td><code>RequestPortConfig</code> / <code>PortConfigResponse</code></td><td>Report port configuration.</td></tr>
+<tr><td><code>OpenConnection</code> / <code>CloseConnection</code></td><td>Manage a forwarded destination-specific connection.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every handled message also raises <code>on_niu_message</code>, so your application can log
+or audit reconfiguration as it happens. This is how a diagnostic tool on the bus
+can tighten or loosen the filter, or read traffic statistics, without
+recompiling the NIU.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The <code>examples/niu_demo.rs</code> example builds a bridge in <code>BlockAll</code> mode, allows a
+couple of PGNs, blocks one, and then feeds frames through it.</p>
+<p>You configure the NIU declaratively, then start it:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    let mut niu = Niu::new(
+        NiuConfig::default()
+            .name("demo-niu")
+            .mode(NiuFilterMode::BlockAll),
+    );
+    niu.allow_pgn(PGN_HEARTBEAT, true);
+    niu.allow_pgn_rate_limited(PGN_DM1, 100, true); // 1 frame / 100 ms
+    niu.block_pgn(PGN_REQUEST, true);
+    niu.start().unwrap();
+<span class="boring">}</span></code></pre>
+<p><code>NiuConfig::default().name(...).mode(...)</code> sets the policy; <code>allow_pgn</code>,
+<code>allow_pgn_rate_limited</code>, and <code>block_pgn</code> install rules; <code>start</code> flips the state
+to <code>Active</code> so frames begin flowing. The <code>true</code> argument on each rule makes it
+bidirectional.</p>
+<p>Then each frame is pumped through <code>process_frame</code>, which returns <code>Some(frame)</code> to
+forward or <code>None</code> to drop:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // 1. Heartbeat (allowed) — forwards.
+    let hb = Frame::from_message(
+        Priority::Default,
+        PGN_HEARTBEAT,
+        0x10,
+        BROADCAST_ADDRESS,
+        &amp;[1; 8],
+    );
+    println!(
+        "[hb ] tractor → forwarded? {}",
+        niu.process_frame(hb, Side::Tractor, 0).is_some()
+    );
+
+    // 2. Request PGN (explicitly blocked).
+    let req = Frame::from_message(Priority::Default, PGN_REQUEST, 0x10, 0x42, &amp;[0; 3]);
+    println!(
+        "[req] tractor → forwarded? {}",
+        niu.process_frame(req, Side::Tractor, 0).is_some()
+    );
+
+    // 3. DM1 with 100 ms rate limit.
+    let dm1 = Frame::from_message(Priority::Default, PGN_DM1, 0x10, BROADCAST_ADDRESS, &amp;[0; 8]);
+    let r1 = niu.process_frame(dm1, Side::Tractor, 50);
+    let r2 = niu.process_frame(dm1, Side::Tractor, 100);
+    let r3 = niu.process_frame(dm1, Side::Tractor, 200);
+    println!("[dm1] t=50  → {} (first allowed)", r1.is_some());
+    println!("[dm1] t=100 → {} (within window)", r2.is_some());
+    println!("[dm1] t=200 → {} (window elapsed)", r3.is_some());
+
+    println!(
+        "\n[stats] forwarded={}, blocked={}",
+        niu.forwarded(),
+        niu.blocked()
+    );
+<span class="boring">}</span></code></pre>
+<p>The heartbeat is allowed and forwards; the request PGN is explicitly blocked; the
+DM1 is rate-limited to one crossing per 100 ms, so the frame at <code>t=50</code> passes,
+the one at <code>t=100</code> is dropped as too soon, and the one at <code>t=200</code> passes again
+once the window has elapsed. <code>forwarded()</code> and <code>blocked()</code> report the running
+totals.</p>
+<p>To add address translation, wrap the same configuration in a <code>Router</code> instead and
+register the NAMEs that cross. The shape (illustrative, not from the example) is:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// illustrative shape — see the niu.rs API for exact signatures
+let mut router = Router::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
+router.niu_mut().allow_pgn(PGN_HEARTBEAT, true);
+router.add_translation(sprayer_name, 0x21, 0x80)?; // tractor 0x21, implement 0x80
+let forwarded = router.process_frame(frame, Side::Implement, now_ms);
+<span class="boring">}</span></code></pre>
+<p><code>Router::niu_mut()</code> gives you the underlying <code>Niu</code> for filter and event
+management, while <code>Router::process_frame</code> runs the filter first and then rewrites
+addresses on whatever survives.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>The NIU raises events so your application can observe forwarding without sitting
+in the decision path:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Fires when</th><th>Typical use</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_forwarded</code></td><td>A frame crossed to the other side.</td><td>Metrics, tracing.</td></tr>
+<tr><td><code>on_blocked</code></td><td>A frame was dropped (rule, rate limit, loop, bad source).</td><td>Diagnose over-tight filters.</td></tr>
+<tr><td><code>on_monitored</code></td><td>A <code>Monitor</code>-policy frame crossed.</td><td>Tap a traffic class for inspection.</td></tr>
+<tr><td><code>on_niu_message</code></td><td>A control message reconfigured the NIU.</td><td>Audit remote reconfiguration.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Your responsibilities around the pump:</p>
+<ul>
+<li><strong>Drive both directions.</strong> Call <code>process_frame</code> for frames from each side; the
+NIU does not poll a bus itself.</li>
+<li><strong>Deliver what it returns.</strong> A returned frame must actually be placed on the
+destination segment’s <code>IsoNet</code> — the NIU only decides, it does not transmit.</li>
+<li><strong>Pass honest time.</strong> <code>now_ms</code> drives rate limiting and the loop guard; feed a
+monotonic clock so windows mean what they say.</li>
+<li><strong>Claim before translating.</strong> A router needs to learn NAMEs from address claims
+before its NAME-based rules and translations work; let claims flow.</li>
+</ul>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Filter misconfiguration.</strong> A <code>BlockAll</code> NIU with no allow rules silently
+drops everything; a <code>PassAll</code> NIU with no block rules is a transparent
+repeater. If “nothing crosses”, check <code>blocked()</code> and the mode before
+suspecting the bus.</li>
+<li><strong>Translation collisions.</strong> Mapping two NAMEs onto the same side-local address
+fails with an <code>AddressConflict</code>. The database refuses it rather than making
+routing non-deterministic — fix the address plan.</li>
+<li><strong>Directed frame with no destination translation.</strong> A <code>Router</code> blocks a
+destination-specific frame whose destination has no mapping, because the other
+side has no valid address to deliver it to. Broadcasts are unaffected.</li>
+<li><strong>Forwarding loops.</strong> Two paths between the same nodes will loop. The loop
+guard suppresses the immediate echo, but the real fix is a single-path
+topology. If loop-guard blocked counts climb, you have a redundant path.</li>
+<li><strong>Segment overload.</strong> An NIU that forwards too liberally can push one segment
+past its bus-load budget. Use <code>BlockAll</code> plus narrow allow rules, and
+rate-limit high-frequency PGNs, to keep each side within its capacity.</li>
+<li><strong>Stale clock.</strong> If <code>now_ms</code> never advances, rate-limited rules behave as if no
+time passes and may block every crossing after the first.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Multi-router topologies.</strong> Larger machines chain several NIUs — for example a
+tractor segment, an implement segment, and a sub-implement behind that. Keep
+the single-path rule across the whole tree; every additional join is another
+place a loop or a translation gap can hide. Give each NIU a distinct <code>name</code> so
+control messages and traces are unambiguous.</li>
+<li><strong>Performance and bus load.</strong> Forwarding is not free: every crossed frame is
+traffic the destination segment must absorb. Think in terms of each segment’s
+budget and forward only what the other side needs. Rate limiting and a
+<code>BlockAll</code> default are your main levers; broadcast-heavy PGNs are the usual
+culprits.</li>
+<li><strong>Bridge vs. router.</strong> Use <code>Niu</code> when both segments share an address space and
+you only need to filter. Use <code>Router</code> when a segment must appear as a single
+node to the other side, or when the two sides allocate addresses
+independently and a directed reply must reach the right node.</li>
+<li><strong>Snapshots for audit.</strong> <code>Niu::policy_snapshot</code> and <code>Router::policy_snapshot</code>
+return deterministic, runtime-state-free dumps of the configured policy and
+translations — useful for regression fixtures and operator review without
+leaking mutable counters or learned state.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=niu_demo
+make test
+</code></pre>
+<p>The example runs entirely in software: it builds a <code>BlockAll</code> bridge, forwards a
+heartbeat, blocks a request PGN, and demonstrates the 100 ms rate limit on a DM1,
+printing the forwarded and blocked totals at the end. No bus or hardware is
+required.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the filter rules, forward policies, rate limiting, loop guard, and
+address translation behave deterministically in software, and the <code>Niu</code> /
+<code>Router</code> API drives them as described.</p>
+<p>Does not prove: real-hardware forwarding latency, priority-ordered queueing under
+load, interoperability with a specific third-party NIU, or any
+conformance/certification claim. Those still require official standards, real
+hardware, and interoperability evidence. <code>machbus</code> is not certified.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="address-claim.html">Address claim</a> — how each node on a segment gets the address
+the NIU learns and translates.</li>
+<li><a href="../standards/iso11783-datalink-transport.html">Transport protocol</a> — what happens to multi-frame
+messages that cross a segment.</li>
+<li><a href="../standards/j1939.html">PGNs, priority, source, destination</a>
+— the addressing fields every filter rule matches on.</li>
+<li><a href="../standards/iso11783-network-layer.html">Receiving and routing</a> — how a single node dispatches
+the traffic an NIU delivers to it.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/fast-packet.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/virtual-terminal-client.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/fast-packet.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/virtual-terminal-client.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,581 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Tractor ECU - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/tractor-ecu.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="tractor-ecu"><a class="header" href="#tractor-ecu">Tractor ECU</a></h1>
+<p>The Tractor ECU — the TECU — is the control function that speaks <em>for the
+tractor</em> on the implement bus. It is the gateway between the machine’s internal
+network and the implements hanging off the back (and front), and it is the node
+that publishes the tractor’s live state: how fast the wheels are turning, how
+far the machine has travelled, where the hitch sits, whether the PTO is spinning
+and how fast, the key-switch position, and the lighting state. A capable TECU
+also <em>accepts</em> a bounded set of commands from an implement — move the hitch,
+engage the PTO, drive an auxiliary valve — and decides, on its own terms,
+whether to act on them.</p>
+<p>This page explains what a TECU is, the “classes and facilities” idea that says
+which messages a given tractor offers, the message groups <code>machbus</code> models, the
+difference between publishing state and accepting commands, and how to assemble
+the pieces from the real types. It assumes the node has already claimed an
+address — see <a href="address-claim.html">Address claim</a> first.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>An implement cannot do useful work in isolation. A seeder needs ground speed to
+hold its seeding rate; a sprayer needs distance and direction to log coverage; a
+baler needs to know the PTO is turning before it commits. None of those signals
+originate on the implement bus — they live inside the tractor, on its own
+network or on directly wired sensors. Something has to translate the tractor’s
+private telemetry into the standard messages an implement understands, present
+the tractor to shared services (the virtual terminal, the task controller) as
+just another node, and route the occasional command back the other way.</p>
+<p>That something is the TECU. ISO 11783-9 (Tractor ECU) defines it as the gateway
+between the tractor bus and the implement bus, and as the node that represents
+the tractor to everyone else on the implement bus. ISO 11783-7 (Implement
+messages) defines the actual messages it sends and receives.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<pre><code>        tractor side                 │   implement bus
+   (internal net + sensors)          │
+                                     │
+  wheel/ground speed ───┐            │
+  hitch position    ────┤            │   ┌──────────────┐
+  PTO speed/engage  ────┼──► TECU ───┼──►│  implement   │
+  key switch        ────┤   (gateway)│   │     CF       │
+  lighting          ────┘            │   └──────┬───────┘
+                                     │          │
+  hitch / PTO / valve ◄──────────────┼──────────┘
+  actuators (if it accepts commands) │   commands (hitch move,
+                                     │    PTO engage, valve…)
+</code></pre>
+<p>Read it in two directions. Most of the traffic flows left to right: the TECU
+<em>publishes</em> state on a fixed cadence so any implement that cares can subscribe.
+A smaller stream flows right to left: an implement <em>commands</em> the tractor, and
+the tractor chooses whether to honour it. The TECU is never obliged to obey — a
+command is a request, and the tractor’s own logic and interlocks have the final
+say.</p>
+<h2 id="the-tecus-role-and-the-facilities-idea"><a class="header" href="#the-tecus-role-and-the-facilities-idea">The TECU’s role and the facilities idea</a></h2>
+<p>A tractor advertises <em>what it can do</em> with two related concepts.</p>
+<p><strong>Class</strong> is a coarse capability tier. <code>machbus</code> models the base tier as
+<a href="https://docs.rs/machbus"><code>TecuClass</code></a> with three values:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Class</th><th>What it implies</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Class1</code></td><td>Basic state: speed, hitch position, PTO, power management.</td></tr>
+<tr><td><code>Class2</code></td><td>Full measurements: distance, direction, draft, lighting, aux-valve flow.</td></tr>
+<tr><td><code>Class3</code></td><td>Accepts commands: hitch, PTO, and auxiliary-valve control.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each class is a <em>superset</em> of the one below it. A class is also a promise: a
+tractor may keep a classification even when a physical feature is missing — a
+tractor with no rear PTO still answers the PTO messages, but fills the values
+with the “not available” sentinel rather than dropping the message.</p>
+<p>On top of the base class sit <strong>addenda</strong>, single-letter flags for optional
+message families. <code>machbus</code> carries them as boolean fields on
+<a href="https://docs.rs/machbus"><code>TecuClassification</code></a>: <code>navigation</code> (N, GNSS
+position), <code>front_mounted</code> (F, front hitch/PTO), <code>guidance</code> (G, steering),
+<code>powertrain</code> (P, speed control), and <code>motion_init</code> (M, motion initiation). The
+<code>Display</code> impl renders the combination the way the standard writes it — a
+class 2 tractor with navigation and a front hitch prints as <code>Class 2NF</code>, and
+the addendum order is fixed at N, F, G, P, M.</p>
+<p>The fine-grained answer to “which exact messages do you offer?” is the
+<strong>tractor facilities response</strong>. <code>machbus</code> models it as
+<a href="https://docs.rs/machbus"><code>TractorFacilities</code></a>: a flat struct of booleans, one
+per feature, that packs into an eight-byte payload via <code>encode</code> and parses back
+with <code>decode</code>. Two PGNs share that payload, distinguished by
+<a href="https://docs.rs/machbus"><code>TractorFacilitiesRole</code></a>:</p>
+<ul>
+<li><code>Response</code> — the TECU broadcasting what it actually supports.</li>
+<li><code>Required</code> — an implement telling the TECU which facilities it needs, so the
+TECU can suppress the messages nobody is listening for and save bandwidth.</li>
+</ul>
+<p>Convenience builders fill whole tiers at once: <code>with_class1_all</code>,
+<code>with_class2_all</code>, <code>with_class3_all</code>, plus <code>with_class3_v2_all</code> and
+<code>with_front_v2_all</code> for the later limit-status and exit-code bits.</p>
+<h2 id="anatomy-of-the-message-groups"><a class="header" href="#anatomy-of-the-message-groups">Anatomy of the message groups</a></h2>
+<p>The TECU’s published state breaks into a handful of families, each with its own
+<code>machbus</code> codec. Every codec is a plain struct with <code>encode</code> → <code>[u8; 8]</code> and a
+fallible <code>decode</code>. The decoders reject the wrong length, bad padding, and
+reserved-bit violations rather than guessing — malformed input returns <code>None</code>.</p>
+<p><strong>Ground- and wheel-based speed and distance.</strong> A tractor has more than one
+notion of speed. <em>Wheel-based</em> speed comes from the drivetrain and can slip;
+<em>ground-based</em> speed (often radar) is closer to true travel. <code>machbus</code> keeps
+them as separate codecs, <a href="https://docs.rs/machbus"><code>WheelBasedSpeedDist</code></a> and
+<a href="https://docs.rs/machbus"><code>GroundBasedSpeedDist</code></a>. Both carry <code>speed_mps</code>,
+accumulated <code>distance_m</code>, and a <code>direction</code> ([<code>MachineDirection</code>]). The
+wheel-based message additionally carries <code>max_power_time_min</code>, <code>key_switch_state</code>,
+and the implement start/stop and operator-direction-reversed states — it is the
+message a maintain-power requester keys off at power-down. There is also
+<a href="https://docs.rs/machbus"><code>MachineSelectedSpeedFull</code></a>: the speed the tractor is
+actually steering by, tagged with its [<code>SpeedSource</code>] (wheel, ground, navigation,
+or blended) and a limit status.</p>
+<p><strong>Rear and front hitch position.</strong> <a href="https://docs.rs/machbus"><code>HitchStatus</code></a>
+reports <code>position_percent</code>, an <code>in_work_indication</code>, a <code>limit_status</code>
+([<code>LimitStatus</code>]) and <code>exit_code</code> ([<code>ExitReasonCode</code>]), and <code>draft_force_n</code> for
+class 2 tractors. The same struct serves both ends: the <code>is_rear</code> flag picks the
+rear or front PGN, and <code>pgn()</code> returns the right one.</p>
+<p><strong>PTO state and speed.</strong> <a href="https://docs.rs/machbus"><code>PtoStatus</code></a> reports
+<code>shaft_speed_rpm</code>, an <code>engagement</code> state, an <code>economy_mode</code>, plus the limit and
+exit codes. As with the hitch, <code>is_rear</code> selects rear or front and <code>pgn()</code>
+resolves it.</p>
+<p><strong>Operator, key, and lighting.</strong> The key-switch state and maximum power-on time
+ride along in the wheel-based speed message. Lighting is carried by its own
+state type in the implement modules; the function-instance-0 TECU is the node
+responsible for lighting control.</p>
+<p><strong>Key and maintain-power.</strong> Power management is its own concern, covered in the
+<a href="#lifecycle-power-and-shutdown">lifecycle</a> section below.</p>
+<h2 id="publishing-state-vs-accepting-commands"><a class="header" href="#publishing-state-vs-accepting-commands">Publishing state vs accepting commands</a></h2>
+<p>This distinction is the heart of the TECU and worth stating plainly.</p>
+<p><strong>Publishing</strong> is unconditional and periodic. The TECU sends speed, distance,
+hitch, and PTO messages on a fixed cadence whether or not anyone is listening
+(subject to the bandwidth-saving suppression a <em>required facilities</em> message can
+request). These are <em>status</em> and <em>measured</em> values — they report what is, and
+carry no expectation of a reply.</p>
+<p><strong>Accepting commands</strong> is conditional and discretionary. A class 3 (or
+addendum-P) tractor receives command messages from an implement and <em>may</em> act on
+them. <code>machbus</code> models the inbound commands as separate codecs:
+<a href="https://docs.rs/machbus"><code>HitchCommandMsg</code></a> (with a
+[<code>HitchCommand</code>] of <code>NoAction</code>/<code>Lower</code>/<code>Raise</code>/<code>Position</code>),
+<a href="https://docs.rs/machbus"><code>PtoCommandMsg</code></a> (with a [<code>PtoCommand</code>] of
+<code>NoAction</code>/<code>Engage</code>/<code>Disengage</code>/<code>SetSpeed</code>),
+<a href="https://docs.rs/machbus"><code>AuxValveCommandMsg</code></a> (with a [<code>ValveCommand</code>] of
+<code>Extend</code>/<code>Retract</code>/<code>Float</code>/<code>Block</code>, PGN-routed per valve index by <code>pgn()</code> /
+<code>try_pgn()</code>), <a href="https://docs.rs/machbus"><code>MachineSpeedCommandMsg</code></a> for a target
+travel speed, and <a href="https://docs.rs/machbus"><code>TractorControlModeMsg</code></a> carrying the
+per-axis [<code>TractorMode</code>] (manual / automatic). The standard is explicit that the
+tractor is not required to execute any command — it applies its own logic and
+constraints and may negative-acknowledge. <code>machbus</code> gives you the wire codecs;
+the accept/reject decision is yours.</p>
+<h2 id="lifecycle-power-and-shutdown"><a class="header" href="#lifecycle-power-and-shutdown">Lifecycle: power and shutdown</a></h2>
+<p>A TECU’s other major job is power management. <code>machbus</code> models the lifecycle as
+<a href="https://docs.rs/machbus"><code>PowerState</code></a>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>State</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PowerOff</code></td><td>The boot/default state; nothing powered.</td></tr>
+<tr><td><code>IgnitionOn</code></td><td>Normal operation, key on.</td></tr>
+<tr><td><code>ShutdownInitiated</code></td><td>Key off; a bounded window of power remains.</td></tr>
+<tr><td><code>FinalShutdown</code></td><td>Power-down complete.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The interesting transition is key-off. When the operator turns the key off, the
+tractor does not cut power instantly — implements may need a moment to save
+settings or move actuators to a safe rest position. So the TECU keeps power up
+for a bounded window and broadcasts the remaining time. An implement that needs
+more time sends a <em>maintain power</em> request asking the TECU to hold ECU power, or
+both ECU power and actuator power, a little longer. The timing and current
+limits live in <a href="https://docs.rs/machbus"><code>PowerConfig</code></a> — <code>shutdown_max_time_ms</code>
+(default three minutes), <code>maintain_timeout_ms</code> (default two seconds), and the
+ECU/PWR current minimums. The TECU side of a single request is tracked by
+<a href="https://docs.rs/machbus"><code>TecuMaintainPowerRequest</code></a>, whose <code>is_expired</code> tells
+you when a requester’s hold has lapsed. <a href="https://docs.rs/machbus"><code>SafeModeTrigger</code></a>
+enumerates the reasons a node might fall back to fail-safe behaviour — power
+loss, ECU-power loss, CAN failure, lost communication with the TECU, or a manual
+trigger.</p>
+<p><code>machbus</code> deliberately ships the building blocks rather than one monolithic
+orchestrator: you compose the classification, the facilities response, the
+status codecs, and the power state machine into whatever control loop your
+product needs. <a href="https://docs.rs/machbus"><code>TecuConfig</code></a> is a convenience record
+bundling the classification, power config, and broadcast intervals.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The example builds a classification, prints it, and walks the power states. The
+classification piece:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // ─── Classification (Class 2NF) ────────────────────────────────
+    let cls = TecuClassification {
+        base_class: TecuClass::Class2,
+        navigation: true,
+        front_mounted: true,
+        ..Default::default()
+    };
+    println!("[classification] {cls}");
+
+    // ─── Class 1, 2, 3 string forms ────────────────────────────────
+    for c in [TecuClass::Class1, TecuClass::Class2, TecuClass::Class3] {
+        let inner = TecuClassification {
+            base_class: c,
+            ..Default::default()
+        };
+        println!("  {c:?} → {inner}");
+    }
+<span class="boring">}</span></code></pre>
+<p><code>TecuClassification</code> is a plain struct of fields, so you set the base class and
+flip on the addenda you support. Printing it yields the canonical class string
+(<code>Class 2NF</code> here). The power-state walk:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // ─── Power-state enum ──────────────────────────────────────────
+    println!("\n[power-state]");
+    for s in [
+        PowerState::PowerOff,
+        PowerState::IgnitionOn,
+        PowerState::ShutdownInitiated,
+        PowerState::FinalShutdown,
+    ] {
+        println!("  {s:?}");
+    }
+    println!("\n  default = {:?}  (boot state)", PowerState::default());
+<span class="boring">}</span></code></pre>
+<p>To advertise facilities, build a <code>TractorFacilities</code>, fill the tiers you offer,
+and encode it onto the response PGN — the shape is:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Illustrative shape, not a compiled call.
+let facilities = TractorFacilities::default()
+    .with_class1_all()
+    .with_class2_all();
+let payload = facilities.encode();           // [u8; 8]
+let pgn = TractorFacilitiesRole::Response.pgn();
+// send `payload` on `pgn` …
+<span class="boring">}</span></code></pre>
+<p>To publish wheel-based speed, fill the struct in SI units and <code>encode</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Illustrative shape, not a compiled call.
+let msg = WheelBasedSpeedDist {
+    speed_mps: 3.2,
+    distance_m: 1234.5,
+    direction: MachineDirection::Forward,
+    ..Default::default()
+};
+let payload = msg.encode();                  // [u8; 8]
+<span class="boring">}</span></code></pre>
+<p>Inbound commands run the same way in reverse: <code>HitchCommandMsg::decode(&amp;data)</code>
+returns <code>Some(cmd)</code> on a well-formed payload and <code>None</code> otherwise. You inspect
+<code>cmd.command</code>, decide whether your interlocks permit it, and only then drive the
+actuator.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>Whatever orchestration you build around these codecs, the responsibilities are
+yours:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Typical TECU responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td>Power-up</td><td>Claim an address, then broadcast the facilities response.</td></tr>
+<tr><td>Required-facilities received</td><td>Narrow what you broadcast to what implements asked for.</td></tr>
+<tr><td>Periodic tick</td><td>Re-send speed/distance/hitch/PTO status at the right cadence.</td></tr>
+<tr><td>Command received</td><td>Validate against interlocks; act or negative-acknowledge.</td></tr>
+<tr><td>Key-off</td><td>Enter the shutdown window; honour maintain-power requests until they expire.</td></tr>
+<tr><td>Sensor unavailable</td><td>Send the message with the “not available” sentinel, not silence.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The non-negotiable one: a command is never an obligation. The library hands you
+a decoded request; your application decides whether moving that actuator is safe.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Sensor not available.</strong> A feature the tractor lacks (no front PTO, no
+ground-radar) is reported, not omitted. The default constructors seed the
+“not available” sentinels — <code>0xFF</code> bytes, the <code>NotAvailable</code> enum variants —
+so an unconfigured <code>PtoStatus</code> or <code>HitchStatus</code> already says “I don’t have
+this” on the wire. Keep advertising the message; just mark it unavailable.</li>
+<li><strong>Command for a facility you don’t offer.</strong> If your class or facilities bits
+don’t include a command family, an implement should not send it — but if one
+arrives, decline it. There is no requirement to act, and acting on a command
+for hardware you lack is a fault.</li>
+<li><strong>Malformed payload.</strong> Every <code>decode</code> is defensive: wrong length, bad reserved
+bits, or corrupt padding yield <code>None</code>. A peer’s garbage frame returns <code>None</code>
+and must not be allowed to mutate your cached state.</li>
+<li><strong>Speed-source switching under control.</strong> When the tractor is steering by
+<code>MachineSelectedSpeedFull</code> and the underlying source changes, the transition
+is the tractor’s problem to smooth — the message reports the source so
+consumers can see it shift.</li>
+<li><strong>Safe defaults at power loss or comms loss.</strong> On lost power or lost
+communication with the tractor, the implement is expected to assume fail-safe
+operation. <code>SafeModeTrigger</code> names the causes; the actual safe state belongs
+in the implement’s product logic, not in this library.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Required vs optional facilities.</strong> Class 1 is the floor; class 2 adds the
+measurement set; class 3 adds the command set. Addenda (N/F/G/P/M) are
+independent options layered on any base class. Advertise exactly what you
+support — over-claiming invites commands you cannot honour.</li>
+<li><strong>Version-2 limit and exit reporting.</strong> Newer tractors add limit-status and
+exit-reason reporting so an implement learns <em>why</em> a command was constrained
+or aborted. <code>machbus</code> carries these as the <code>*_limit_status</code> and <code>*_exit_code</code>
+facility bits and the <code>LimitStatus</code> / <code>ExitReasonCode</code> fields on the status
+codecs; <code>with_class3_v2_all</code> and <code>with_front_v2_all</code> set the facility bits.</li>
+<li><strong>Multiple TECUs and function instance.</strong> When several TECUs share a bus, the
+one at function instance 0 is primary and owns power, lighting, and language;
+higher instances fill only the gaps. <code>TecuClassification::instance</code> records
+which you are.</li>
+<li><strong>Repetition and update timing.</strong> Status messages are periodic; the speed
+message in particular runs on a tight cadence. <code>TecuConfig</code> carries
+<code>facilities_broadcast_interval_ms</code> and <code>status_broadcast_interval_ms</code> as a
+place to record your chosen rates — the library does not run the timer for
+you, so wire it into your own loop.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=tractor_ecu_demo
+make test
+</code></pre>
+<p>The example constructs a <code>Class 2NF</code> classification, prints the class strings
+for all three base classes, and walks the four power states from the boot
+default. The wide test suite round-trips every codec on this page — speed,
+distance, hitch, PTO, facilities, and each command family — and asserts that
+malformed payloads decode to <code>None</code>. To wire these surfaces together with
+address claim and GNSS, plug them into a session — the <code>presets::tractor()</code> group
+bundles the usual tractor-side subsystems (see
+<a href="../guide/session-facade.html">The session facade</a>).</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the classification renders the right class string, the facilities and
+status/command codecs round-trip their eight-byte payloads, the decoders reject
+malformed input, and the power-state and maintain-power types behave as
+specified in software.</p>
+<p>Does not prove: real-hardware timing, that a specific third-party implement
+interoperates with your TECU, or any conformance or certification claim. A
+shipping TECU still needs official standards, real hardware, interoperability
+evidence, and — above all — machine-control interlocks that this library does
+not provide.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="implement-ecu.html">Implement ECU</a> — the other side of every message here.</li>
+<li><a href="powertrain.html">Powertrain</a> — the P-addendum speed-control surface in depth.</li>
+<li><a href="guidance.html">Guidance</a> — the G-addendum steering surface.</li>
+<li><a href="tim.html">TIM and automation</a> — implement-driven tractor automation.</li>
+<li><a href="address-claim.html">Address claim</a> — the prerequisite every TECU runs first.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/tc-geo-prescription.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/implement-ecu.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/tc-geo-prescription.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/implement-ecu.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

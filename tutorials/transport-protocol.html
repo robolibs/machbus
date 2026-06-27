@@ -1,0 +1,688 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Transport Protocol - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/transport-protocol.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="transport-protocol-tp-and-etp"><a class="header" href="#transport-protocol-tp-and-etp">Transport Protocol (TP and ETP)</a></h1>
+<p>A classic CAN frame carries at most eight payload bytes. Plenty of ISOBUS and
+J1939 messages — a VT object pool, a TC device description, a diagnostic list, a
+GNSS record — are far larger than that. The Transport Protocol (TP) and its
+larger sibling the Extended Transport Protocol (ETP) are how a control function
+breaks one logical message into a stream of 8-byte frames, ships them across the
+bus, and reassembles them on the far side. This tutorial explains both forms of
+TP (broadcast and connection-managed), shows where ETP takes over, and grounds
+all of it in the <code>machbus</code> <code>net::TransportProtocol</code> and
+<code>net::ExtendedTransportProtocol</code> engines.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>The data link can only move eight bytes at a time, but applications think in
+whole messages. Something has to chop a large payload into frames, number them,
+pace them so a slow receiver is not flooded, detect a dropped or duplicated
+frame, and signal the end. Doing this ad hoc per message type would be a mess,
+so ISO 11783-3 (Data link layer) and J1939 define one reusable multi-frame
+transport that every larger PGN rides on top of.</p>
+<p>Two needs pull the design in different directions:</p>
+<ul>
+<li><strong>Broadcast.</strong> Sometimes a producer wants to push data to <em>everyone</em> — no
+single receiver to pace against, no acknowledgement to wait for. Fast, simple,
+fire-and-forget.</li>
+<li><strong>Point-to-point.</strong> Sometimes there is exactly one receiver that must be able
+to pace the flow, reject the transfer if it is out of buffer space, and
+confirm that every byte arrived. Slower, but reliable and flow-controlled.</li>
+</ul>
+<p>TP answers both: a broadcast form (BAM) and a connection-managed form (CMDT,
+built on RTS/CTS). ETP answers a third need — payloads too big for TP’s 16-bit
+byte counter.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<p>Every multi-frame transfer is split into two channels that share the same PGN
+target but use different connection-management byte codes:</p>
+<ul>
+<li>a <strong>connection-management</strong> channel that sets the transfer up, paces it, and
+closes it out (RTS, CTS, EndOfMsgAck, BAM, Abort), and</li>
+<li>a <strong>data-transfer</strong> channel that carries the actual bytes, one sequence number
+plus seven payload bytes per frame.</li>
+</ul>
+<h3 id="connection-managed-cmdt-exchange"><a class="header" href="#connection-managed-cmdt-exchange">Connection-managed (CMDT) exchange</a></h3>
+<pre><code>sender (0x10)                              receiver (0x20)
+   │                                              │
+   │  RTS  (here come N bytes, P packets) ───────►│   open the session,
+   │                                              │   allocate a buffer
+   │◄─────── CTS (send me K packets from seq S)   │   receiver paces
+   │                                              │
+   │  DT seq 1 ──────────────────────────────────►│
+   │  DT seq 2 ──────────────────────────────────►│   ingest 7 bytes/frame
+   │   ...  (K frames) ──────────────────────────►│
+   │                                              │
+   │◄─────── CTS (next window) ───────────────────│   repeat until all
+   │  DT ...  ───────────────────────────────────►│   packets delivered
+   │                                              │
+   │◄─────── EndOfMsgAck (got all N bytes) ───────│   confirm + close
+   ▼                                              ▼
+ Complete                                      Complete
+</code></pre>
+<p>The receiver is in charge of pace: it never gets more than the <strong>per-CTS packet
+count</strong> it just asked for, and it can pause the sender by issuing a CTS for zero
+packets. Any problem on either side ends the session with an <strong>Abort</strong>.</p>
+<h3 id="broadcast-bam-exchange"><a class="header" href="#broadcast-bam-exchange">Broadcast (BAM) exchange</a></h3>
+<pre><code>sender (0x10)                       everyone (0xFF)
+   │                                       │
+   │  BAM (here come N bytes, P packets) ──►│   each listener opens a
+   │                                       │   receive session
+   │  DT seq 1  ───────────────────────────►│
+   │   (≥50 ms gap)                         │
+   │  DT seq 2  ───────────────────────────►│   no CTS, no ack —
+   │   ...                                  │   purely time-paced
+   │  DT seq P  ───────────────────────────►│
+   ▼                                       ▼
+ done (no ack)                       Complete per listener
+</code></pre>
+<p>BAM has no handshake. The sender announces, then drips out data frames spaced by
+a minimum interval (<code>TP_BAM_INTER_PACKET_MS</code>, 50 ms in <code>machbus</code>) so listeners
+can keep up. There is no acknowledgement and no retransmission: a listener that
+misses a frame simply fails to reassemble and drops the session.</p>
+<h2 id="size-boundaries-single-frame--tp--etp"><a class="header" href="#size-boundaries-single-frame--tp--etp">Size boundaries: single frame → TP → ETP</a></h2>
+<p>The choice of transport is decided purely by payload length, and <code>machbus</code>
+pins the boundaries with compile-time constants in <code>net::constants</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Payload length</th><th>Mechanism</th><th>Constant</th></tr>
+</thead>
+<tbody>
+<tr><td><code>0..=8</code> bytes</td><td>One ordinary CAN frame, no transport</td><td><code>CAN_DATA_LENGTH</code> = 8</td></tr>
+<tr><td><code>9..=1785</code> bytes</td><td>TP (BAM or CMDT)</td><td><code>TP_MAX_DATA_LENGTH</code> = 1785</td></tr>
+<tr><td><code>1786..=117_440_505</code> bytes</td><td>ETP (connection-mode only)</td><td><code>ETP_MAX_DATA_LENGTH</code> = 117_440_505</td></tr>
+</tbody>
+</table>
+</div>
+<p>These bounds are enforced, not advisory. <code>TransportProtocol::send</code> rejects a
+payload of 8 bytes or fewer with an “use single frame” error and rejects
+anything above <code>TP_MAX_DATA_LENGTH</code> with a buffer-overflow error.
+<code>ExtendedTransportProtocol::send</code> mirrors that from the other side: it rejects
+anything at or below 1785 bytes (“use TP”) and anything above the ETP ceiling.
+TP’s 1785-byte limit is a direct consequence of its wire format: the byte count
+is a 16-bit field and the packet count is a single byte, so at seven bytes per
+packet the largest transfer is 255 packets — exactly 1785 bytes.</p>
+<p>Every data frame, in both protocols, carries one sequence byte plus seven
+payload bytes (<code>TP_BYTES_PER_FRAME</code> = 7), so the packet count for any payload is
+always <code>ceil(total_bytes / 7)</code> — exposed as <code>TransportSession::total_packets</code>.</p>
+<h2 id="anatomy-the-two-message-channels"><a class="header" href="#anatomy-the-two-message-channels">Anatomy: the two message channels</a></h2>
+<p><code>machbus</code> routes a frame to a transport engine by its target PGN. TP uses one
+PGN for connection management and one for data transfer; ETP uses its own pair.
+You will rarely touch these bytes directly, but understanding them makes the
+state machine legible.</p>
+<p><strong>TP connection-management frames</strong> all start with a control byte
+(<code>net::tp::tp_cm</code>):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Control</th><th>Name</th><th>Who sends it</th><th>Carries</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RTS</code> (0x10)</td><td>Request To Send</td><td>sender</td><td>total bytes, total packets, advertised packets-per-CTS, target PGN</td></tr>
+<tr><td><code>CTS</code> (0x11)</td><td>Clear To Send</td><td>receiver</td><td>how many packets to send now, which sequence to start at</td></tr>
+<tr><td><code>EOMA</code> (0x13)</td><td>EndOfMsgAck</td><td>receiver</td><td>echoed total bytes/packets, confirming completion</td></tr>
+<tr><td><code>BAM</code> (0x20)</td><td>Broadcast Announce</td><td>sender</td><td>total bytes, total packets, target PGN</td></tr>
+<tr><td><code>ABORT</code> (0xFF)</td><td>Connection Abort</td><td>either side</td><td>the abort reason byte</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>TP data-transfer frames</strong> are dead simple: byte 0 is the 1-based sequence
+number, bytes 1–7 are payload. The receiver computes the buffer offset from the
+sequence number (<code>(seq - 1) * 7</code>) and copies the seven bytes into place.</p>
+<p>The connection-management vs data-transfer split is the heart of the design:
+control traffic and bulk traffic are separated so flow control can interleave
+with the byte stream without ambiguity.</p>
+<h2 id="lifecycle-and-state-machine"><a class="header" href="#lifecycle-and-state-machine">Lifecycle and state machine</a></h2>
+<p><code>machbus</code> models each transfer as a <code>net::TransportSession</code> whose <code>state</code> field
+is a <code>net::SessionState</code>. The same enum serves both directions; which states a
+session passes through depends on whether it is a <code>Transmit</code> or <code>Receive</code>
+session (<code>net::TransportDirection</code>) and whether it is broadcast or
+connection-managed.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>State</th><th>Side</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>None</code></td><td>—</td><td>Freshly constructed, not yet started.</td></tr>
+<tr><td><code>WaitingForCTS</code></td><td>sender (CMDT)</td><td>RTS sent; waiting for the receiver to clear a window.</td></tr>
+<tr><td><code>SendingData</code></td><td>sender (CMDT)</td><td>A CTS granted a window; drain that many DT frames.</td></tr>
+<tr><td><code>WaitingForEndOfMsg</code></td><td>sender (CMDT)</td><td>Last packet sent; waiting for EndOfMsgAck.</td></tr>
+<tr><td><code>ReceivingData</code></td><td>receiver (BAM)</td><td>Mid-stream broadcast reassembly.</td></tr>
+<tr><td><code>WaitingForData</code></td><td>receiver (CMDT)</td><td>CTS sent; waiting for the granted DT window.</td></tr>
+<tr><td><code>Complete</code></td><td>either</td><td>All bytes transferred (and acknowledged, for CMDT).</td></tr>
+<tr><td><code>Aborted</code></td><td>either</td><td>Torn down before completion.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The CMDT sender walks <code>WaitingForCTS → SendingData → WaitingForCTS → … → WaitingForEndOfMsg → Complete</code>, looping back to <code>WaitingForCTS</code> after each window
+until the last packet, then waiting for the ack. The CMDT receiver walks
+<code>WaitingForData → WaitingForData → … → Complete</code>, issuing a fresh CTS each time
+the granted window is exhausted and emitting the EndOfMsgAck once the final byte
+lands. A BAM receiver starts in <code>ReceivingData</code> and goes straight to <code>Complete</code>
+when the last sequence arrives — no CTS, no ack.</p>
+<h3 id="per-cts-packet-count-and-back-pressure"><a class="header" href="#per-cts-packet-count-and-back-pressure">Per-CTS packet count and back-pressure</a></h3>
+<p>The per-CTS packet count is the receiver’s flow-control knob. The RTS advertises
+how many packets the sender is willing to send per round (byte 4), but the
+<em>receiver’s</em> CTS is authoritative: the sender clamps each window to the
+receiver’s requested count, capped by <code>TP_MAX_PACKETS_PER_CTS</code> (16). A receiver
+can therefore slow a fast sender simply by granting small windows, and a CTS
+that requests <strong>zero</strong> packets is a hold — the receiver is paused but the session
+stays alive. While paused, <code>machbus</code> re-emits a keep-alive CTS every
+<code>TP_T_HOLD_MS</code> (500 ms) so the sender’s timer does not expire.</p>
+<h3 id="timeout-windows"><a class="header" href="#timeout-windows">Timeout windows</a></h3>
+<p>Timers live on the session and advance through <code>TransportProtocol::update</code>.
+Different waiting states use different windows, taken from <code>net::constants</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Waiting state</th><th>Timeout constant</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>WaitingForCTS</code> / <code>WaitingForEndOfMsg</code> (sender)</td><td><code>TP_TIMEOUT_T3_MS</code></td><td>1250 ms</td></tr>
+<tr><td><code>WaitingForData</code> / <code>ReceivingData</code> (receiver)</td><td><code>TP_TIMEOUT_T1_MS</code></td><td>750 ms</td></tr>
+</tbody>
+</table>
+</div>
+<p>The auxiliary <code>TpTimerSession</code> tracker (a coarse <code>TpSessionState</code> view used by
+the network layer) also applies <code>TP_TIMEOUT_T4_MS</code> (1050 ms) while actively
+sending. When any window elapses, the session moves to <code>Aborted</code>, fires the
+abort event with reason <code>Timeout</code>, and — for a connection-managed session — puts
+an Abort frame on the wire. A BAM session that stalls just expires silently;
+there is nobody to notify.</p>
+<h3 id="every-abort-reason"><a class="header" href="#every-abort-reason">Every abort reason</a></h3>
+<p>Aborts are wire-compatible bytes, modelled as <code>net::TransportAbortReason</code>. Every
+variant maps to a real failure path in the engines:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Reason</th><th>Numeric</th><th>Raised when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>None</code></td><td>0</td><td>Placeholder / unknown byte decoded back to no-reason.</td></tr>
+<tr><td><code>AlreadyInSession</code></td><td>1</td><td>An RTS arrives for a transfer that already has a live receive session.</td></tr>
+<tr><td><code>ResourcesUnavailable</code></td><td>2</td><td>No free session slot, or the advertised size exceeds the receive-allocation cap.</td></tr>
+<tr><td><code>Timeout</code></td><td>3</td><td>A waiting window elapsed.</td></tr>
+<tr><td><code>ConnectionModeError</code></td><td>4</td><td>A CTS arrived while the sender was already mid-window (a protocol-ordering error).</td></tr>
+<tr><td><code>MaxRetransmitsExceeded</code></td><td>5</td><td>The receiver asked the sender to back up too many times.</td></tr>
+<tr><td><code>UnexpectedPgn</code></td><td>6</td><td>Reserved; a frame targeted a PGN that does not fit the session.</td></tr>
+<tr><td><code>BadSequence</code></td><td>7</td><td>A data frame arrived with the wrong sequence (zero, ahead, or — in ETP — before its DPO).</td></tr>
+<tr><td><code>DuplicateSequence</code></td><td>8</td><td>A data frame repeated a sequence already received.</td></tr>
+<tr><td><code>UnexpectedDataSize</code></td><td>9</td><td>The advertised byte count is malformed or out of range for the protocol.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The numeric column is the byte sent on the wire, so an abort received from a
+real ECU decodes to the same variant via <code>TransportAbortReason::from_u8</code>.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The <code>transport_demo</code> example drives a full CMDT round trip in software. Both
+sides are plain <code>TransportProtocol</code> engines; you pump frames between them by
+hand, which makes every step visible:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    {
+        let payload: Vec&lt;u8&gt; = (0..40u32).map(|n| n as u8).collect();
+        let mut tx = TransportProtocol::new();
+        let mut rx = TransportProtocol::new();
+        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
+        let r = received.clone();
+        rx.on_complete
+            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
+
+        let rts = tx
+            .send(0xEF00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
+            .unwrap()[0];
+        println!(
+            "  RTS for {} bytes (≈{} packets)",
+            payload.len(),
+            payload.len().div_ceil(7)
+        );
+        let cts = rx.process_frame(&amp;rts, 0)[0];
+        println!("  CTS num={} next_seq={}", cts.data[1], cts.data[2]);
+
+        let _ = tx.process_frame(&amp;cts, 0);
+        let dt_frames = tx.get_pending_data_frames();
+        println!("  TX queued {} DT frames", dt_frames.len());
+
+        let mut eoma_seen = None;
+        for dt in &amp;dt_frames {
+            for resp in rx.process_frame(dt, 0) {
+                if resp.data[0] == machbus::net::tp::tp_cm::EOMA {
+                    eoma_seen = Some(resp);
+                }
+            }
+        }
+        let _ = tx.process_frame(&amp;eoma_seen.unwrap(), 0);
+        let got = received.borrow().clone().unwrap();
+        println!(
+            "  delivered {} bytes (equal? {})",
+            got.data.len(),
+            got.data == payload
+        );
+    }
+<span class="boring">}</span></code></pre>
+<p>Read it as the state machine in motion:</p>
+<ol>
+<li><code>tx.send(...)</code> validates the payload, opens a <code>Transmit</code> session in
+<code>WaitingForCTS</code>, and returns the RTS frame.</li>
+<li><code>rx.process_frame(rts)</code> opens a <code>Receive</code> session, allocates the reassembly
+buffer, and returns a CTS granting the first window.</li>
+<li><code>tx.process_frame(cts)</code> moves the sender to <code>SendingData</code>;
+<code>tx.get_pending_data_frames()</code> drains that window as DT frames.</li>
+<li>Feeding the DT frames into <code>rx.process_frame</code> reassembles the bytes and, once
+the last packet lands, returns the EndOfMsgAck.</li>
+<li><code>tx.process_frame(eoma)</code> confirms delivery and fires <code>on_complete</code>.</li>
+</ol>
+<p>For broadcast, you call <code>send</code> with the destination set to <code>BROADCAST_ADDRESS</code>;
+the engine emits a BAM instead of an RTS, then <code>TransportProtocol::update</code>
+releases one DT frame per <code>TP_BAM_INTER_PACKET_MS</code> interval until the payload is
+drained — no CTS pump required.</p>
+<p>You tune a receiver’s caps when constructing the engine:
+<code>TransportProtocol::with_max_receive_bytes</code> clamps the largest payload it will
+accept (rejecting bigger RTS/BAM before allocating), <code>with_max_sessions</code> caps
+concurrent transfers, and <code>with_advertised_packets_per_cts</code> sets the RTS byte-4
+advertisement.</p>
+<p>Raw TP/ETP engines reject a second active transfer that would reuse the same
+data-frame source/destination path. That keeps DT frames unambiguous because the
+PGN is named by the control traffic, not repeated in every data frame. The
+higher-level <code>IsoNet</code> surface preserves this rule but queues same-path
+application sends, so a session can answer several large requests to the same
+peer without overlapping the underlying DT stream.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>Both engines expose events your application subscribes to:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Fires when</th><th>Your job</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_complete</code></td><td>A session reaches <code>Complete</code></td><td>Take the reassembled <code>TransportSession::data</code> and hand it to the application layer.</td></tr>
+<tr><td><code>on_abort</code></td><td>A session tears down (either side)</td><td>Log the <code>TransportAbortEvent</code> (PGN, peer, reason) and decide whether to retry.</td></tr>
+<tr><td><code>on_session_timeout</code></td><td>A <code>TpTimerSession</code> window elapses</td><td>React to the higher-level timeout (TP only).</td></tr>
+</tbody>
+</table>
+</div>
+<p>You are responsible for the <em>pump</em>: call <code>process_frame</code> for every inbound TP/ETP
+frame, call <code>update(elapsed_ms)</code> regularly so timers advance and BAM data flows,
+and drain <code>get_pending_data_frames</code> after each CTS. The session facade wires
+this pump for you; the raw engines are for tests and tightly controlled embedded
+loops where you own the timing.</p>
+<p>For observability, <code>TransportProtocol::stats</code> returns a <code>TransportStats</code> snapshot
+counting dropped frames, dropped sessions, aborts sent and received, timeouts,
+and resource rejections — the defensive paths that drop bad input instead of
+panicking.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Timeout.</strong> A receiver that goes quiet, or a sender that never gets its CTS,
+trips the window above and aborts. On a virtual bus you must pump <em>both</em> sides
+or every transfer times out.</li>
+<li><strong>Unexpected data frame.</strong> A DT frame that does not match any open receive
+session is dropped and counted; it never creates a session on its own.</li>
+<li><strong>Out-of-order or zero sequence.</strong> A DT frame whose sequence is ahead of the
+expected one (or zero) aborts the session with <code>BadSequence</code>.</li>
+<li><strong>Duplicate sequence.</strong> A repeated sequence aborts with <code>DuplicateSequence</code>
+(connection-mode; a BAM receiver has no back-channel to abort with).</li>
+<li><strong>CTS while sending.</strong> A CTS that arrives mid-window is a protocol-ordering
+error and aborts with <code>ConnectionModeError</code> — except an exact duplicate of the
+current window, which <code>machbus</code> treats as an idempotent retry so pump ordering
+cannot kill a healthy transfer.</li>
+<li><strong>Receiver back-pressure.</strong> A CTS for zero packets pauses the sender; the
+engine keeps the session warm with periodic keep-alive CTS frames.</li>
+<li><strong>Out of resources.</strong> An RTS/BAM whose advertised size exceeds the receive cap,
+or that arrives with no free session slot, is rejected with
+<code>ResourcesUnavailable</code> <em>before</em> any buffer is allocated — large transfers can
+be audited without reserving memory.</li>
+<li><strong>Malformed control frame.</strong> Short frames, non-canonical reserved bytes, a
+destination-specific CM frame sent to broadcast, or an out-of-range byte count
+are all dropped (and counted) rather than acted on.</li>
+</ul>
+<h2 id="etp-extending-tp-for-very-large-payloads"><a class="header" href="#etp-extending-tp-for-very-large-payloads">ETP: extending TP for very large payloads</a></h2>
+<p>ETP exists because TP’s counters run out. TP’s byte count is 16 bits and its
+packet count is a single byte, capping a transfer at 1785 bytes. ETP widens the
+byte count to 32 bits and reaches <code>ETP_MAX_DATA_LENGTH</code> (about 117 MB). It is
+<strong>connection-mode only</strong> — there is no broadcast ETP — so <code>send</code> rejects a
+broadcast destination outright.</p>
+<p>ETP reuses the RTS/CTS/EndOfMsgAck shape but adds one new control message: the
+<strong>Data Packet Offset (DPO)</strong>. The problem it solves: a single DT frame’s
+sequence byte only counts to 255, but an ETP transfer can have millions of
+packets. So ETP does not use one global sequence space. Instead, the receiver’s
+CTS names an absolute <em>next packet</em> (a 24-bit number), the sender replies with a
+DPO announcing the <strong>packet offset</strong> for the upcoming group, and then the DT
+frames within that group restart their sequence numbers at 1. The receiver
+reconstructs the absolute byte position as <code>(dpo_packet_offset + seq - 1) * 7</code>.
+A DT frame that arrives before its DPO, or a DPO whose offset does not match the
+receiver’s expected position, aborts with <code>BadSequence</code>.</p>
+<p>The ETP control codes live in <code>net::etp::etp_cm</code>: <code>RTS</code> (0x14), <code>CTS</code> (0x15),
+<code>DPO</code> (0x16), <code>EOMA</code> (0x17), <code>ABORT</code> (0xFF). The exchange per window is therefore
+<code>CTS → DPO → DT×K → CTS → …</code>, each window still capped at <code>TP_MAX_PACKETS_PER_CTS</code>
+packets. Its sole timeout is <code>ETP_TIMEOUT_T1_MS</code> (750 ms), shared by every
+waiting state.</p>
+<p>The example pumps an ETP transfer the same way as TP, just with the DPO step
+folded into <code>get_pending_data_frames</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    {
+        let payload: Vec&lt;u8&gt; = (0..2500u32).map(|n| (n &amp; 0xFF) as u8).collect();
+        let mut tx = ExtendedTransportProtocol::new();
+        let mut rx = ExtendedTransportProtocol::new();
+        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
+        let r = received.clone();
+        rx.on_complete
+            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
+
+        let rts = tx
+            .send(0xCA00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
+            .unwrap()[0];
+        let mut to_tx = rx.process_frame(&amp;rts, 0);
+        let mut turns = 0;
+        for turn in 0..50 {
+            for f in to_tx.drain(..) {
+                let _ = tx.process_frame(&amp;f, 0);
+            }
+            let dt = tx.get_pending_data_frames();
+            if dt.is_empty() {
+                break;
+            }
+            for f in &amp;dt {
+                to_tx.extend(rx.process_frame(f, 0));
+            }
+            turns = turn + 1;
+            if received.borrow().is_some() {
+                break;
+            }
+        }
+        let got = received.borrow().clone().unwrap();
+        println!(
+            "  converged in {turns} turns, delivered {} bytes (equal? {})",
+            got.data.len(),
+            got.data == payload
+        );
+    }
+<span class="boring">}</span></code></pre>
+<p><code>ExtendedTransportProtocol::receive_profile_for_advertised_size</code> lets you
+validate an advertised size against the protocol and your local receive cap
+<em>without</em> allocating — useful for auditing a protocol-maximum transfer profile
+before committing real memory to it.</p>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Broadcast vs peer-to-peer.</strong> Reach for BAM when many nodes need the same
+data and loss is tolerable (or the data repeats). Reach for CMDT when one
+receiver must pace, reject, or confirm — VT object-pool uploads and TC device
+descriptions are the canonical CMDT cases.</li>
+<li><strong>Performance.</strong> CMDT throughput is governed by the per-CTS window and how
+promptly each side pumps; BAM throughput is governed by the 50 ms inter-packet
+floor. Bigger CTS windows mean fewer round trips but less back-pressure
+headroom.</li>
+<li><strong>Fine control vs the bare codecs.</strong> The session facade owns the pump, the
+timers, and the event fan-out; use it in applications. The bare
+<code>TransportProtocol</code> / <code>ExtendedTransportProtocol</code> engines give you frame-level
+control for unit tests and embedded loops, at the cost of driving every
+<code>update</code> and <code>get_pending_data_frames</code> yourself.</li>
+<li><strong>Concurrent sessions.</strong> Control frames identify the target PGN, but data
+frames do not. For that reason <code>machbus</code> rejects a second TP/ETP transfer that
+would reuse the same active data-frame source/destination path, even when the
+requested PGN is different. That avoids reassembling bytes from one transfer
+into another.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=transport_demo
+make test
+</code></pre>
+<p>The example runs a CMDT round trip, an ETP round trip, and a Fast Packet round
+trip entirely in software and prints that each payload was reassembled byte for
+byte. The test suites in <code>src/net/tp.rs</code> and <code>src/net/etp.rs</code> cover malformed
+control frames, out-of-order and duplicate DT packets, backward/duplicate CTS
+behavior, sender and receiver timeouts, invalid endpoints, session caps,
+allocation caps, and the receiver-side abort direction.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the packetization, reassembly, CTS windowing, DPO offset handling,
+timeout aborts, and every abort reason behave deterministically in software, and
+that the size boundaries between single-frame, TP, and ETP are enforced.</p>
+<p>Does not prove: real-hardware timing, interoperability with a specific
+third-party ECU, or any conformance or certification claim. <code>machbus</code> is not
+certified; real deployment still needs official standards, hardware, and
+interoperability evidence.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="request-pgn.html">PGN request</a> — the request/response building block whose
+large responses ride on TP.</li>
+<li><a href="fast-packet.html">Fast packet</a> — NMEA 2000’s smaller multi-frame mechanism, an
+alternative for payloads up to 223 bytes.</li>
+<li><a href="address-claim.html">Address claim</a> — every transport endpoint must own a source
+address first.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/name-management.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/fast-packet.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/name-management.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/fast-packet.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

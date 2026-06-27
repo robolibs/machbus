@@ -1,0 +1,522 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Fast Packet - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/fast-packet.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="fast-packet"><a class="header" href="#fast-packet">Fast Packet</a></h1>
+<p>NMEA 2000 Fast Packet is the multi-frame transport that NMEA 2000 uses to send a
+payload that is too big for one CAN frame but still modest in size — things like
+a GNSS position fix, a wind report, or an engine parameter group. It is <em>not</em>
+the ISOBUS/J1939 Transport Protocol (TP). It rides the same 29-bit CAN bus and
+the same PGN addressing, but it has its own framing, no handshake, and no flow
+control. This tutorial explains why a second transport exists, how the frames are
+laid out, how reassembly works, where it can silently fail, and how to drive it
+with <code>machbus</code>’s <code>FastPacketProtocol</code>.</p>
+<p>If you are coming from ISOBUS, the one-line summary is: Fast Packet is what TP
+would look like if you stripped out the connection setup and the acknowledgements
+and just streamed the data. Read <a href="../standards/iso11783-datalink-transport.html">Transport Protocol</a>
+first if you want the contrast in full.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>A classic CAN frame carries at most eight bytes. Many NMEA 2000 parameter groups
+need a few dozen. ISOBUS solves the same problem with TP and ETP, but those
+protocols pay for reliability with round trips: a request to send, a clear to
+send, sequenced data, and an end-of-message acknowledgement. On a marine or
+mixed network where the same parameter group is broadcast many times a second to
+every listener at once, that handshake is the wrong trade. There is no single
+receiver to acknowledge, and a dropped frame is cheaper to ignore than to
+re-negotiate, because a fresh copy of the data is already on its way.</p>
+<p>Fast Packet is the answer to “I have 9 to 223 bytes, I am broadcasting to
+everyone, and the data refreshes faster than I could retransmit it.” It chops the
+payload into a short burst of back-to-back frames carrying a tiny counter, and
+the receiver stitches them back together. No setup, no acknowledgement, no
+retry — if a frame is lost, that copy of the message is lost and the next periodic
+broadcast takes its place.</p>
+<p><code>machbus</code> is not certified for any standard; treat this as a faithful software
+model of the framing, not a conformance statement.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<p>A Fast Packet transfer is one <em>first frame</em> followed by zero or more
+<em>continuation frames</em>, all sharing the same source address, PGN, and a small
+3-bit <strong>sequence counter</strong> that tags the whole burst. Inside each frame the low
+five bits are a <strong>frame counter</strong> that orders the pieces.</p>
+<pre><code> sender broadcasts a 30-byte payload  (sequence = 3)
+ ───────────────────────────────────────────────────────────────
+   byte0           byte1        bytes 2..8
+ ┌──────────────┬───────────┬──────────────────────────────┐
+ │ seq=3 │ fc=0 │ total=30  │ payload[0..6]                 │   first frame
+ └──────────────┴───────────┴──────────────────────────────┘
+   byte0                 bytes 1..8
+ ┌──────────────┬───────────────────────────────────────────┐
+ │ seq=3 │ fc=1 │ payload[6..13]                             │   continuation
+ ├──────────────┼───────────────────────────────────────────┤
+ │ seq=3 │ fc=2 │ payload[13..20]                            │   continuation
+ ├──────────────┼───────────────────────────────────────────┤
+ │ seq=3 │ fc=3 │ payload[20..27]                            │   continuation
+ ├──────────────┼───────────────────────────────────────────┤
+ │ seq=3 │ fc=4 │ payload[27..30]  + 0xFF padding            │   continuation
+ └──────────────┴───────────────────────────────────────────┘
+ ───────────────────────────────────────────────────────────────
+ receiver keys the session on (source, PGN, seq), counts frames
+ 0,1,2,3,4 in order, and emits the reassembled 30-byte message.
+</code></pre>
+<p>The receiver never speaks. It just listens, accumulates, and either completes a
+message or drops the partial one. Because the sequence counter distinguishes
+bursts, the <em>same</em> sender can have more than one Fast Packet transfer for the
+<em>same</em> PGN in flight at once without the pieces getting mixed up.</p>
+<h2 id="anatomy-first-frame-vs-continuation-frame"><a class="header" href="#anatomy-first-frame-vs-continuation-frame">Anatomy: first frame vs continuation frame</a></h2>
+<p>Every Fast Packet frame spends its first byte on two packed counters:</p>
+<ul>
+<li>The high three bits are the <strong>sequence counter</strong> (<code>0..=7</code>). All frames of one
+transfer carry the same value; the sender bumps it for the next transfer so a
+late frame from an old burst cannot poison a new one.</li>
+<li>The low five bits are the <strong>frame counter</strong> (<code>0..=31</code>). The first frame of a
+transfer is always frame counter <code>0</code>; continuation frames count up <code>1, 2, 3, …</code> in transmission order.</li>
+</ul>
+<p>That split is why a transfer is capped: five bits of frame counter and a few
+bytes per frame is all you get.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Frame</th><th>Byte 0</th><th>Byte 1</th><th>Bytes 2..8</th><th>Payload bytes carried</th></tr>
+</thead>
+<tbody>
+<tr><td>First (frame counter 0)</td><td>seq + counter</td><td>total payload length</td><td>first slice of data</td><td><code>FIRST_FRAME_DATA</code> = 6</td></tr>
+<tr><td>Continuation (1, 2, …)</td><td>seq + counter</td><td>data</td><td>data</td><td><code>SUBSEQUENT_FRAME_DATA</code> = 7</td></tr>
+</tbody>
+</table>
+</div>
+<p>Only the first frame spends a byte on the <strong>total length</strong>, so the receiver knows
+up front how big the final message is and how many continuation frames to expect.
+Every continuation frame gives up one extra payload byte (seven instead of six)
+because it does not repeat that length. Unused trailing bytes in the last frame
+are padded with <code>0xFF</code>. <code>machbus</code> exposes these slice widths as
+<code>net::fast_packet::FIRST_FRAME_DATA</code> and <code>SUBSEQUENT_FRAME_DATA</code>.</p>
+<h3 id="the-maximum-payload"><a class="header" href="#the-maximum-payload">The maximum payload</a></h3>
+<p>With six bytes in the first frame, seven in each of up to 31 continuation frames,
+and an eight-bit length field, the ceiling is <strong>223 bytes</strong>. <code>machbus</code> pins that
+to a single constant, <code>net::constants::FAST_PACKET_MAX_DATA = 223</code>, mirrored as
+<code>FastPacketProtocol::MAX_DATA_LENGTH</code>. Anything larger is not a Fast Packet at
+all — it belongs to TP or ETP. Anything eight bytes or smaller is not a Fast
+Packet either: it fits in one ordinary CAN frame, so <code>send</code> refuses it.</p>
+<h2 id="reassembly-and-what-happens-when-a-frame-is-lost"><a class="header" href="#reassembly-and-what-happens-when-a-frame-is-lost">Reassembly and what happens when a frame is lost</a></h2>
+<p>The reassembler is deliberately simple, and the simplicity is the point. For each
+incoming frame <code>machbus</code>:</p>
+<ol>
+<li>Reads byte 0 and splits it into sequence and frame counters.</li>
+<li>If the frame counter is <code>0</code>, starts a <strong>new session</strong>: it reads the total
+length, allocates a buffer, copies the first six bytes, and records that it
+now expects frame counter <code>1</code>.</li>
+<li>Otherwise it looks for an in-flight session matching <code>(source, PGN, sequence)</code>. If none exists, the frame is an orphan and is dropped.</li>
+<li>It checks that the frame counter equals the <strong>expected</strong> next value. If it
+does, the seven bytes land at the right offset and the expected counter
+advances. When the accumulated byte count reaches the declared total, the
+session completes and a reassembled <code>Message</code> is returned.</li>
+</ol>
+<p>There is no retransmission, and this is the sharp difference from TP. If a
+continuation frame is dropped or arrives out of order, the next frame’s counter
+will not match what the receiver expects, so <code>machbus</code> <strong>discards the whole
+in-flight session</strong> and waits for a fresh first frame. The partially built
+message is thrown away, not patched. TP would request the missing packet; Fast
+Packet cannot, because there is no back channel and the sender already moved on.</p>
+<p>A few more behaviors fall out of this design:</p>
+<ul>
+<li><strong>Orphan continuation frame.</strong> A continuation frame with no matching first
+frame (you joined mid-burst, or the first frame was lost) is dropped and
+counted as a dropped frame.</li>
+<li><strong>Malformed first frame.</strong> A first frame whose declared length is <code>≤ 8</code> or
+<code>&gt; 223</code> is rejected outright; nothing is allocated.</li>
+<li><strong>Short frame.</strong> A frame shorter than eight bytes is dropped before it can
+touch any session.</li>
+<li><strong>Timeout.</strong> A session that stops making progress is dropped after the
+transport idle window (<code>TP_TIMEOUT_T1_MS</code>) once you call <code>update</code>. This is the
+cleanup that stops a half-finished broadcast from lingering forever.</li>
+</ul>
+<p>All of these increment counters on a <code>TransportStats</code> snapshot you can read back,
+so a stalled reassembly is observable rather than mysterious.</p>
+<h2 id="single-frame-vs-tp-vs-etp-vs-fast-packet"><a class="header" href="#single-frame-vs-tp-vs-etp-vs-fast-packet">Single-frame vs TP vs ETP vs Fast Packet</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Transport</th><th>Used for</th><th>Handshake</th><th>Flow control</th><th>Max payload</th></tr>
+</thead>
+<tbody>
+<tr><td>Single CAN frame</td><td>Up to 8 bytes; the common case</td><td>No</td><td>No</td><td>8 bytes</td></tr>
+<tr><td>Fast Packet (NMEA 2000)</td><td>9–223 byte broadcast parameter groups</td><td>No</td><td>No</td><td><code>FAST_PACKET_MAX_DATA</code> = 223</td></tr>
+<tr><td>TP (ISOBUS / J1939)</td><td>9–1785 bytes, point-to-point or BAM</td><td>Yes (RTS/CTS), BAM is open-loop</td><td>Yes (CTS windows)</td><td><code>TP_MAX_DATA_LENGTH</code> = 1785</td></tr>
+<tr><td>ETP</td><td>Very large transfers</td><td>Yes</td><td>Yes</td><td><code>ETP_MAX_DATA_LENGTH</code> ≈ 117 MB</td></tr>
+</tbody>
+</table>
+</div>
+<p>The shape of the decision: pick the smallest transport that fits the payload, and
+pick Fast Packet over TP when the data is a repeating broadcast where a lost copy
+is cheaper than a retransmit. TP earns its handshake when you need a reliable
+delivery to a specific node; Fast Packet earns its silence when you are
+firehosing the same value to the whole bus.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The whole protocol is one type, <code>net::FastPacketProtocol</code>. One side calls <code>send</code>
+to chop a payload into frames; the other side feeds each frame to <code>process_frame</code>
+and watches for the completed <code>Message</code>. The <code>transport_demo</code> example wires both
+ends together for a GNSS-position payload:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    {
+        let payload: Vec&lt;u8&gt; = (0..30u32).map(|n| (n + 0x40) as u8).collect();
+        let mut tx = FastPacketProtocol::new();
+        let mut rx = FastPacketProtocol::new();
+        let frames = tx.send(PGN_GNSS_POSITION, &amp;payload, 0x10).unwrap();
+        println!("  {} frames for {} bytes", frames.len(), payload.len());
+
+        let mut got = None;
+        for f in &amp;frames {
+            if let Some(m) = rx.process_frame(f) {
+                got = Some(m);
+            }
+        }
+        let msg = got.unwrap();
+        println!(
+            "  reassembled {} bytes (equal? {})",
+            msg.data.len(),
+            msg.data == payload
+        );
+    }
+<span class="boring">}</span></code></pre>
+<p>What the calls mean:</p>
+<ul>
+<li><code>FastPacketProtocol::new()</code> builds a sender/receiver with the default cap on
+simultaneous receive sessions (<code>FAST_PACKET_DEFAULT_MAX_RX_SESSIONS = 32</code>).
+Use <code>with_max_rx_sessions(n)</code> to bound memory more tightly; a cap of <code>0</code>
+refuses all new multi-frame sessions.</li>
+<li><code>send(pgn, data, source)</code> returns the <code>Vec&lt;Frame&gt;</code> for the transfer and
+advances the internal transmit sequence counter so the next call uses a fresh
+sequence value. It errors with a buffer-overflow code for payloads over 223
+bytes and an invalid-state code for payloads of eight bytes or fewer (those
+belong in a single frame). It also rejects an invalid PGN or a null/broadcast
+source address before allocating anything.</li>
+<li><code>process_frame(&amp;frame)</code> returns <code>Some(Message)</code> only when the frame that
+completes a session arrives, and <code>None</code> for every frame before it (and for
+every frame it drops). The reassembled <code>Message</code> carries the PGN, the source,
+a broadcast destination, and the timestamp of the <em>last</em> frame that completed
+it.</li>
+<li><code>update(elapsed_ms)</code> ages in-flight sessions and drops the ones that have gone
+quiet past <code>TP_TIMEOUT_T1_MS</code>. Call it from your bus loop so stalled
+reassemblies are reclaimed.</li>
+</ul>
+<p>For diagnostics, <code>rx_session_count()</code> reports how many reassemblies are in flight
+and <code>stats()</code> returns a <code>TransportStats</code> snapshot (dropped frames, dropped
+sessions, timeouts, resource rejections); <code>clear_stats()</code> resets them without
+disturbing live sessions.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>Fast Packet has no events to subscribe to and no acknowledgements to send. Your
+responsibilities are narrow but real:</p>
+<ul>
+<li><strong>Pump <code>process_frame</code> for every received frame</strong> whose PGN you handle, and act
+on the <code>Message</code> when one completes.</li>
+<li><strong>Call <code>update</code> on a regular tick</strong> so timed-out sessions are reclaimed; if you
+never call it, a partial broadcast holds a buffer until the sender happens to
+restart that exact sequence.</li>
+<li><strong>Do not expect delivery guarantees.</strong> Treat a missing or late message as
+normal, because the protocol gives you no way to ask for a retransmission.</li>
+<li><strong>Respect the size envelope.</strong> Build payloads of 9–223 bytes for Fast Packet;
+route anything larger through TP or ETP.</li>
+</ul>
+<h2 id="edge-cases-and-failure-modes"><a class="header" href="#edge-cases-and-failure-modes">Edge cases and failure modes</a></h2>
+<ul>
+<li><strong>Dropped continuation frame.</strong> The next frame’s counter mismatches, the whole
+session is discarded, and <code>dropped_sessions</code> increments. There is no recovery
+short of the next first frame.</li>
+<li><strong>Out-of-order frames.</strong> Same outcome as a drop — the reassembler expects
+strictly increasing frame counters and tears down on the first surprise.</li>
+<li><strong>Two bursts, same source and PGN.</strong> Allowed, as long as the sender used
+different sequence counters; they reassemble in parallel. If a new first frame
+reuses a sequence value already in flight, it replaces the stale session rather
+than duplicating it.</li>
+<li><strong>Sequence counter wrap.</strong> The transmit sequence is three bits, so it wraps
+after eight transfers. A wrapped first frame for a <code>(source, PGN, seq)</code> that
+still has a stale reassembly pending replaces that stale state — it does not
+grow an unbounded pile of sessions.</li>
+<li><strong>Session cap reached.</strong> New first frames are refused once <code>max_rx_sessions</code>
+in-flight sessions exist; the frame is dropped and a resource rejection is
+recorded. This bounds worst-case memory under a flood of first frames.</li>
+<li><strong>Null or broadcast source.</strong> A frame claiming <code>NULL_ADDRESS</code> or
+<code>BROADCAST_ADDRESS</code> as its source is invalid and dropped on both send and
+receive paths.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Mixing with NMEA PGNs.</strong> Fast Packet is a transport, not a message format.
+The reassembled <code>Message</code> still has to be interpreted as the specific NMEA 2000
+parameter group its PGN names. See <a href="nmea-2000.html">NMEA 2000</a> for how <code>machbus</code>
+routes a completed Fast Packet payload into the NMEA layer, and
+<a href="serial-gnss.html">Serial GNSS</a> for the position-data path that most commonly
+rides Fast Packet.</li>
+<li><strong>Performance.</strong> A transfer is a short burst of back-to-back frames with no
+inter-frame negotiation, so it is fast and cheap on the wire — the cost is the
+absence of recovery. On a busy bus, sizing <code>max_rx_sessions</code> to the number of
+distinct broadcasters you expect keeps memory predictable without dropping
+legitimate traffic.</li>
+<li><strong>Surface vs low-level.</strong> <code>FastPacketProtocol</code> is the low-level building block.
+In a full stack the NMEA layer drives it for you; reach for the protocol object
+directly in tests and tightly controlled loops where you own each frame.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=transport_demo
+make test
+</code></pre>
+<p>The <code>transport_demo</code> example sends a multi-frame Fast Packet payload and
+reassembles it end to end in software, alongside the TP and ETP paths so you can
+see the three transports side by side. The unit and property tests in the Fast
+Packet module exercise the maximum 223-byte payload, the nine-byte two-frame
+minimum, out-of-order and orphan frames, sequence-counter wrap, parallel
+sessions, timeouts, and the session cap.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the first-frame/continuation framing, the sequence and frame counters,
+the 223-byte ceiling, in-order reassembly, parallel sessions keyed on
+<code>(source, PGN, sequence)</code>, and the drop-on-mismatch behavior all behave
+deterministically in software, and the <code>machbus</code> API encodes and decodes them
+correctly.</p>
+<p>Does not prove: real-hardware timing, interoperability with a specific NMEA 2000
+device, or any conformance or certification claim. Those still require official
+standards, real hardware, and interoperability evidence.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="../standards/iso11783-datalink-transport.html">Transport Protocol</a> — the ISOBUS/J1939 multi-frame
+transport with the handshake and flow control Fast Packet omits.</li>
+<li><a href="nmea-2000.html">NMEA 2000</a> — how reassembled Fast Packet payloads become NMEA
+parameter groups.</li>
+<li><a href="serial-gnss.html">Serial GNSS</a> — the position-data path that most often rides
+Fast Packet.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/transport-protocol.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/network-routing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/transport-protocol.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/network-routing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,607 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>NAME management - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/name-management.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="name-management-and-commanded-address"><a class="header" href="#name-management-and-commanded-address">NAME management and commanded address</a></h1>
+<p>Once a control function owns an address, the network is not done with it. A
+configuration tool may need to move that node to a <em>specific</em> address, or change
+some of its NAME fields so two otherwise-identical units can be told apart. These
+are the network-management operations that sit on top of the basic claim. This
+tutorial explains the <strong>commanded-address</strong> message, the <strong>NAME-management</strong>
+negotiation, and how a correct node behaves when its address is commanded,
+contested, or violated.</p>
+<p>This page is the sibling of <a href="address-claim.html">Address claim</a>. That page owns the
+basic claim — power-up, the contention window, NAME arbitration, and the
+self-configure walk. Read it first. This page assumes the node has already
+claimed an address and covers what happens <em>after</em>.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>The basic claim answers one question: “which address does each NAME get when
+everyone powers up at once?” It does not answer the operational questions a real
+machine raises later:</p>
+<ul>
+<li>A service tool wants every ECU at a known, documented address so a wiring
+diagram or a diagnostic script can find it. The claim alone gives addresses
+that can drift between power cycles.</li>
+<li>Two physically identical implements hang off the same bus. Their NAMEs collide
+on every field except the per-unit identity number. The integrator needs to set
+an instance field on one of them so the rest of the network can address each
+independently.</li>
+<li>A generic ECU ships with a placeholder function and is configured into its real
+role at install time.</li>
+</ul>
+<p>Commanded address and NAME management are the standardized, in-band ways to do
+all of this without reflashing firmware. Both are <strong>optional</strong> capabilities in
+ISO 11783-5: a node may support neither, one, or both, and may guard them behind
+a source check or a proprietary security step. <code>machbus</code> gives you the protocol
+machinery to <em>respond</em> correctly when you choose to support them.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<p>Think of three actors and two messages.</p>
+<pre><code> commanding CF (tool/bridge)            target CF (your node)
+ ─────────────────────────             ─────────────────────
+        │  commanded-address (NAME + new SA)  │
+        │ ──────────────────────────────────►│  is the NAME mine?
+        │                                     │  yes ─► re-claim at new SA
+        │  ◄───────── address-claimed ────────│
+        │                                     │
+        │  name-mgmt: set pending (fields)    │
+        │ ──────────────────────────────────►│  identity unchanged? store it
+        │  ◄────────── ACK / NACK ────────────│
+        │  name-mgmt: adopt pending           │
+        │ ──────────────────────────────────►│  swap NAME ─► re-claim
+        │  ◄───────── address-claimed ────────│
+</code></pre>
+<p>Two ideas carry the whole topic. First, <strong>address and identity are separable</strong>.
+Commanded address changes only the label; the NAME is untouched. NAME management
+changes the identity; the address is then re-negotiated from scratch. Second,
+<strong>every accepted change ends in a fresh address claim</strong>. Whenever a node moves
+address or adopts a new NAME, it must re-run the claim and win an address before
+it resumes normal traffic — exactly the handshake from
+<a href="address-claim.html">Address claim</a>.</p>
+<h2 id="anatomy-the-two-messages"><a class="header" href="#anatomy-the-two-messages">Anatomy: the two messages</a></h2>
+<p><code>machbus</code> carries these on two distinct PGNs, exposed as
+<code>net::pgn_defs::PGN_COMMANDED_ADDRESS</code> and <code>net::pgn_defs::PGN_NAME_MANAGEMENT</code>.</p>
+<h3 id="commanded-address"><a class="header" href="#commanded-address">Commanded address</a></h3>
+<p>The commanded-address payload is nine bytes: the eight-byte NAME of the node
+being commanded, followed by one byte holding the address it should move to. The
+NAME acts as the addressee — a commanding CF must already know <em>which</em> NAME it
+wants to relocate, because the source address it sends to could have drifted
+between the decision and the command.</p>
+<p><code>NameManager::handle_commanded_address(msg, our_name)</code> decodes this for you and
+applies four guards before it accepts anything:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Guard</th><th>Rejected when</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td>PGN match</td><td><code>msg.pgn</code> is not the commanded-address PGN</td><td>Wrong message entirely.</td></tr>
+<tr><td>Source sanity</td><td>source is the null or broadcast address</td><td>A command must come from a real claimed node.</td></tr>
+<tr><td>Length</td><td>payload is not exactly nine bytes</td><td>Malformed; not a valid command.</td></tr>
+<tr><td>Target match</td><td>the carried NAME is not <code>our_name</code></td><td>The command is for some other node.</td></tr>
+<tr><td>Address range</td><td>the new address is above <code>MAX_ADDRESS</code> (<code>0xFD</code>)</td><td><code>0xFE</code>/<code>0xFF</code> are reserved and never claimable.</td></tr>
+</tbody>
+</table>
+</div>
+<p>If all guards pass, the method returns <code>Some(new_address)</code> and fires
+<code>on_commanded_address</code>. It does <strong>not</strong> move you on its own — applying the address
+and re-claiming is the caller’s job, because only the caller owns the CF state.</p>
+<h3 id="name-management"><a class="header" href="#name-management">NAME management</a></h3>
+<p>The NAME-management message is a fixed wire shape: a one-byte <strong>mode</strong>, eight
+NAME bytes, a one-byte NACK reason, and padding, encoded to a canonical 17-byte
+payload. <code>machbus</code> models it as <code>net::NameManagementMsg</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct NameManagementMsg {
+    pub mode: NameMgmtMode,
+    pub name_data: [u8; 8],
+    pub nack_reason: NameNackReason,
+}
+<span class="boring">}</span></code></pre>
+<p><code>NameManagementMsg::encode</code> and <code>NameManagementMsg::decode</code> move between this
+struct and the wire bytes. <code>decode</code> is strict: it rejects non-canonical lengths,
+unknown modes, invalid NACK reason codes, and any padding byte that is not <code>0xFF</code>.
+<code>NameManagementMsg::for_name(mode, name)</code> is the convenient constructor, and
+<code>msg.name()</code> extracts the carried NAME.</p>
+<h2 id="the-name-management-modes"><a class="header" href="#the-name-management-modes">The NAME-management modes</a></h2>
+<p>The mode byte selects which of nine operations a frame represents. <code>machbus</code>
+enumerates them as <code>net::NameMgmtMode</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Mode</th><th>Direction</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RequestCurrent</code></td><td>tool → node</td><td>“Tell me the NAME you are using right now.”</td></tr>
+<tr><td><code>RequestCurrentResponse</code></td><td>node → tool</td><td>The current NAME, answering the above.</td></tr>
+<tr><td><code>SetPending</code></td><td>tool → node</td><td>“Stage this NAME; do not adopt it yet.”</td></tr>
+<tr><td><code>RequestPending</code></td><td>tool → node</td><td>“Tell me the NAME you have staged.”</td></tr>
+<tr><td><code>RequestPendingResponse</code></td><td>node → tool</td><td>The staged NAME, answering the above.</td></tr>
+<tr><td><code>AdoptPending</code></td><td>tool → node</td><td>“Make the staged NAME your current NAME and re-claim.”</td></tr>
+<tr><td><code>Acknowledge</code></td><td>node → tool</td><td>A set or adopt succeeded.</td></tr>
+<tr><td><code>NegativeAcknowledge</code></td><td>node → tool</td><td>A request was refused; carries a reason.</td></tr>
+<tr><td><code>RequestAddressClaim</code></td><td>tool → bus</td><td>“If your NAME matches, send your address claim.”</td></tr>
+</tbody>
+</table>
+</div>
+<p>The shape of a configuration session is: query the current NAME, stage one or
+more field changes with <code>SetPending</code>, optionally read back what was staged with
+<code>RequestPending</code>, then trigger the swap with <code>AdoptPending</code>. The node keeps
+running under its current NAME the whole time it has a pending one staged; nothing
+changes on the bus until adoption.</p>
+<h3 id="how-machbus-answers-each-mode"><a class="header" href="#how-machbus-answers-each-mode">How machbus answers each mode</a></h3>
+<p><code>NameManager::handle_name_management(msg, current_name)</code> is the responder. It
+ignores frames from the null or broadcast source, decodes the payload, and
+dispatches by mode. It always emits the <code>on_name_management</code> event for
+observability, and returns the reply to send (if any):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Incoming mode</th><th>machbus reply</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RequestCurrent</code></td><td><code>RequestCurrentResponse</code> carrying <code>current_name</code>.</td></tr>
+<tr><td><code>SetPending</code></td><td><code>Acknowledge</code> if accepted, else <code>NegativeAcknowledge</code>.</td></tr>
+<tr><td><code>RequestPending</code></td><td><code>RequestPendingResponse</code> if one is staged, else NACK <code>PendingNotSet</code>.</td></tr>
+<tr><td><code>AdoptPending</code></td><td><code>Acknowledge</code> if a pending NAME existed, else NACK <code>PendingNotSet</code>.</td></tr>
+<tr><td>all response/ack modes, <code>RequestAddressClaim</code></td><td>no reply — observed only.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The last row is deliberate. Acknowledgements and responses are <strong>observed but
+never answered</strong>, so two <code>machbus</code> nodes can never fall into a response-to-response
+loop where each one replies to the other’s reply forever. Those frames also never
+mutate the pending NAME.</p>
+<h3 id="the-one-rule-that-constrains-a-setpending"><a class="header" href="#the-one-rule-that-constrains-a-setpending">The one rule that constrains a SetPending</a></h3>
+<p><code>NameManager::set_pending(current_identity, new_name)</code> enforces the single
+invariant the standard places on NAME changes: <strong>the identity number must not
+change.</strong> Every other field — instances, function, device class, industry group,
+even the self-configurable bit — can be re-commanded, but the per-unit identity
+number is fixed at manufacture and stays put. If a <code>SetPending</code> carries a NAME
+whose identity number differs from the node’s current one, <code>machbus</code> rejects it
+with <code>NegativeAcknowledge</code> and reason <code>InvalidItems</code>, and stages nothing.</p>
+<h3 id="nack-reasons-as-behavior"><a class="header" href="#nack-reasons-as-behavior">NACK reasons as behavior</a></h3>
+<p>When <code>machbus</code> refuses an operation it answers with <code>NegativeAcknowledge</code> and a
+<code>net::NameNackReason</code>. Read each one as “what the node is telling the tool to do
+differently”:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Reason</th><th>What it means in practice</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Security</code></td><td>The node will not accept this change from this source. The tool must authenticate or come from an allowed CF (a bridge or service tool).</td></tr>
+<tr><td><code>InvalidItems</code></td><td>One or more commanded fields are not allowed to change — in <code>machbus</code>, attempting to change the identity number.</td></tr>
+<tr><td><code>Conflict</code></td><td>The node cannot take on what the change implies (it cannot perform the requested function, or cannot be self-configurable as asked).</td></tr>
+<tr><td><code>Checksum</code></td><td>The integrity check that guards against an addressee mismatch did not match.</td></tr>
+<tr><td><code>PendingNotSet</code></td><td>A <code>RequestPending</code> or <code>AdoptPending</code> arrived but nothing is staged. machbus returns this for both.</td></tr>
+<tr><td><code>Other</code></td><td>A catch-all when none of the above fit.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="self-configurable-address-ranges"><a class="header" href="#self-configurable-address-ranges">Self-configurable address ranges</a></h2>
+<p>When a self-configurable node loses arbitration, it must pick another address to
+try. ISO 11783-5 narrows the choice: a self-configurable node draws its retry
+candidates from the dynamic range (the upper region of the address space), and
+should prefer the lower part of that range before reaching into addresses that
+double as preferred slots for other functions. A node with an assigned preferred
+address may also fall back to that preferred address.</p>
+<p><code>machbus</code> walks candidates in <code>AddressClaimer</code>. After a loss it calls an internal
+<code>find_next_address</code> that steps linearly from the contested address, skips the
+node’s own preferred address (it was just contested), and skips any address it has
+already <em>seen claimed by someone else</em>. The claimer remembers occupied addresses
+from every peer claim it observes, so a saturated network does not make it cycle
+onto slots it already knows are taken. If the walk exhausts every claimable
+address, the node transitions to the failed state and announces cannot-claim from
+the null address — the same dead end the claim page describes, reached through a
+fuller search.</p>
+<p>Two practical consequences:</p>
+<ul>
+<li>Pick a preferred address <em>inside</em> the range appropriate for your function so the
+very first attempt usually succeeds and the walk never runs.</li>
+<li>Do not configure the null or broadcast address as a local preferred source
+address. machbus treats that as unclaimable at startup and takes the
+cannot-claim path instead of briefly advertising an unusable address.</li>
+<li>After a node settles on a new address, that address should become its initial
+address for the next power-up. Persisting it (see Advanced) is what keeps the
+network stable across restarts instead of re-shuffling every boot.</li>
+</ul>
+<h2 id="contention-and-address-violation-handling"><a class="header" href="#contention-and-address-violation-handling">Contention and address-violation handling</a></h2>
+<p>There are two distinct “someone wants my address” situations, and they are not the
+same.</p>
+<p><strong>Contention during a claim.</strong> Another node sends an address-claimed for an
+address you are claiming. This is the normal arbitration path: lower NAME wins,
+the loser self-configures or fails. <code>AddressClaimer::handle_claim</code> owns this and
+it is covered in <a href="address-claim.html">Address claim</a>.</p>
+<p><strong>Address violation after a claim.</strong> You are already the owner, online and
+sending, and you observe <em>some other message</em> using your source address — not an
+address claim, just ordinary traffic from a node that thinks the address is its.
+A correct node does not stay quiet. It re-announces its claim to the whole bus so
+the network re-converges on the true owner, and it raises the corresponding
+diagnostic condition so a tool can see that two nodes are fighting over one
+address. The wrong response is to keep transmitting as if nothing happened, which
+leaves the bus with an ambiguous owner.</p>
+<p>The closely related failure is a <strong>duplicate NAME</strong>: two distinct devices present
+the <em>same</em> NAME on different source addresses. Arbitration has no tie-breaker for
+equal NAMEs, so it cannot resolve this. <code>AddressClaimer::handle_duplicate_name</code>
+treats it as fatal for the local node: it goes offline, transitions to the failed
+state, drops to the null address, and emits a single cannot-claim announcement
+rather than continuing under an identity the bus cannot distinguish. The cure is
+upstream — make the identity numbers differ — not on the wire.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>There are two layers, mirroring the claim page.</p>
+<h3 id="the-session-facade-recommended"><a class="header" href="#the-session-facade-recommended">The session facade (recommended)</a></h3>
+<p>The session facade owns the NAME-management responder when you plug the
+<code>NameManagement</code> plugin. It registers a callback on the NAME-management PGN,
+drains incoming frames each pump, and runs <code>NameManager::handle_name_management</code>
+for you. When a reply is produced it sends it; when an <code>AdoptPending</code> is accepted
+it applies the new NAME to your control function and <em>restarts address claiming
+automatically</em> — you do not have to re-sequence the claim by hand. The shape is:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Illustrative shape — reacting to a tool adopting a new NAME for this node.
+ctrl.with_mut::&lt;NameManagement, _&gt;(|nm| {
+    nm.manager_mut().on_name_changed.subscribe(|new_name| {
+        // The session will re-claim under `new_name`; persist it if you want
+        // it to survive the next power cycle.
+    });
+});
+<span class="boring">}</span></code></pre>
+<p>The plugin is a responder: it answers a commanding CF. Driving the <em>commanding</em>
+side (sending <code>SetPending</code>/<code>AdoptPending</code> to other nodes) is an application
+concern you build on top of the raw send API.</p>
+<h3 id="the-low-level-manager-for-tests-and-embedded-control"><a class="header" href="#the-low-level-manager-for-tests-and-embedded-control">The low-level manager (for tests and embedded control)</a></h3>
+<p><code>net::NameManager</code> is the pure, stateless-by-design helper. You feed it decoded
+<code>Message</code>s and route its replies yourself:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Illustrative shape — not a compiled example.
+let mut mgr = NameManager::new();
+
+// A tool commands us to move to 0x42.
+if let Some(new_addr) = mgr.handle_commanded_address(&amp;msg, our_name) {
+    cf.set_address(new_addr);
+    // re-run the claim at new_addr (see the address-claim tutorial)
+}
+
+// A tool runs a NAME-management exchange.
+if let Some(reply) = mgr.handle_name_management(&amp;msg, current_name) {
+    net.send(PGN_NAME_MANAGEMENT, &amp;reply.msg.encode(),
+             self_cf, reply.destination, Priority::Default)?;
+}
+<span class="boring">}</span></code></pre>
+<p>The manager tracks only the pending NAME. <code>set_pending</code>, <code>adopt_pending</code>,
+<code>has_pending</code>, and <code>pending_name</code> give you direct control for unit tests, and
+<code>adopt_pending</code> returns the adopted NAME <em>and</em> fires <code>on_name_changed</code> so the
+caller knows it now owes a re-claim.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Fired by</th><th>Your responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_commanded_address</code></td><td><code>handle_commanded_address</code></td><td>Apply the new address and re-claim. The session does this for you.</td></tr>
+<tr><td><code>on_name_changed</code></td><td><code>adopt_pending</code></td><td>The current NAME is now the adopted one; re-claim under it and persist it.</td></tr>
+<tr><td><code>on_name_management</code></td><td>every received NM frame</td><td>Observe/log. Do not reply from here — the manager already decides replies.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The rule that never bends, same as the claim page: <strong>after any commanded move or
+NAME adoption, do not resume normal traffic until you have successfully claimed an
+address again.</strong> The address you were commanded to, or the identity you adopted,
+is not yours until the claim confirms it.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Commanded to an occupied address.</strong> The command is accepted and you re-claim
+at the new address — but the claim can still <em>lose</em> if a lower NAME already owns
+it. The correct end state is whatever the claim yields, not blind occupation.
+A node that cannot take the commanded address re-announces its current address
+instead.</li>
+<li><strong>Commanded to a reserved address.</strong> <code>handle_commanded_address</code> returns <code>None</code>
+for any address above <code>MAX_ADDRESS</code>, so <code>0xFE</code>/<code>0xFF</code> are silently ignored.</li>
+<li><strong>NACKed name change.</strong> A <code>SetPending</code> that touches the identity number, or that
+the node will not accept from this source, comes back as a <code>NegativeAcknowledge</code>.
+The pending state is left untouched; nothing was staged.</li>
+<li><strong>Adopt with nothing staged.</strong> <code>AdoptPending</code> when no pending NAME exists NACKs
+with <code>PendingNotSet</code> and changes nothing. <code>adopt_pending</code> consumes the pending
+NAME, so a second adopt also fails — adoption is one-shot.</li>
+<li><strong>Response/violation storms.</strong> Because <code>machbus</code> never replies to ack or
+response modes, a bus full of NM responses cannot drag your node into an
+ever-escalating reply loop. Likewise a real violation triggers exactly one
+re-announce per detection, not a continuous stream.</li>
+<li><strong>Stale source address.</strong> A node can claim a new address between a tool deciding
+to command it and the command arriving. Commanded address sidesteps this by
+addressing the NAME, not the source; NAME management guards the same race with
+an integrity check that surfaces as the <code>Checksum</code> NACK reason.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Multi-CF ECUs.</strong> One physical ECU may host several control functions, each
+with its own NAME and its own address. Commanded address and NAME management are
+per-CF: model each control function separately and run a <code>NameManager</code> per CF.
+Never try to share one address between two of them.</li>
+<li><strong>Configuration tools and security.</strong> Supporting these messages is optional, and
+the standard explicitly lets a manufacturer accept them only from a bridge or
+service tool, or behind a proprietary security check. If your product is a
+responder, decide <em>who</em> you accept commands from before shipping, and answer
+unauthorized requests with the <code>Security</code> NACK reason rather than silently
+obeying.</li>
+<li><strong>Persistence across power cycles.</strong> When a node moves address — by losing
+arbitration, by self-configuring, or by command — that new address is meant to
+become the initial address it tries next boot. <code>machbus</code> does not own your
+non-volatile storage; persist the address (and an adopted NAME) yourself from
+the <code>on_address_claimed</code> and <code>on_name_changed</code> events so the network comes back
+up in the same shape it settled into.</li>
+<li><strong>Fine control vs the bare codecs.</strong> The <code>NameManagement</code> plugin is right for
+applications: it pumps, replies, applies adopted NAMEs, and re-claims for you.
+The bare <code>NameManager</code> is right for tests and tightly controlled embedded loops
+where you route every frame and own every state transition.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make test
+</code></pre>
+<p>The library tests exercise the responder end to end: request-current,
+set-pending with matching and mismatched identity, request-pending when set and
+unset, adoption and double-adoption, malformed and overlong payloads, response
+modes that must not loop, and commanded-address targeting us, targeting someone
+else, with a reserved address, and with short or overlong payloads. For the basic
+claim and self-configure walk that these operations re-trigger, run the
+address-claim example:</p>
+<pre><code class="language-sh">make run EXAMPLE=address_claim
+</code></pre>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: in software, <code>machbus</code> decodes and answers NAME-management and
+commanded-address traffic by the rules above, refuses identity changes and
+unstaged adoptions, never loops on responses, and re-claims after any accepted
+move or NAME change.</p>
+<p>Does not prove: real-hardware timing, interoperability with a specific
+third-party tool or ECU, or any conformance or certification claim. Supporting
+these optional messages on a shipping product still needs official standards, real
+hardware, and interoperability evidence. <code>machbus</code> ships no certification.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="address-claim.html">Address claim</a> — the basic claim, contention window, and
+self-configure walk this page builds on.</li>
+<li><a href="../standards/iso11783-general-device-classes.html">Control functions and partners</a>
+— what a CF is and how multi-CF ECUs are modeled.</li>
+<li><a href="network-routing.html">Network routing</a> — how addressed traffic moves once every
+node owns an address.</li>
+<li><a href="../troubleshooting/address-conflicts.html">Address conflicts</a> — diagnosing claims
+and violations when they go wrong.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/request-pgn.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/transport-protocol.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/request-pgn.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/transport-protocol.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

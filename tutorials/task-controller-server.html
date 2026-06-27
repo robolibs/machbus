@@ -1,0 +1,577 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Task Controller server - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/task-controller-server.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="task-controller-server"><a class="header" href="#task-controller-server">Task Controller server</a></h1>
+<p>A <strong>task controller server</strong> is the node on an ISOBUS that an implement reports
+to. It advertises itself as a task controller, accepts implement clients, stores
+the device descriptions those clients send, and then exchanges <em>process data</em>
+with them — logging the values an implement measures and, when the work calls
+for it, pushing setpoints back the other way. This tutorial covers why the role
+exists, the server’s lifecycle, and how to build one with <code>machbus</code> at both the
+low level (<code>tc::server</code>) and through the session facade.</p>
+<p>The mirror image of this page is <a href="task-controller-client.html">Task Controller client</a>:
+that side is the implement; this side is the controller it talks to. Read both
+to see a full exchange. ISO 11783-10 (Task Controller) is the part of the
+standard this role comes from.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>An implement — a sprayer, a planter, a spreader — knows a great deal about
+itself: how many sections it has, what it can measure, what it can be told to
+do. But it has no display, no task plan, and nowhere to write a log. The task
+controller fills those gaps. It is the node that holds the job to be done,
+records what actually happened, and issues the commands that make the implement
+act on a prescription.</p>
+<p>For that to work the controller cannot hard-code knowledge of every implement
+ever built. Instead each implement describes itself in a structured <strong>device
+description</strong> (a DDOP — see <a href="ddop.html">Device descriptions</a>), uploads it once,
+and from then on the two sides speak in terms of <em>elements</em> and <em>DDIs</em> (data
+dictionary identifiers) rather than vendor-specific messages. The server’s job
+is to receive that description, validate it, keep it, and use it as the shared
+vocabulary for everything that follows.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<pre><code>implement (client)                    task controller (server)
+        │                                       │
+        │  &lt;───── TC status / version ──────    │  advertises capabilities
+        │                                       │
+        │  ──── working set / version req ──&gt;   │  registers the client
+        │                                       │
+        │  ───────── DDOP upload ──────────&gt;    │  validate, store (inactive)
+        │  &lt;──────── pool response ─────────    │
+        │                                       │
+        │  ───────── activate pool ────────&gt;    │  activate, build lookups
+        │  &lt;──────── activate response ─────    │
+        │                                       │
+        │  ═══════ process data both ways ══    │  request / value / setpoint
+        │                                       │
+        │  ──────── deactivate / delete ───&gt;    │  drop active state on command
+</code></pre>
+<p>The server is a passive responder for almost everything: the client drives the
+handshake, and the server answers. The two things the server originates on its
+own are the periodic <strong>status broadcast</strong> (so clients know a task controller is
+present) and any <strong>value requests or setpoints</strong> the application chooses to send
+once a client is active.</p>
+<h2 id="anatomy-what-the-server-tracks"><a class="header" href="#anatomy-what-the-server-tracks">Anatomy: what the server tracks</a></h2>
+<p>In <code>machbus</code> the low-level type is <code>tc::TaskControllerServer</code>. It is configured
+with a <code>TCServerConfig</code> and keeps a small amount of state per client.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Piece</th><th>machbus type / field</th><th>What it holds</th></tr>
+</thead>
+<tbody>
+<tr><td>Identity</td><td><code>TCServerConfig::tc_number</code>, <code>tc_version</code></td><td>The TC number that distinguishes this controller, and the version it speaks.</td></tr>
+<tr><td>Capacity</td><td><code>num_booms</code>, <code>num_sections</code>, <code>num_channels</code></td><td>The boom/section/channel dimensions advertised to clients.</td></tr>
+<tr><td>Feature flags</td><td><code>server_options</code></td><td>A bitfield of supported features (documentation, section control, peer control, geo).</td></tr>
+<tr><td>Per-client record</td><td><code>TCClientInfo</code></td><td>Address, stored <code>DDOP</code>, whether the pool is activated, last transfer, tracked client version.</td></tr>
+<tr><td>Stored labels</td><td><code>structure_label</code>, <code>localization_label</code></td><td>Seven-byte labels that let a returning implement skip re-uploading.</td></tr>
+<tr><td>Trigger runtime</td><td><code>MeasurementTriggerRuntime</code></td><td>Per-value logging triggers (time, distance, threshold, on-change).</td></tr>
+</tbody>
+</table>
+</div>
+<p>You build the configuration with consuming <code>with_*</code> setters and validate it
+before the server goes live:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    let mut server = TaskControllerServer::new(
+        TCServerConfig::default()
+            .with_number(1)
+            .with_version(4)
+            .with_booms(1)
+            .with_sections(8)
+            .with_channels(4),
+    );
+    server.start().unwrap();
+
+    // Hook a value request: gauge sensor returns 42 for any DDI.
+    server.on_value_request(|_elem, _ddi, _addr| Ok(42));
+<span class="boring">}</span></code></pre>
+<p><code>TCServerConfig::validate</code> rejects topologies the wire format cannot express — a
+zero boom count, or a section count outside the representable range. Reject
+invalid topology <em>before</em> you start advertising it, never after.</p>
+<h3 id="capabilities-and-options"><a class="header" href="#capabilities-and-options">Capabilities and options</a></h3>
+<p>The <code>server_options</code> byte tells clients which features this controller actually
+supports. <code>machbus</code> names the bits in <code>tc::ServerOptions</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SupportsDocumentation</code></td><td>The controller can log values for record-keeping (the documentation TC).</td></tr>
+<tr><td><code>SupportsTCGEOWithoutPositionBasedControl</code></td><td>Geo features without position-based section/rate control.</td></tr>
+<tr><td><code>SupportsTCGEOWithPositionBasedControl</code></td><td>Geo features <em>with</em> position-based control (prescription maps).</td></tr>
+<tr><td><code>SupportsPeerControlAssignment</code></td><td>One client may be wired to control another’s value.</td></tr>
+<tr><td><code>SupportsImplementSectionControl</code></td><td>The controller can drive implement section on/off.</td></tr>
+</tbody>
+</table>
+</div>
+<p>These OR together into the single byte you pass to <code>with_options</code>. Advertise
+only what your application truly implements: a client that sees a flag set will
+expect the behaviour behind it.</p>
+<h2 id="lifecycle-and-state-machine"><a class="header" href="#lifecycle-and-state-machine">Lifecycle and state machine</a></h2>
+<p>The server moves through three states, exposed as <code>tc::TCServerState</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>State</th><th>Meaning</th><th>What the server does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Disconnected</code></td><td>Not running.</td><td>Nothing. <code>update</code> returns no status.</td></tr>
+<tr><td><code>WaitForClients</code></td><td>Started, advertising, no client yet.</td><td>Emits periodic TC status; waits for a first client.</td></tr>
+<tr><td><code>Active</code></td><td>At least one client registered.</td><td>Full process-data exchange; still broadcasts status.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The transitions:</p>
+<ol>
+<li><strong>Start.</strong> <code>start()</code> moves the server from <code>Disconnected</code> to <code>WaitForClients</code>.
+From here <code>update(dt)</code> returns a status payload roughly every two seconds
+(<code>TC_STATUS_INTERVAL_MS</code>), which the caller broadcasts so clients discover a
+task controller is present.</li>
+<li><strong>A client appears.</strong> When the first client sends a working-set master frame
+or a technical-capabilities request, the server registers it and moves to
+<code>Active</code>. Registration creates a <code>TCClientInfo</code> and raises
+<code>on_client_connected</code>.</li>
+<li><strong>Capability exchange.</strong> The client asks what the controller supports; the
+server answers with version, options, and boom/section/channel counts. The
+server may also ask the client for <em>its</em> version with
+<code>request_client_version</code>, and records the reply (raising
+<code>on_client_version_received</code>).</li>
+<li><strong>DDOP upload.</strong> The client transfers its device description. The server
+deserializes and validates it, stores it on the client’s record as an
+<em>inactive</em> pool, and replies with an object-pool response carrying an
+error code (<code>tc::ObjectPoolErrorCodes</code>).</li>
+<li><strong>Activation.</strong> The client requests activation; <code>activate_pool</code> flips the
+stored pool to active if it holds at least one device, otherwise it answers
+with an activation error (<code>tc::ObjectPoolActivationError</code>) and raises
+<code>on_pool_activation_error</code>.</li>
+<li><strong>Process data.</strong> With an active pool the two sides exchange values: the
+server answers <code>RequestValue</code>, receives <code>Value</code> / <code>SetValueAndAcknowledge</code>,
+and may originate its own requests and setpoints.</li>
+<li><strong>Teardown.</strong> The client may deactivate or delete its pool; the server drops
+the active state <em>only</em> on a well-formed command. <code>stop()</code> returns the server
+to <code>Disconnected</code> and clears all client records.</li>
+</ol>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>There are two ways to run a TC server, and they suit different needs.</p>
+<h3 id="the-session-facade-recommended-for-applications"><a class="header" href="#the-session-facade-recommended-for-applications">The session facade (recommended for applications)</a></h3>
+<p>Plug the <code>TcServer</code> plugin into a <code>Session</code>: it claims an address, ships the
+periodic status for you, and routes inbound implement traffic into the server on
+every <code>driver.poll()?</code>. You build it with the topology you want to advertise:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use machbus::session::{Session, EndpointTransport, plugins::TcServer};
+
+let (ctrl, mut driver) = Session::builder(name, 0x80)
+    .plug(TcServer::new(
+        TCServerConfig::default()
+            .with_booms(2)
+            .with_sections(16)
+            .with_channels(4),
+    )?)
+    .spawn(EndpointTransport::new(0, endpoint))?;
+ctrl.start()?;
+<span class="boring">}</span></code></pre>
+<p>After the address claim settles, you start the server subsystem and let the
+session pump it:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>ctrl.with_mut::&lt;TcServer, _&gt;(|tc| tc.server_mut().start())?;
+// ... each loop iteration:
+driver.poll()?;
+<span class="boring">}</span></code></pre>
+<p>The session with the <code>TcServer</code> plugin runs the claim, starts the server, and
+ships the <code>TC_STATUS</code> frames a passive peer observes on <code>PGN_TC_TO_ECU</code>. You reach
+the underlying server through <code>ctrl.with_mut::&lt;TcServer, _&gt;(|tc| ...)</code>. The
+plugin itself exposes <code>server_mut()</code>, which hands you the full
+<code>TaskControllerServer</code> for <code>start</code>, <code>stop</code>, <code>state</code>, callbacks, and measurement
+triggers.</p>
+<h3 id="the-low-level-server-for-tests-and-embedded-control"><a class="header" href="#the-low-level-server-for-tests-and-embedded-control">The low-level server (for tests and embedded control)</a></h3>
+<p><code>tc::TaskControllerServer</code> is a pump: you feed it inbound frames and ship what it
+returns. The standalone <code>tc_server_demo</code> example uses it directly. The two entry
+points are:</p>
+<ul>
+<li><code>handle_client_message(&amp;msg)</code> — feed an inbound <code>PGN_ECU_TO_TC</code> frame and get
+back a <code>Vec&lt;TCOutbound&gt;</code> to send. Malformed or unrelated frames are ignored.</li>
+<li><code>try_handle_client_message(&amp;msg)</code> — the same, but returns explicit errors for
+the wrong PGN, an invalid source address, an empty message, or a malformed
+fixed-size request. Use this when your dispatch needs to know <em>why</em> a frame was
+rejected.</li>
+<li><code>handle_working_set_master(&amp;msg)</code> / <code>try_handle_working_set_master(&amp;msg)</code> —
+register a client from its working-set announcement and request its version.</li>
+<li><code>update(dt)</code> — returns the periodic status payload when the cadence elapses,
+otherwise <code>None</code>.</li>
+</ul>
+<p>Each <code>TCOutbound</code> carries the payload plus an optional destination: <code>dest: None</code>
+means broadcast, <code>Some(addr)</code> means a directed reply. You install behaviour with
+three callbacks:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Callback</th><th>Fires on</th><th>Your job</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_value_request(cb)</code></td><td>Client <code>RequestValue</code></td><td>Return the current <code>i32</code> value for <code>(element, DDI)</code>.</td></tr>
+<tr><td><code>on_value_received(cb)</code></td><td>Client <code>Value</code> / <code>SetValueAndAcknowledge</code></td><td>Accept the value; return a <code>ProcessDataAcknowledgeErrorCodes</code>.</td></tr>
+<tr><td><code>on_peer_control_assignment(cb)</code></td><td>Peer-control assignment</td><td>Accept or reject one value driving another.</td></tr>
+</tbody>
+</table>
+</div>
+<p>To originate traffic, the server exposes builders that return an 8-byte payload:
+<code>build_request_value</code>, <code>build_set_value</code>, <code>build_set_value_and_acknowledge</code>, and
+the measurement-command builders (<code>build_time_interval_measurement_command</code> and
+its distance/threshold/change siblings). These all validate the element number
+against the 12-bit wire field and return a <code>Result</code>.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p>Whichever API you use, the server enforces protocol shape but leaves the meaning
+to you. Your responsibilities:</p>
+<ul>
+<li><strong>Validate the DDOP.</strong> The server deserializes and validates on upload; you
+decide whether the described device fits the task at hand.</li>
+<li><strong>Answer value requests truthfully.</strong> <code>on_value_request</code> must return the real
+current value, or the controller logs nonsense.</li>
+<li><strong>Issue setpoints deliberately.</strong> A setpoint makes the implement act. Send one
+only when the task and the implement’s active pool support it.</li>
+<li><strong>Log measured values.</strong> Wire measurement triggers to your application’s time
+base and odometry so the right values get sampled at the right moments.</li>
+</ul>
+<p>The native events you can subscribe to are <code>on_state_change</code>,
+<code>on_client_connected</code>, <code>on_client_disconnected</code>, <code>on_client_version_received</code>,
+<code>on_pool_activation_error</code>, and <code>on_peer_control_assignment_received</code>. Through
+the session the same information arrives as <code>TcEvent</code> values from
+<code>ctrl.drain::&lt;TcEvent&gt;()</code>.</p>
+<h2 id="managing-multiple-clients-and-stored-descriptions"><a class="header" href="#managing-multiple-clients-and-stored-descriptions">Managing multiple clients and stored descriptions</a></h2>
+<p>A real bus can carry several implements. The server keeps one <code>TCClientInfo</code> per
+source address in <code>clients()</code>, each with its own stored DDOP and activation
+state, so two implements never share a description. A directed reply always goes
+back to the address that asked.</p>
+<p>The structure and localization labels are how a returning implement avoids
+re-uploading. An implement first asks for the controller’s stored labels; if they
+match the DDOP it already has, it can skip the upload entirely. The server hands
+back whatever you configured with <code>set_structure_label</code> / <code>set_localization_label</code>,
+and the all-<code>0xFF</code> label means “nothing stored”, which prompts the client to
+upload. The server also treats a byte-for-byte repeat of an already-accepted
+transfer as idempotent — an identical re-upload does not deactivate a pool that
+is already live.</p>
+<h2 id="measurement-triggers"><a class="header" href="#measurement-triggers">Measurement triggers</a></h2>
+<p>The documentation side of a task controller logs values over time. Rather than
+polling, the server keeps a local <strong>trigger runtime</strong> per value — built with
+<code>MeasurementTriggerRuntime::new(dest, element, ddi)</code> and the <code>with_*</code> setters for
+time, distance, threshold, and on-change conditions. Register one with
+<code>configure_measurement_trigger</code>. Then:</p>
+<ul>
+<li><code>update_measurements(dt)</code> advances time-based triggers and returns any due
+<code>RequestValue</code> frames — drive it from the same tick that pumps the stack.</li>
+<li><code>record_measurement_distance(dest, mm)</code> adds travelled distance and returns due
+distance-triggered requests — call it when your application has odometry or a
+GNSS-derived distance.</li>
+</ul>
+<p>Threshold and on-change triggers fire as values arrive through <code>on_value_received</code>.
+A malformed inbound value must never overwrite the last accepted value, so the
+log stays trustworthy.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Unknown DDI.</strong> A request or value for a DDI the application does not handle
+should be answered with the appropriate acknowledge error
+(<code>ElementNotSupportedByThisDevice</code>), not silently. The default when no value
+callback is installed is exactly that error.</li>
+<li><strong>Malformed DDOP.</strong> A pool that fails to deserialize or validate is rejected
+with an object-pool error and is <em>not</em> stored; the previous state is left
+untouched.</li>
+<li><strong>Activation with no device.</strong> Activating an empty or never-uploaded pool
+yields <code>ThereAreErrorsInTheDDOP</code> and raises <code>on_pool_activation_error</code>.</li>
+<li><strong>Unsupported version or feature.</strong> A client that asks for a feature whose flag
+you did not advertise must not get it. Keep <code>server_options</code> honest.</li>
+<li><strong>Client disconnects mid-task.</strong> If a client falls off the bus, its
+<code>TCClientInfo</code> still holds its last DDOP and activation state. Decide whether to
+retain it (so the implement can resume) or drop it; the protocol does not force
+the choice.</li>
+<li><strong>Wrong PGN or bad source address.</strong> <code>try_handle_client_message</code> returns an
+error for traffic that is not <code>PGN_ECU_TO_TC</code>, or that arrives from the null or
+broadcast address. The lenient wrapper drops these instead.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Documentation vs control TC.</strong> A <em>documentation</em> controller only logs; a
+<em>control</em> controller also issues setpoints and section commands. The
+<code>server_options</code> flags you set decide which one your node presents as. Many
+controllers do both.</li>
+<li><strong>Peer control.</strong> With <code>SupportsPeerControlAssignment</code> advertised, one client’s
+value can be wired to drive another’s. The server validates the assignment and
+hands it to your <code>on_peer_control_assignment</code> callback, which accepts or rejects
+it. See <a href="../standards/task-controller.html">Task Controller concepts</a>
+for the model.</li>
+<li><strong>Geo and prescriptions.</strong> Position-based control — applying a prescription map
+as the machine moves — sits on top of the geo option flags and is covered in
+<a href="tc-geo-prescription.html">TC-GEO prescription</a>.</li>
+<li><strong>Persistence.</strong> The in-memory store lives only as long as the server. If you
+want a returning implement to skip re-upload across power cycles, persist the
+labels and DDOPs yourself and restore them before clients connect.</li>
+<li><strong>Session facade vs the bare codec.</strong> The <code>TcServer</code> plugin is right for
+applications: it claims, routes, and broadcasts for you. The bare
+<code>TaskControllerServer</code> is right for unit tests and tight embedded loops where
+you own every frame and millisecond.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=tc_server_demo
+make test
+</code></pre>
+<p><code>tc_server_demo</code> registers a client, answers a value request, and prints a status
+broadcast entirely in software. The session tests build the <code>TcServer</code> plugin on
+a virtual bus, run the address claim, start the server, and count the status
+frames a passive watcher observes.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: the server’s handshake, DDOP storage and validation, activation logic,
+process-data callbacks, and measurement triggers behave as described in software,
+and the machbus API drives them correctly.</p>
+<p>Does not prove: real-hardware timing, interoperability with a specific
+third-party implement or FMIS, or any conformance or certification claim. Those
+still require official standards, real hardware, and interoperability evidence.
+<code>machbus</code> ships no certification.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="task-controller-client.html">Task Controller client</a> — the implement side of
+this exchange.</li>
+<li><a href="ddop.html">Device descriptions</a> — the DDOP the client uploads and the server
+stores.</li>
+<li><a href="../standards/task-controller.html">Task Controller concepts</a> — elements, DDIs,
+process data, and peer control.</li>
+<li><a href="tc-geo-prescription.html">TC-GEO prescription</a> — position-based control on top
+of the geo options.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/task-controller-client.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/ddop.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/task-controller-client.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/ddop.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,546 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>TC-GEO prescription - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-0392ca55.css">
+        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-bd034089.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/tc-geo-prescription.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="tc-geo-prescription"><a class="header" href="#tc-geo-prescription">TC-GEO prescription</a></h1>
+<p>A prescription map ties a target application rate to a position in the field.
+The agronomy decides “apply 200 here, 100 there, nothing in the wet hollow”,
+and the machine carries that decision out as it drives: it reads its own GNSS
+position, looks up the rate for <em>where it is right now</em>, and feeds that rate to
+the implement as a setpoint. This is variable-rate application, and on ISOBUS it
+is the position-based (“TC-GEO”) side of task control. This tutorial explains
+why position-based control exists, how a prescription map is shaped in
+<code>machbus</code>, how a position becomes a rate, and how that rate becomes a
+process-data value the implement can act on.</p>
+<p>It assumes you already understand process data and DDIs from
+<a href="../standards/task-controller.html">DDOP and process data</a>, and that a
+<a href="task-controller-client.html">Task Controller client</a> connection is what carries
+the setpoints. TC-GEO sits on top of both.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<p>A field is not uniform. Soil type, yield history, weed pressure, and moisture
+all vary across a single block, and the agronomically correct dose of seed,
+fertiliser, or spray varies with them. Applying one flat rate everywhere either
+over-applies where less is needed (cost, runoff, lodging) or under-applies where
+more is needed (lost yield). The fix is to pre-compute a <em>prescription</em> — a map
+that says what rate belongs at each part of the field — and let the machine
+follow it automatically instead of asking the operator to ride a knob.</p>
+<p>Position-based control exists so the task controller can do this lookup
+continuously. As the machine moves, the controller resolves the current position
+to a target rate and pushes it to the implement, which adjusts its metering in
+real time. The operator drives; the map does the dosing.</p>
+<h2 id="mental-model"><a class="header" href="#mental-model">Mental model</a></h2>
+<p>Picture a field split into zones, each tagged with a target rate, plus a default
+for anywhere not covered. The machine knows its own position from GNSS and asks
+one question over and over: <em>which zone am I in, and what rate does it want?</em></p>
+<pre><code>        lon →
+   +-------------------------------+
+   |        zone B  (rate 200)     |
+   |   +-----------------------+   |
+   |   |                       |   |
+   |   |   ● machine here      |   |   position ──► point-in-zone test
+   |   |     (GNSS fix)        |   |               │
+   |   +-----------------------+   |               ▼
+   |        zone A  (rate 100)     |        in zone B → rate 200
+   |          +-------+            |               │
+   |          | hole  | no-apply  |               ▼
+   |          +-------+            |        rate → process-data setpoint
+   +-------------------------------+               │
+              outside → default rate               ▼
+                                              implement meters 200
+</code></pre>
+<p>The loop is: <strong>fix → zone → rate → setpoint</strong>. Everything else (freshness
+checks, defaults, smoothing) hangs off that loop.</p>
+<h2 id="anatomy-the-pieces-in-machbus"><a class="header" href="#anatomy-the-pieces-in-machbus">Anatomy: the pieces in machbus</a></h2>
+<p><code>machbus</code> models the map with three plain types in the TC-GEO module, plus the
+interface that ties them to a live position.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>What it holds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Wgs</code></td><td>A WGS84 latitude/longitude/altitude triple (re-exported from <code>concord</code>). Positions and zone vertices are both <code>Wgs</code>.</td></tr>
+<tr><td><code>GeoPoint</code></td><td>A <code>Wgs</code> <code>position</code> plus a <code>timestamp_us</code>. This is a <em>timestamped</em> fix, so you can reason about how fresh it is.</td></tr>
+<tr><td><code>PrescriptionZone</code></td><td>A <code>boundary</code> (a <code>Vec&lt;Wgs&gt;</code> polygon), optional <code>holes</code> (a <code>Vec&lt;Vec&lt;Wgs&gt;&gt;</code> of exclusion polygons), and an <code>application_rate</code> (an <code>i32</code> in DDI-dependent units).</td></tr>
+<tr><td><code>PrescriptionMap</code></td><td>A <code>structure_label</code> (a <code>String</code> name) and its <code>zones</code> (a <code>Vec&lt;PrescriptionZone&gt;</code>).</td></tr>
+<tr><td><code>TCGEOInterface</code></td><td>Holds the loaded maps and the current position, performs lookups, and raises events.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A zone is a polygon, not a rectangle: irregular field shapes are expressed as a
+ring of vertices. A <code>hole</code> is a polygon <em>inside</em> the boundary that must not be
+treated — a pond, a power-line apron, a buffer strip. The rate is a bare
+integer; its meaning (litres per hectare, kilograms per hectare, and so on) is
+fixed by the rate DDI you pair it with when you encode the setpoint, not by the
+zone itself.</p>
+<p>There is no separate “default rate” field on the map. A position that matches no
+zone returns <em>no rate</em> (<code>None</code>), and your application decides what “no zone”
+means — typically a safe default of “apply nothing” or a configured fallback.
+Keeping the default in application code, rather than baking it into the map,
+makes the safe behaviour explicit at the call site.</p>
+<h2 id="position--zone--rate"><a class="header" href="#position--zone--rate">Position → zone → rate</a></h2>
+<p>The lookup is a point-in-polygon test. <code>point_in_prescription_zone(point, zone)</code>
+returns whether a <code>Wgs</code> point lies inside a zone’s boundary <em>and</em> outside every
+one of its holes. The outer boundary is inclusive (a point exactly on an edge
+counts as inside); hole boundaries are conservative exclusions (a point on a hole
+edge counts as <em>not</em> applied), which is the safe choice for a no-apply region.</p>
+<p><code>TCGEOInterface::get_rate_at_position(pos)</code> walks every loaded map and every zone
+in order and returns the <code>application_rate</code> of the <strong>first</strong> zone that contains
+the point, or <code>None</code> if none do. “First match wins” is what makes overlapping
+zones resolve deterministically — there is no averaging or precedence beyond
+declaration order, so order your zones intentionally.</p>
+<p>Degenerate input is rejected rather than guessed at: a polygon with fewer than
+three vertices, a zero-area polygon, or any non-finite coordinate makes the
+point-in-polygon test return <code>false</code>. That keeps a malformed map from silently
+matching everywhere.</p>
+<h2 id="rate--process-data-setpoint"><a class="header" href="#rate--process-data-setpoint">Rate → process-data setpoint</a></h2>
+<p>A looked-up rate is just a number until it is wrapped as a process-data value the
+implement understands. TC-GEO speaks the same language as the rest of task
+control: an ECU-to-TC process-data payload keyed by a DDI.</p>
+<p>Two paths take you from position to wire:</p>
+<ul>
+<li><code>get_rate_at_position_engineering(pos, ddi)</code> looks up the raw rate and converts
+it to the engineering unit defined by a rate DDI (applying that DDI’s
+resolution/scale), returning <code>Ok(Some(value))</code>, <code>Ok(None)</code> for no match, or an
+error if the DDI is unknown, is not a rate DDI, or the value is out of range.</li>
+<li><code>rate_process_data_payload_at_position(pos, ddi)</code> does the same lookup and
+hands back an 8-byte <code>PGN_ECU_TO_TC</code> Process Data Value payload ready to ship,
+again <code>Some</code>/<code>None</code>/error.</li>
+</ul>
+<p>The free functions <code>prescription_rate_from_engineering</code>,
+<code>prescription_rate_to_engineering</code>, and <code>prescription_rate_process_data_payload</code>
+expose the conversion on its own, so you can validate a rate against a DDI’s
+range before it ever touches a zone. All of them refuse a DDI that is not an
+application-rate DDI, which stops you from, say, shipping a fertiliser quantity
+under a latitude DDI.</p>
+<p>The position itself is also reportable. <code>position_process_data_payloads()</code>
+returns the two 8-byte payloads (actual latitude, then actual longitude) for the
+machine to send back to the TC, so the controller knows where the reported rate
+was applied. It errors if no position has been recorded yet.</p>
+<h2 id="gnss-freshness-and-stale-positions"><a class="header" href="#gnss-freshness-and-stale-positions">GNSS freshness and stale positions</a></h2>
+<p>Position-based control is only as trustworthy as the fix behind it. A
+<code>GeoPoint</code> carries a <code>timestamp_us</code> precisely so your loop can ask “how old is
+this fix?” before acting on it. If the fix is stale — the receiver dropped to a
+degraded mode, lost lock, or the feed stalled — the rate you would compute is for
+where the machine <em>was</em>, not where it <em>is</em>.</p>
+<p>The decode path is already defensive. <code>try_handle_gnss_position</code> (and its
+ignore-errors wrapper <code>handle_gnss_position</code>) rejects the not-available sentinel,
+out-of-range coordinates, wrong PGNs, invalid source addresses, and
+non-canonical lengths, and on rejection it leaves the previously cached position
+<strong>unchanged</strong> rather than overwriting it with garbage. That guards against a
+single bad frame, but it does not by itself notice a fix that is simply <em>old</em>.
+That freshness check is yours: compare <code>current_position().timestamp_us</code> against
+your clock, and when the gap exceeds your tolerance, fall back to a safe default
+rate (usually “apply nothing”) rather than dosing against a stale position.</p>
+<h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
+<p>The example builds a two-zone map, drives a short trajectory across it, and
+prints the rate at each step. First, the map — two square zones, one at rate 100
+to the south and one at rate 200 to the north:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    tc.add_prescription_map(PrescriptionMap {
+        structure_label: "demo-map".to_string(),
+        zones: vec![
+            PrescriptionZone {
+                boundary: vec![
+                    Wgs::new(52.0, 4.0, 0.0),
+                    Wgs::new(52.0, 4.001, 0.0),
+                    Wgs::new(52.001, 4.001, 0.0),
+                    Wgs::new(52.001, 4.0, 0.0),
+                ],
+                holes: Vec::new(),
+                application_rate: 100,
+            },
+            PrescriptionZone {
+                boundary: vec![
+                    Wgs::new(52.001, 4.0, 0.0),
+                    Wgs::new(52.001, 4.001, 0.0),
+                    Wgs::new(52.002, 4.001, 0.0),
+                    Wgs::new(52.002, 4.0, 0.0),
+                ],
+                holes: Vec::new(),
+                application_rate: 200,
+            },
+        ],
+    });
+<span class="boring">}</span></code></pre>
+<p>Then it subscribes to rate changes and walks four positions — into the south
+zone, onto the shared boundary, into the north zone, and off the map entirely —
+looking up both the raw rate and the engineering value at each:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Drive a 3-point trajectory through the field.
+    for (label, pos) in [
+        ("south zone   ", Wgs::new(52.0005, 4.0005, 0.0)),
+        ("between zones", Wgs::new(52.001, 4.0005, 0.0)),
+        ("north zone   ", Wgs::new(52.0015, 4.0005, 0.0)),
+        ("outside      ", Wgs::new(53.0, 5.0, 0.0)),
+    ] {
+        tc.set_position(GeoPoint {
+            position: pos,
+            timestamp_us: 0,
+        });
+        tc.update(0);
+        let rate = tc.get_rate_at_position(pos);
+        let rate_eng = tc
+            .get_rate_at_position_engineering(
+                pos,
+                DDI(ddi::SETPOINT_VOLUME_PER_AREA_APPLICATION_RATE),
+            )
+            .unwrap();
+        println!(
+            "  {label}: lat={:.4} lon={:.4} → raw={:?}, mm³/m²={:?}",
+            pos.latitude, pos.longitude, rate, rate_eng
+        );
+    }
+    println!("\n[events] rate transitions observed: {:?}", log.borrow());
+<span class="boring">}</span></code></pre>
+<p>The “outside” point returns <code>None</code> from <code>get_rate_at_position</code>, which is the
+no-zone case your default policy handles. Finally it records a position and emits
+the two position process-data payloads for the controller:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Build the position payload for `PGN_ECU_TO_TC`.
+    let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
+    let mut tc2 = TCGEOInterface::new();
+    tc2.set_position(GeoPoint {
+        position: position_pos,
+        timestamp_us: 0,
+    });
+    let [lat_pd, lon_pd] = tc2.position_process_data_payloads().unwrap();
+    println!(
+        "\n[wire] lat process-data: {:02X?}\n       lon process-data: {:02X?}",
+        lat_pd, lon_pd
+    );
+<span class="boring">}</span></code></pre>
+<p>The whole flow runs in software with no bus: you load a map, set a position,
+call <code>update</code>, and read the rate.</p>
+<h2 id="events-and-responsibilities"><a class="header" href="#events-and-responsibilities">Events and responsibilities</a></h2>
+<p><code>TCGEOInterface</code> raises three events you can subscribe to:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Event</th><th>Fires when</th><th>Typical action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_position_update</code></td><td>A new position is recorded (via <code>set_position</code> or a decoded GNSS frame).</td><td>Note freshness; trigger a re-evaluation.</td></tr>
+<tr><td><code>on_application_rate_changed</code></td><td><code>update</code> runs and the looked-up rate differs from the last one.</td><td>Send the new setpoint to the implement.</td></tr>
+<tr><td><code>on_prescription_map_received</code></td><td>A map is added with <code>add_prescription_map</code>.</td><td>Log/validate the new map; reset cached rate state.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>update(elapsed_ms)</code> is the heartbeat: it re-evaluates the current position
+against the maps and fires <code>on_application_rate_changed</code> <em>only</em> when the rate
+actually changes, so identical re-evaluations do not spam setpoints. Your
+responsibilities are the parts the interface deliberately leaves to you: decide
+the default for no-zone, decide the staleness tolerance, and gate setpoints on a
+valid, fresh fix.</p>
+<h2 id="edge-cases-and-failures"><a class="header" href="#edge-cases-and-failures">Edge cases and failures</a></h2>
+<ul>
+<li><strong>Point outside all zones.</strong> <code>get_rate_at_position</code> returns <code>None</code>. Treat this
+as “apply the safe default”, not “keep the last rate” — driving off the map
+should not silently freeze the dose.</li>
+<li><strong>Overlapping zones.</strong> Resolution is deterministic by declaration order: the
+first zone whose polygon contains the point wins. If two zones overlap, the one
+you listed first decides the rate. Order zones with this in mind.</li>
+<li><strong>Holes and buffer strips.</strong> A point inside a zone but inside one of its holes
+is <em>not applied</em> (<code>None</code> from that zone). Points on a hole edge are excluded
+too, which is the conservative choice for no-spray regions.</li>
+<li><strong>Stale or lost position.</strong> The decoder keeps the last good fix on a bad frame,
+but a fix can still go old. Check <code>timestamp_us</code> and fall back to a safe rate
+when it ages past tolerance.</li>
+<li><strong>Coordinate precision.</strong> Positions are decoded at roughly 1e-7 degree
+resolution and zone vertices are <code>f64</code>. Near a boundary, two nearby fixes can
+land on opposite sides — see boundary jitter below.</li>
+<li><strong>Zone boundary jitter.</strong> Around a shared edge, small position noise can flip
+the matched zone back and forth, causing rapid rate toggling. Because the
+boundary is inclusive and overlaps resolve by order, you can damp this in
+application code (hysteresis, or a small dwell before acting on a change)
+rather than expecting the lookup to smooth it for you.</li>
+</ul>
+<h2 id="advanced"><a class="header" href="#advanced">Advanced</a></h2>
+<ul>
+<li><strong>Large maps and performance.</strong> The lookup is linear: every map, every zone,
+every edge, until a match. For a field with many fine zones, pre-filter by a
+bounding box per zone before the full polygon test, or index zones spatially,
+so each fix touches only nearby candidates rather than the whole map.</li>
+<li><strong>Smoothing and look-ahead.</strong> Real implements have application latency — the
+metering reacts a moment after the command. Production systems look the rate up
+slightly <em>ahead</em> of the current position along the travel direction so the
+change lands at the right ground point, and smooth transitions across a
+boundary instead of stepping instantly.</li>
+<li><strong>Integration with section control.</strong> TC-GEO answers “what rate here”; section
+control answers “which sections are on here”. The two compose: a section that
+is switched off in an exclusion area should not apply even where the
+prescription rate is non-zero, and a hole in a prescription zone is one way to
+express that no-apply region. Keep the rate decision and the on/off decision as
+separate inputs to the implement.</li>
+<li><strong>Surface vs low-level.</strong> <code>TCGEOInterface</code> is the pump-style core: you feed it
+positions and maps and pull payloads and events out. It does not open a bus or
+run a TC connection on its own — pair it with a
+<a href="task-controller-client.html">Task Controller client</a> to actually carry the
+setpoints.</li>
+</ul>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">make run EXAMPLE=tc_geo_demo
+make test
+</code></pre>
+<p>The example loads a two-zone map and prints the raw and engineering rates at
+four positions, including the no-zone case off the map, and the rate-change
+events observed along the way. <code>make test</code> exercises the point-in-polygon test,
+zone walking, hole exclusion, overlap ordering, the GNSS decode guards, and the
+rate/DDI conversions.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: in software, a position resolves to the rate of the first containing
+zone (holes excluded), the decoder rejects malformed or out-of-range fixes
+without corrupting the cached position, and rates convert to and from
+process-data payloads under their rate DDIs deterministically.</p>
+<p>Does not prove: real-hardware GNSS accuracy or latency, interoperability with a
+specific third-party task controller or implement ECU, correct application
+look-ahead on a moving machine, or any conformance/certification claim. Those
+still require official standards, real hardware, and interoperability evidence.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="task-controller-client.html">Task Controller client</a> — the connection that
+carries the setpoints TC-GEO produces.</li>
+<li><a href="../standards/task-controller.html">DDOP and process data</a> — DDIs,
+value presentation, and the process-data form the rate is encoded into.</li>
+<li><a href="nmea-2000.html">NMEA 2000</a> and <a href="serial-gnss.html">Serial GNSS</a> — where the
+position fixes come from.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/ddop.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/tractor-ecu.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/ddop.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/tractor-ecu.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-c22b7243.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

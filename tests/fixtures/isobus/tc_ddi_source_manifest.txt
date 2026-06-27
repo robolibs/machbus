@@ -1,0 +1,17 @@
+# ISO 11783-11 DDI source provenance manifest.
+#
+# Format:
+# key|value
+#
+# This manifest records the public source/version boundary for the generated
+# Rust DDI table without vendoring the external database export here. The
+# companion test keeps this metadata synchronized with the generated table and
+# makes refresh debt explicit instead of silently claiming current official
+# parity.
+source_url|https://www.isobus.net/isobus/
+txt_export_url|https://www.isobus.net/isobus/exports/completeTXT
+latest_known_version|2026050501
+current_generated_version|2025121001
+status|needs_refresh
+last_checked|2026-06-17
+refresh_gate|Regenerate src/isobus/tc/ddi_database.rs from the source export under the applicable ISO/AEF database terms, update DDI_DATABASE_VERSION and DDI_DATABASE_FINGERPRINT_FNV1A64, review generated diff, rerun make verify

@@ -1,0 +1,16 @@
+# Public-data evidence requirements for conformance rows that cannot be proven
+# by a CAN capture.
+#
+# Format:
+# id|scope|status|required_source|required_report|notes
+#
+# status is one of:
+# - missing: no checked-in refresh evidence yet
+# - complete: source metadata and a refresh report are checked in
+#
+# required_source names the allowed public or independently licensed source
+# class. It must never point at private standard PDFs or local private extracts.
+#
+# required_report is `-` while missing. When complete it must point at a
+# Markdown report under tests/fixtures/evidence/public_data_reports/.
+ddi_public_database_refresh|ISO11783-11 DDI database public-source refresh evidence|missing|public-export-or-open-license|-|Refresh checked-in DDI metadata only from a public or independently licensed source and record source version license date and generated-diff checks

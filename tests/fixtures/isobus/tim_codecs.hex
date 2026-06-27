@@ -1,0 +1,26 @@
+# Reviewable ISO 11783 TIM codec payload corpus.
+# Each value is one classic 8-byte CAN payload in compact hexadecimal.
+
+pto_engaged_ccw_540rpm=01001C02FFFFFFFF
+pto_disengaged_cw_maxrpm=0001FFFFFFFFFFFF
+pto_short3=01001C
+pto_overlong9=01001C02FFFFFFFFFF
+pto_bad_padding=01001C0200FFFFFF
+pto_bad_engaged_byte=02001C02FFFFFFFF
+pto_bad_direction_byte=01021C02FFFFFFFF
+hitch_motion_enabled_75pct=014C1DFFFFFFFFFF
+hitch_disabled_min=000000FFFFFFFFFF
+hitch_enabled_max=011027FFFFFFFFFF
+hitch_over_max=011127FFFFFFFFFF
+hitch_short2=014C
+hitch_overlong9=014C1DFFFFFFFFFFFF
+hitch_bad_padding=014C1D00FFFFFFFF
+hitch_bad_motion_byte=024C1DFFFFFFFFFF
+aux_valve_3_on_flow5000=03018813FFFFFFFF
+aux_valve_31_off_max_flow=1F00FFFFFFFFFFFF
+aux_valve_short3=030188
+aux_valve_overlong9=03018813FFFFFFFFFF
+aux_valve_bad_padding=0301881300FFFFFF
+aux_valve_invalid_index=20018813FFFFFFFF
+aux_valve_bad_state_byte=03028813FFFFFFFF
+option_front_pto_rear_hitch_guidance=012020

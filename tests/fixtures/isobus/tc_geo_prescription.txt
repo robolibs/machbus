@@ -1,0 +1,19 @@
+# Reviewable TC-GEO prescription-map edge-case expectations.
+# The map used by tests has:
+# - zone 1: 0..2 latitude/longitude, rate 100
+# - zone 1 exclusion hole: 0.8..1.2 latitude/longitude
+# - zone 2: 1..3 latitude/longitude, rate 200
+# Overlaps resolve to the first matching zone; hole boundaries are excluded.
+
+inside_primary=100
+inside_primary_volume_per_area_eng=1.0
+inside_primary_rate_payload_ddi1=0300010064000000
+outer_boundary=100
+inside_overlap_first_match=100
+inside_hole=none
+hole_boundary=none
+inside_second_only=200
+outside=none
+no_gnss_fix_position_payload=invalid_state
+position_lat_0_5_payload=03008700404B4C00
+position_lon_0_5_payload=03008800404B4C00

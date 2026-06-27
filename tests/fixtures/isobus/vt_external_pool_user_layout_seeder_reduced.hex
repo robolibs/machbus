@@ -1,0 +1,12 @@
+# Reduced open-license VT user-layout fixture derived from ISO11783-CAN-Stack's
+# seeder example Window/KeyGroup object families.
+#
+# Source basis:
+#   /tmp/ISO11783-CAN-Stack/examples/seeder_example/object_pool.hpp
+#   commit eb6b741b92b13efec7e95adc36212d163ff3a7fb, MIT license.
+#
+# The original BasePool.iop carries richer seeder screens. This reviewable
+# reduction keeps a free-form Window Mask and a Key Group on a Data Mask so the
+# evidence can pin user-layout/window-mask and key-group placement.
+
+vt_external_pool_user_layout_seeder_reduced=0000000101E803010001E80300000000656EE8030101FFFF0200B80B14001400A00F78001400B80B220201000101FFFFFFFFFFFF000100F82A04000400F82A0B5000140001FFFF00FFFF00030057494E00A00F2301FFFFFFFF0200881389138813050101000089130501020000

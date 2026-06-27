@@ -1,0 +1,12 @@
+# Reviewable ISO 11783-6 IOP byte-walker fixtures.
+# Conformant object layout (no per-object length prefix):
+# [id:2 LE] [type:1] [type-specific body...]; object boundaries are
+# recovered by the parse-by-type walker in isobus::vt::ObjectPool.
+
+container_and_number_variable=0100036400c8000000000200150df0feca
+container_and_number_variable_version=FHLCBAD
+output_string_hello=10000b32001e0000ffff00ffff00050048656c6c6f00
+macro_three_bytes=20001c0300aabbcc
+too_short_header=0100
+trailing_partial_header=0100036400c8000000000200150df0feca0300
+truncated_number_variable=0200150000

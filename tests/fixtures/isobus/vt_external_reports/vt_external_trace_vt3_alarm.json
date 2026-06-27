@@ -1,0 +1,28 @@
+{
+  "schema": "machbus-vt-trace-inspect-report-v1",
+  "pool": { "source": "tests/fixtures/isobus/VT3TestPool.iop", "bytes": 149644, "fnv1a64": "0xBB86201C4656A85E" },
+  "layout_profile": { "canvas_width": 480, "canvas_height": 240, "soft_key_area": { "x": 480, "y": 0, "width": 64, "height": 240 }, "physical_soft_key_count": 10, "navigation_soft_key_count": 2, "soft_key_page": 0 },
+  "trace": { "source": "tests/fixtures/isobus/vt_external_trace_vt3_alarm.hex", "command_count": 1, "payload_fnv1a64": "0x3AA1026CF16675B4", "commands": [{ "name": "change_active_mask_to_alarm_mask", "bytes": 8 }] },
+  "initial_framebuffer": { "rendered": true, "width": 544, "height": 480, "rgb888_bytes": 783360, "rgb565_bytes": 522240, "rgb888_fnv64": "0x77683241FAAA1F7B", "rgb565_be_fnv64": "0xF13724DEE9229271", "rgb565_le_fnv64": "0xF13724DEE9229271", "placeholder_pixels": 0, "error": null },
+  "final_framebuffer": { "rendered": true, "width": 544, "height": 420, "rgb888_bytes": 685440, "rgb565_bytes": 456960, "rgb888_fnv64": "0x69DF7BC191405D2D", "rgb565_be_fnv64": "0xE9FE098586943290", "rgb565_le_fnv64": "0xCD9AD39A7FED720A", "placeholder_pixels": 0, "error": null },
+  "accepted_effects": ["ChangeActiveMask { mask: ObjectID(2000) }"],
+  "artifacts": {
+    "report_json": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm.json",
+    "initial_rgb888": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial.rgb",
+    "final_rgb888": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final.rgb",
+    "initial_rgb565_be": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial-be.rgb565",
+    "initial_rgb565_le": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial-le.rgb565",
+    "final_rgb565_be": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final-be.rgb565",
+    "final_rgb565_le": "tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final-le.rgb565"
+  },
+  "checks": {
+    "strict_requested": true,
+    "expected_accepted_effects": 1,
+    "expected_initial_placeholder_pixels": 0,
+    "expected_final_placeholder_pixels": 0,
+    "expected_rgb888_fnv64": "0x69DF7BC191405D2D",
+    "expected_rgb565_be_fnv64": "0xE9FE098586943290",
+    "expected_rgb565_le_fnv64": "0xCD9AD39A7FED720A",
+    "failures": []
+  }
+}

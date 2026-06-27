@@ -1,0 +1,11 @@
+# ISO 11783-3 / J1939 proprietary A/A2/B golden single-frame payloads.
+#
+# Raw IDs are 29-bit extended CAN identifiers without the IDE bit.
+proprietary_a_dest42_src80_raw_id=0x18EF4280
+proprietary_a_payload=0102030405060708
+
+proprietary_a2_dest42_src80_raw_id=0x19EF4280
+proprietary_a2_payload=1020304050607080
+
+proprietary_b_ge42_src80_raw_id=0x18FF4280
+proprietary_b_ge42_payload=AABBCCDDEEFF1122

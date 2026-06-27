@@ -1,0 +1,12 @@
+# CAN adapter evidence matrix.
+#
+# Format:
+# id|class|interface_kind|required_setup|evidence_limit|required_capture_ids
+#
+# This is planning/evidence metadata, not a certification list.  A row says how
+# an adapter class may be used when collecting repository evidence.  It does not
+# say that the class is certified for any machine.
+linux_vcan|virtual|vcan|ip link vcan0 up; capture with candump -td -L|development and replay evidence only; not physical timing proof|vcan_address_claim,vcan_dm1,tp_bam_transfer,etp_connection_transfer
+socketcan_native_usb|physical|can|set 250000 bitrate; verify termination and isolated bench wiring; capture with candump -td -L|physical-bus evidence only after reduced trace and report|physical_address_claim,peer_request_address_claim,tp_bam_transfer,etp_connection_transfer,network_interconnect_router,diagnostic_request_response,vt_object_pool_upload,vt_object_pool_upload_failure,implement_message_broadcast,powertrain_engine_trace,tractor_ecu_facility_trace,tc_ddop_upload,file_server_read_write,section_control_lifecycle,tim_authority_interlock,nmea2000_gnss_environment_trace
+socketcan_pcie|physical|can|set 250000 bitrate; verify termination and isolated bench wiring; capture with candump -td -L|physical-bus evidence only after reduced trace and report|physical_address_claim,peer_request_address_claim,tp_bam_transfer,etp_connection_transfer,network_interconnect_router,diagnostic_request_response,vt_object_pool_upload,vt_object_pool_upload_failure,implement_message_broadcast,powertrain_engine_trace,tractor_ecu_facility_trace,tc_ddop_upload,file_server_read_write,section_control_lifecycle,tim_authority_interlock,nmea2000_gnss_environment_trace
+slcan_bridge|physical|slcan|configure 250000 bitrate in the bridge; verify termination and isolated bench wiring; document adapter firmware; capture with candump -td -L|physical-bus evidence only after bridge settings and report are recorded|physical_address_claim,peer_request_address_claim,tp_bam_transfer,diagnostic_request_response,implement_message_broadcast,powertrain_engine_trace,tractor_ecu_facility_trace

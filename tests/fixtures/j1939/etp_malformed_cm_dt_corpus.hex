@@ -1,0 +1,6 @@
+# Deterministic malformed ETP.CM / ETP.DT corpus for PGN 0x00CA00.
+unknown_cm=990000000000CA00
+cts_next0=150100000000CA00
+dpo_zero=160000000000CA00
+dpo_over_window=161100000000CA00
+dt_zero=0000010203040506

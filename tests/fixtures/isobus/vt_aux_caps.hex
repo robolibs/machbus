@@ -1,0 +1,4 @@
+# ISO 11783-6 VT v5 auxiliary capability discovery fixtures.
+
+aux_caps_request=C5011F20FFFFFFFF
+aux_caps_two_channel_response=C5010201000000010201000402

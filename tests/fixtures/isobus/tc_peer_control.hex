@@ -1,0 +1,9 @@
+# Reviewable ISO 11783-10 Task Controller peer-control payloads.
+# Command codes are encoded in the low nibble of byte 0; the low four
+# bits of the source element number are encoded in byte 0 high nibble.
+
+assignment_src_elem0123_ddiCAFE_dst_elem0456_ddi0BAD=3912FECA5604AD0B
+assignment_src_elem0FFF_ddiFFFF_dst_elem0FFF_ddiFFFF=F9FFFFFFFF0FFFFF
+malformed_assignment_short7=3912FECA5604AD
+malformed_assignment_overlong9=3912FECA5604AD0B00
+malformed_assignment_wrong_command=3812FECA5604AD0B

@@ -1,0 +1,9 @@
+# J1939-71 Time/Date PGN 65254 fixed-size codec fixtures.
+
+time_date_agisostack=A43116081C267D78
+time_date_default=FFFFFFFFFFFFFFFF
+time_date_first_day_1985_utc0=0000000104007D7D
+time_date_upper_non_na=FCFEFEFEFCFEFAFA
+time_date_clamped_high=FEFEFEFEFEFEFAFA
+time_date_short=A43116081C267D
+time_date_overlong=A43116081C267D7800

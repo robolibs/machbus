@@ -1,0 +1,13 @@
+# Reduced open-license VT soft-key fixture derived from ISO11783-CAN-Stack's
+# seeder example object IDs and soft-key layout names.
+#
+# Source basis:
+#   /tmp/ISO11783-CAN-Stack/examples/seeder_example/object_pool.hpp
+#   commit eb6b741b92b13efec7e95adc36212d163ff3a7fb, MIT license.
+#
+# The original BasePool.iop carries broader seeder graphics and screen content.
+# This reviewable reduction keeps the Working Set, Data Mask, one Soft Key Mask,
+# and four Key objects so the evidence can pin soft-key paging with fewer
+# physical cells than keys.
+
+vt_external_pool_soft_keys_seeder_reduced=0000000101E803010001E80300000000656EE8030101A00F0000A00F0401040088138A138B138C13881305010100008A1305010200008B1305010300008C130501040000

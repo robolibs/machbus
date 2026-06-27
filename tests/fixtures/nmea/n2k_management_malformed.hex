@@ -1,0 +1,11 @@
+# Malformed NMEA 2000 management payloads.
+# Values are compact hexadecimal payloads before Fast Packet framing.
+
+# Product Information with a non-printable byte in the fixed model-id field.
+product_info_nonprintable_model_id=010934120A67726F627573FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF302E302E32FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF52757374506F7274FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF534E2D4147524F4255532D30303031FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF0201
+
+# Config Information with a newline in the manufacturer-info field.
+config_info_nonprintable_manufacturer=06004272696467650500436162696E060041636D650A
+
+# Config Information whose declared first-string length exceeds remaining data.
+config_info_truncated_desc1=0600414243

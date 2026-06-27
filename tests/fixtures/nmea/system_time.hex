@@ -1,0 +1,9 @@
+# NMEA 2000 PGN 126992 System Time golden payloads.
+#
+# byte 0 = SID
+# byte 1 = time source (0 GPS, 1 GLONASS, 2 radio, 3 local cesium,
+#          4 local rubidium, 5 local crystal)
+# bytes 2..3 = days since epoch
+# bytes 4..7 = seconds since midnight at 0.0001 s/bit.
+glonass_sid42_day12345_seconds3600_5=2A01393088642502
+bad_source6=2A06393088642502

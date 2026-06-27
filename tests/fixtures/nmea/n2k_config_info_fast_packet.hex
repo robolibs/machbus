@@ -1,0 +1,7 @@
+# NMEA 2000 PGN 126998 Config Information fast-packet stream.
+# Payload is n2k_config_info_bridge_cabin_acmeco.hex sent from source 0x23.
+
+frame0=0017060042726964
+frame1=0167650500436162
+frame2=02696E060041636D
+frame3=0365436FFFFFFFFF

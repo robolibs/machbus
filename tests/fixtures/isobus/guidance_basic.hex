@@ -1,0 +1,5 @@
+# ISO 11783-7 top-level GuidanceData codec fixtures.
+# Curvature uses 0.25 km^-1/bit with zero at raw 32128 (0x7D80).
+
+machine_zero_curvature_status2=807D02FFFFFFFFFF
+system_not_available=FFFFFFFFFFFFFFFF

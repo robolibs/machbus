@@ -1,0 +1,6 @@
+# Reviewable NMEA 2000 PGN 127258 Magnetic Variation payloads.
+
+magnetic_variation_manual_age14_var0_125=FF000E00E204FFFF
+magnetic_variation_unavailable=FF000E00FF7FFFFF
+malformed_magnetic_variation_bad_source=FF0A0E00E204FFFF
+malformed_magnetic_variation_bad_tail=FF000E00E20400FF

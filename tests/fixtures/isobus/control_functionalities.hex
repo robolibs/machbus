@@ -1,0 +1,18 @@
+# ISO 11783 Control Function Functionalities (PGN 0xFC8E) payload fixtures.
+#
+# Payload layout is:
+#   0xFF, count, then count copies of functionality byte, generation byte,
+#   option-byte count, option bytes. Single-frame responses are padded with 0xFF.
+# Option-byte lengths vary by functionality. Trailing zero option bytes are
+# omitted in canonical payloads.
+
+min_cf_heartbeat=FF010001010CFFFF
+agisostack_min_cf_no_options=FF01000100FFFFFF
+agisostack_ut_working_set=FF02000100020100
+agisostack_aux_n_functions=FF03000100020100060100
+agisostack_tc_sc_client=FF040001000201000601000C010201FF
+capability_mix=FF070001010C05020203400B010202100D0101260F010B0120204300000000000080110100120100
+unknown_functionality=FF0163010100
+truncated_tim_server=FF010F010B012020
+trailing_after_min_cf=FF0100010000
+duplicate_min_cf=FF02000100000200

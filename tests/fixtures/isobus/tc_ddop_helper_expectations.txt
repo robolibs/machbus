@@ -1,0 +1,25 @@
+# Expected Task Controller DDOP helper extraction values for a
+# two-section sprayer-shaped implement model.
+section_count=2
+connector_x_mm=1000
+boom_offset_x_mm=500
+boom_offset_y_mm=0
+total_width_mm=6000
+section_0_id=4
+section_0_number=1
+section_0_designator=S1
+section_0_offset_x_mm=0
+section_0_offset_y_mm=-1500
+section_0_width_mm=3000
+section_1_id=5
+section_1_number=2
+section_1_designator=S2
+section_1_offset_x_mm=0
+section_1_offset_y_mm=1500
+section_1_width_mm=3000
+rate_count=1
+rate_0_ddi=1
+rate_0_designator=Target Rate
+total_count=1
+total_0_ddi=116
+total_0_designator=Covered Area

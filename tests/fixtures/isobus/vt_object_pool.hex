@@ -1,0 +1,17 @@
+# Reviewable ISO 11783-6 Virtual Terminal object-pool byte fixtures.
+# Object layout used by the Rust codec (no per-object length prefix):
+# [id_lo id_hi] [object_type] [body bytes...]
+# Most parent objects encode the ISO 11783-6 tail:
+# [num_objects:u8] [num_macros:u8] [num_objects * child_record] [num_macros * (event_id:u8 macro_id:u8)]
+# where child_record is 6 bytes (oid:u16, x:i16, y:i16) for positional
+# parents and 2 bytes (oid:u16) for OID-only parents (Soft Key Mask, Key Group).
+# Working Set uses its standard count prelude:
+# [num_objects:u8] [num_macros:u8] [num_languages:u8] [child records] [macro records] [language codes].
+# Object boundaries are recovered by the parse-by-type walker (object_body_total_len).
+
+valid_ws_datamask=0100000000000001000002000000000002000100ffff0000
+key_fixed_body_child_tail=070005aa020100080000000000
+missing_child_ws_datamask=0100000000000001000003000000000002000100ffff0000
+duplicate_object_id=0100000000000001000002000000000002000100ffff000002000100ffff0000
+unknown_object_type=0100FE0000
+malformed_key_child_tail=070005aa020001

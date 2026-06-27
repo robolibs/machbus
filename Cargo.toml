@@ -1,0 +1,80 @@
+[package]
+name = "machbus"
+version = "0.1.4"
+edition = "2024"
+description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
+license = "MIT"
+readme = "README.md"
+repository = "https://codeberg.org/robolibs/machbus"
+publish = false
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "CHANGELOG.md",
+    "Makefile",
+    "PLAN.md",
+    "PROJECT",
+    "cbindgen.toml",
+    "pyproject.toml",
+    "README.md",
+    "book/book.toml",
+    "book/**/*.md",
+    "book/src/reference/assets/*.csv",
+    "include/**/*.h",
+    "tools/**/*.sh",
+    "src/**/*.rs",
+    "examples/c_abi/*.c",
+    "examples/**/Makefile",
+    "examples/python_binding/*.py",
+    "examples/**/*.rs",
+    "tests/fixtures/**",
+    "tests/**/*.rs",
+]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[example]]
+name = "embedded_session_loop"
+path = "examples/embedded_session_loop.rs"
+required-features = ["embedded"]
+
+[[example]]
+name = "embedded_hal_adapter"
+path = "examples/embedded_hal_adapter.rs"
+required-features = ["embedded"]
+
+[[example]]
+name = "embedded_fixed_queue"
+path = "examples/embedded_fixed_queue.rs"
+required-features = ["embedded"]
+
+# Exactly four build configurations. The no_std switch is keyed off `embedded`,
+# so a normal build is std (with an allocator) automatically — there is no
+# separate `std`/`alloc` knob.
+#   default  — full hosted stack: C ABI + Python bindings (pyo3) + geo (concord)
+#              + the wirebit host CAN backend.
+#   embedded — no_std + allocator for MCUs (fixed-point math, no host surface).
+#   wirebit  — host CAN backend (wirebit + SocketCAN); included in default.
+#   async    — optional async support.
+[features]
+default = ["wirebit", "dep:pyo3", "dep:concord", "tracing/std"]
+embedded = []
+wirebit = ["dep:wirebit", "wirebit/socketcan"]
+async = ["dep:futures-core"]
+
+[dependencies]
+wirebit = { version = "0.0.1", path = "../wirebit", optional = true, default-features = false }
+concord = { version = "0.1.1", path = "../concord", optional = true, default-features = false }
+
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+
+futures-core = { version = "0.3", optional = true, default-features = false }
+pyo3 = { version = "0.23", optional = true, features = ["abi3-py39"] }
+
+[dev-dependencies]
+proptest = "1"
+rstest = "0.23"
+tracing-subscriber = "0.3"
+futures = "0.3"

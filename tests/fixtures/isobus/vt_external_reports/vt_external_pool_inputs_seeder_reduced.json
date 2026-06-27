@@ -1,0 +1,41 @@
+{
+  "schema": "machbus-iop-inspect-report-v1",
+  "source": "tests/fixtures/isobus/vt_external_pool_inputs_seeder_reduced.hex#vt_external_pool_inputs_seeder_reduced",
+  "pool_buffer_bytes": 142,
+  "pool_buffer_fnv64": "0x5923FB9AC0EAB555",
+  "pool_objects": 9,
+  "active_mask": "0x03E8",
+  "canvas": { "width": 480, "height": 240 },
+  "layout_profile": { "canvas_width": 480, "canvas_height": 240, "soft_key_area": { "x": 480, "y": 0, "width": 64, "height": 240 }, "physical_soft_key_count": 10, "navigation_soft_key_count": 2, "soft_key_page": 0 },
+  "scene": { "nodes": 3, "soft_keys": 0, "unsupported_records": 0 },
+  "coverage": { "objects": 9, "drawable": 3, "unsupported": 0 },
+  "gtui_commands": 10,
+  "framebuffer": {
+    "rendered": true,
+    "width": 480,
+    "height": 240,
+    "pixels": 115200,
+    "rgb888_bytes": 345600,
+    "rgb565_bytes": 230400,
+    "rgb888_fnv64": "0x267C5E064882C6A5",
+    "rgb565_be_fnv64": "0x9C0C90ED59863131",
+    "rgb565_le_fnv64": "0x7D995AB737127369",
+    "placeholder_pixels": 0,
+    "error": null
+  },
+  "artifacts": {
+    "report_json": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced.json",
+    "rgb888": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced.rgb",
+    "rgb565_be": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced-be.rgb565",
+    "rgb565_le": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced-le.rgb565"
+  },
+  "checks": {
+    "strict_requested": true,
+    "expected_unsupported_records": 0,
+    "expected_placeholder_pixels": 0,
+    "expected_rgb888_fnv64": "0x267C5E064882C6A5",
+    "expected_rgb565_be_fnv64": "0x9C0C90ED59863131",
+    "expected_rgb565_le_fnv64": "0x7D995AB737127369",
+    "failures": []
+  }
+}

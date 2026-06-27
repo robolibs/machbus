@@ -1,0 +1,11 @@
+# Repo-owned reduced VT render command trace fixture.
+#
+# This is not external certification evidence. It is a reviewable command-trace
+# fixture used to prove that accepted ECU-to-VT command bytes can be replayed
+# through VTServer into VtRenderRuntime without hand-building effects in test
+# code. The pool is built in the test so this file stays focused on command
+# payloads.
+
+change_string_variable_4_live=B3040004006C697665
+hide_container_5=A0050000FFFFFFFF
+show_container_5=A0050001FFFFFFFF

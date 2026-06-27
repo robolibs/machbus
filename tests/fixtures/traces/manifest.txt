@@ -1,0 +1,19 @@
+# Auditable CAN trace fixtures.
+#
+# Format:
+# id|path|provenance|covered_by|claim
+#
+# `provenance` must be one of:
+# - simulated-review-vector: hand/review generated from a known byte vector
+# - reduced-negative-fixture: malformed/negative parser fixture
+# - reduced-hardware: reduced from real hardware or vcan capture
+#
+# `covered_by` names the Makefile target, example unit test, or integration
+# test that exercises the fixture. The companion `tests/trace_manifest.rs`
+# keeps every checked-in `.candump` file listed here and rejects stale paths.
+time_date_agisostack|tests/fixtures/traces/time_date_agisostack.candump|simulated-review-vector|make trace-replay-demo|Compact candump TimeDate reference frame decodes as an extended ISOBUS frame
+bracketed_time_date|tests/fixtures/traces/bracketed_time_date.candump|simulated-review-vector|examples/candump_replay.rs::tests::bracketed_fixture_replays_like_compact_trace|Bracketed candump TimeDate reference frame decodes like the compact fixture
+malformed_candump|tests/fixtures/traces/malformed_candump.candump|reduced-negative-fixture|examples/candump_replay.rs::tests::malformed_fixture_lines_are_ignored_before_driver_conversion|Malformed candump lines are rejected before driver-frame construction
+standard_id_rejection|tests/fixtures/traces/standard_id_rejection.candump|reduced-negative-fixture|examples/candump_replay.rs::tests::rejection_fixture_preserves_standard_ids_without_promotion|Standard 11-bit CAN IDs remain standard and are rejected instead of promoted
+vcan_address_claim|tests/fixtures/traces/vcan_address_claim.candump|reduced-hardware|tests/protocol_fixtures.rs::fixture_vcan_address_claim_capture_is_verifiable|Reduced live vcan0 capture of the machbus Address Claimed frame PGN EE00 from preferred address 0x80 plus the triggering PGN Request
+vcan_dm1|tests/fixtures/traces/vcan_dm1.candump|reduced-hardware|tests/protocol_fixtures.rs::fixture_vcan_dm1_capture_is_verifiable|Reduced live vcan0 capture of the machbus DM1 frame PGN FECA from source 0x80 carrying SPN 100 FMI 1 plus Address Claimed context

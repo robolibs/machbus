@@ -1,0 +1,6 @@
+# Deterministic malformed TP.CM / TP.DT corpus for PGN 0x00EF00.
+unknown_cm=990000000000EF00
+rts_zero_cts=101400030000EF00
+bam_dest_specific=20140003FF00EF00
+cts_next0=110100FFFF00EF00
+dt_zero=0000010203040506

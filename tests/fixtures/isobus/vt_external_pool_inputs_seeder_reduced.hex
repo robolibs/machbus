@@ -1,0 +1,12 @@
+# Reduced open-license VT input fixture derived from ISO11783-CAN-Stack's
+# seeder example input object IDs.
+#
+# Source basis:
+#   /tmp/ISO11783-CAN-Stack/examples/seeder_example/object_pool.hpp
+#   commit eb6b741b92b13efec7e95adc36212d163ff3a7fb, MIT license.
+#
+# The original BasePool.iop carries the same input IDs in a larger seeder pool.
+# This reviewable reduction keeps an Input Boolean, an enabled Input List,
+# selectable Output String list items, and backing Number Variables.
+
+vt_external_pool_inputs_seeder_reduced=0000000101E803010001E80300000000656EE8030101FFFF0200581B0A000A0010270A002200581B07011400FFFF085201010010270A780018000952010300062B072B082B00062B0B5000140001FFFF00FFFF000200544300072B0B5000140001FFFF00FFFF00030043414E00082B0B5000140001FFFF00FFFF0002005554000852150100000009521500000000

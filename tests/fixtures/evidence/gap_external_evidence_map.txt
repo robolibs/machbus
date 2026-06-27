@@ -1,0 +1,28 @@
+# Stable external evidence map for broad standard rows listed in
+# tests/fixtures/isobus/coverage_matrix_registry.txt.
+#
+# Format:
+# part|area|evidence_kind|requirement_ids|notes
+#
+# evidence_kind is one of:
+# - hardware: requirement_ids name rows in tests/fixtures/hardware/capture_requirements.txt
+# - public-data: requirement_ids name rows in tests/fixtures/evidence/public_data_requirements.txt
+#
+# This map is not evidence. It prevents broad matrix rows from being promoted
+# without concrete evidence requirements. Keep rows here even after evidence is
+# collected; promotion requires every referenced requirement to be complete.
+ISO11783-2|physical-layer-configuration|hardware|vcan_address_claim,physical_address_claim|Prove SocketCAN smoke and isolated physical bus setup before changing the broad physical claim
+ISO11783-3|data-link-identifiers-and-transport|hardware|tp_bam_transfer,etp_connection_transfer|Prove TP and ETP transfers with externally observed packet windows and completion
+ISO11783-4|network-interconnect|hardware|network_interconnect_router|Prove routed traffic across two observed segments without echo loops
+ISO11783-5|network-management|hardware|peer_request_address_claim,physical_address_claim|Prove independent request and physical address-claim behavior
+ISO11783-6|virtual-terminal|hardware|vt_object_pool_upload,vt_object_pool_upload_failure|Prove VT upload success and failure behavior against an independent peer
+ISO11783-7|implement-messages|hardware|implement_message_broadcast|Prove selected implement and tractor message broadcasts with an independent decoder
+ISO11783-8|powertrain|hardware|powertrain_engine_trace|Prove selected powertrain frames and decoded values with an independent observer
+ISO11783-9|tractor-ecu|hardware|tractor_ecu_facility_trace|Prove facility and maintain-power lifecycle frames with source-scoped observations
+ISO11783-10|task-controller|hardware|tc_ddop_upload|Prove DDOP upload or activation against an independent TC or reference peer
+ISO11783-11|mobile-data-element-dictionary|public-data|ddi_public_database_refresh|Prove the DDI database refresh from a public or independently licensed source without private table leakage
+ISO11783-12|diagnostics|hardware|diagnostic_request_response|Prove diagnostic request response or clear workflow with an external service-tool style peer
+ISO11783-13|file-server|hardware|file_server_read_write|Prove File Server TAN handle and payload continuity with an independent peer
+ISO11783-14|sequence-control|hardware|section_control_lifecycle|Prove ordered Section Control lifecycle transitions with an independent peer
+AEF-TIM|automation-authority-and-safe-state|hardware|tim_authority_interlock|Prove authority grant revoke and blocked-command behavior with an independent peer
+NMEA2000|selected-pgn-subset|hardware|nmea2000_gnss_environment_trace|Prove selected GNSS navigation or environment PGNs with an independent NMEA 2000 observer

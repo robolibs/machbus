@@ -1,0 +1,8 @@
+# ISO 11783-2 CAN physical-layer validation fixture values.
+
+iso_bitrate=250000
+sample_point_nominal=0.80
+sample_point_min=0.77
+sample_point_max=0.83
+wrong_bitrate_error=bitrate must be 250000
+bad_sample_point_error=sample point must be 80% +/- 3%

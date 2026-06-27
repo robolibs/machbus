@@ -1,0 +1,10 @@
+# Reviewable ISO 11783-6 Virtual Terminal server working-set storage fixtures.
+#
+# These are not CAN payloads. They lock down the local on-disk VTP1 pool-version
+# cache format used by the VT server for StoreVersion / LoadVersion workflows:
+# magic, timestamp_us, pool size, VT version, object count, NUL-padded classic
+# label, then serialized object-pool bytes.
+
+stored_v1_label_v1=5654503108070605040302011800000005000256310000000000000100000000000001000002000000000002000100ffff0000
+stored_v1_header_label_v2=5654503108070605040302011800000005000256320000000000000100000000000001000002000000000002000100ffff0000
+stored_v1_oversized_header=565450310000000000000000FFFFFFFF0500015631000000000000

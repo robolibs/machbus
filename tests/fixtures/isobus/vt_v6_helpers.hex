@@ -1,0 +1,13 @@
+# Reviewable ISO 11783-6 VT v6 helper payload corpus.
+# These are raw helper payloads, not object-pool object records.
+
+touch_gesture_tap_neg100_200=019CFFC8000000000001FECA
+touch_gesture_bad_type=FF9CFFC8000000000001FECA
+touch_gesture_short11=019CFFC8000000000001FE
+touch_gesture_overlong13=019CFFC8000000000001FECA00
+
+graphics_context_v6_basic=C8010500563412BC9A780102
+graphics_context_v6_bad_line_style=C8030500563412BC9A780102
+graphics_context_v6_bad_antialias=C8010500563412BC9A780202
+graphics_context_v6_bad_blend=C8010500563412BC9A780104
+graphics_context_v6_short11=C8010500563412BC9A7801

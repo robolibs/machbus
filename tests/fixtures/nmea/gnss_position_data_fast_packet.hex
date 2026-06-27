@@ -1,0 +1,10 @@
+# PGN 129029 GNSS Position Data fast-packet split for
+# `gnss_position_data_52n_5e_alt12_345_rtk.hex`.
+# Source address is 0x23, sequence id 0, destination is global/broadcast.
+frame0=002B2AFFFFFFFFFF
+frame1=01FF000034B33E69
+frame2=0237070000C52EBC
+frame3=03A2B100A85EBC00
+frame4=040000000040FF0C
+frame5=0555008400FFFFFF
+frame6=06FFFFFFFFFFFFFF

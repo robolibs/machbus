@@ -1,0 +1,9 @@
+# Reduced external VT command trace derived from ISO11783-CAN-Stack's
+# examples/virtual_terminal/version3_object_pool/main.cpp callback path.
+#
+# Source callback: handle_softkey_event() calls set_active_data_or_alarm_mask()
+# on example_WorkingSet (0x0000) with example_AlarmMask (0x07D0) when the alarm
+# soft key is released. This row is the corresponding ISO 11783-6 Change Active
+# Mask ECU-to-VT payload, replayed after uploading VT3TestPool.iop.
+
+change_active_mask_to_alarm_mask=AD0000D007FFFFFF

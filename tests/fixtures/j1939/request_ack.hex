@@ -1,0 +1,19 @@
+# ISO 11783-3 / J1939-21 Request and Acknowledgment utility-codec fixtures.
+#
+# Request (PGN 0xEA00) is canonically the 3-byte requested PGN. The parser
+# also accepts the common 8-byte `0xFF` padded classic-CAN shape, but rejects
+# other trailing data rather than prefix-decoding malformed payloads.
+
+request_address_claim_3=00EE00
+request_address_claim_ff_padded=00EE00FFFFFFFFFF
+request_address_claim_len4=00EE00FF
+request_address_claim_bad_padding=00EE0000FFFFFFFF
+request_address_claim_len9=00EE00FFFFFFFFFFFF
+request_invalid_pgn_high_bits=00EE04
+
+ack_request_to_42=00FFFFFF4200EA00
+ack_request_short=00FFFFFF4200EA
+ack_request_overlong=00FFFFFF4200EA0000
+ack_request_reserved_control=04FFFFFF4200EA00
+ack_request_bad_reserved_bytes=00FF00FF4200EA00
+ack_request_invalid_pgn_high_bits=00FFFFFF4200EA04

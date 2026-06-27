@@ -1,0 +1,16 @@
+# ISO 11783-5 / J1939-81 address-claim golden frames.
+#
+# Raw IDs are 29-bit extended CAN identifiers without the IDE bit.
+request_address_claim_raw_id=0x18EAFFFE
+request_address_claim_payload=00EE00FFFFFFFFFF
+malformed_request_address_claim_bad_padding=00EE0000FFFFFFFF
+malformed_request_address_claim_overlong=00EE00FFFFFFFFFFFF
+
+claim_magic_addr80_raw_id=0x18EEFF80
+claim_magic_addr80_payload=0400000135030497
+
+cannot_claim_magic_raw_id=0x18EEFFFE
+cannot_claim_magic_payload=0400000135030497
+
+commanded_address_magic_to_42=040000013503049742
+malformed_commanded_address_overlong=040000013503049742FF

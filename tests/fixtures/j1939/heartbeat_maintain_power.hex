@@ -1,0 +1,28 @@
+# J1939 / ISO 11783 heartbeat and maintain-power golden payloads.
+#
+# Heartbeat is a one-byte payload:
+#   0xFB = INIT, 0x00 = first normal sequence, 0xFA = last normal
+#   sequence, 0xFE = sender error, 0xFF = shutdown.
+heartbeat_init=FB
+heartbeat_seq0=00
+heartbeat_seq250=FA
+heartbeat_sender_error=FE
+heartbeat_shutdown=FF
+
+# Heartbeat request payload carried on destination-specific PGN 0xCC00:
+#   requested PGN 0xF0E4, interval 100 ms, reserved FF tail.
+heartbeat_request_agisostack=E4F0006400FFFFFF
+
+# Maintain Power is an 8-byte ISO 11783-9 payload:
+#   byte 0 low nibble = reserved 0xF, bits 4..5 = in-work,
+#   bits 6..7 = park state
+#   byte 1 bits 0..1 = ready, bits 2..3 = transport,
+#   bits 4..5 = PWR maintain requirement,
+#   bits 6..7 = ECU_PWR maintain requirement.
+maintain_all_inactive_no_request=0F00FFFFFFFFFFFF
+maintain_all_active_request=5F55FFFFFFFFFFFF
+maintain_all_not_available_dont_care=FFFFFFFFFFFFFFFF
+maintain_short7=0003FFFFFFFFFF
+maintain_overlong9=0003FFFFFFFFFFFFFF
+maintain_bad_reserved_flags=5E55FFFFFFFFFFFF
+maintain_bad_reserved_tail=5F5500FFFFFFFFFF

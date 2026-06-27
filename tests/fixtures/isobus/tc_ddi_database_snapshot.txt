@@ -1,0 +1,13 @@
+# Reviewable ISO 11783-11 DDI database snapshot for the generated table.
+# The fingerprint is FNV-1a 64 over each entry's DDI, name, unit,
+# resolution bits, min value, and max value in table order.
+
+version=2025121001
+entries=760
+fingerprint_fnv1a64=0x1C4DEA1E6B4F9641
+first_ddi=0
+first_name=Internal Data Base DDI
+first_unit=
+last_ddi=65535
+last_name=Reserved
+last_unit=n.a. -

@@ -1,0 +1,81 @@
+name: book
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: codeberg-pages
+  cancel-in-progress: false
+
+jobs:
+  publish_pages_branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install mdBook
+        run: |
+          if ! command -v mdbook >/dev/null 2>&1; then
+            cargo install mdbook --locked
+          fi
+
+      - name: Build book
+        run: make book
+
+      # Codeberg Pages branch deployment:
+      # https://docs.codeberg.org/codeberg-pages/
+      #
+      # This publishes the mdBook output to the repository's `pages` branch.
+      # Configure a Forgejo webhook for the `pages` branch with target:
+      # https://<owner>.codeberg.page/machbus/
+      - name: Publish pages branch
+        env:
+          FORGE_TOKEN: ${{ forge.token }}
+          FORGE_SERVER_URL: ${{ forge.server_url }}
+          FORGE_REPOSITORY: ${{ forge.repository }}
+        run: |
+          set -eu
+
+          repo_root="$PWD"
+          publish_dir="$repo_root/target/mdbook/machbus"
+          worktree="$(mktemp -d)"
+
+          cleanup() {
+            git worktree remove --force "$worktree" >/dev/null 2>&1 || rm -rf "$worktree"
+          }
+          trap cleanup EXIT
+
+          git config user.name "forgejo-actions"
+          git config user.email "forgejo-actions@noreply.codeberg.org"
+
+          if [ -n "${FORGE_TOKEN:-}" ] && [ -n "${FORGE_SERVER_URL:-}" ] && [ -n "${FORGE_REPOSITORY:-}" ]; then
+            forge_host="${FORGE_SERVER_URL#https://}"
+            forge_host="${forge_host#http://}"
+            git remote set-url origin "https://x-access-token:${FORGE_TOKEN}@${forge_host}/${FORGE_REPOSITORY}.git"
+          fi
+
+          if git ls-remote --exit-code --heads origin pages >/dev/null 2>&1; then
+            git fetch origin pages
+            git worktree add "$worktree" origin/pages
+            git -C "$worktree" switch -C pages
+          else
+            git worktree add --detach "$worktree"
+            git -C "$worktree" switch --orphan pages
+          fi
+
+          git -C "$worktree" rm -r --ignore-unmatch .
+          cp -a "$publish_dir"/. "$worktree"/
+          touch "$worktree/.nojekyll"
+
+          git -C "$worktree" add -A
+          if git -C "$worktree" diff --cached --quiet; then
+            echo "pages branch already up to date"
+          else
+            git -C "$worktree" commit -m "Deploy mdBook to Codeberg Pages"
+            git -C "$worktree" push origin HEAD:pages
+          fi

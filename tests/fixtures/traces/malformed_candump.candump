@@ -1,0 +1,10 @@
+# Malformed trace lines that must be ignored before conversion into wirebit CAN
+# frames. Keep this fixture to classic-CAN parser robustness cases; valid
+# standard-ID rejection lives in standard_id_rejection.candump.
+(1691423381.123456) vcan0 18FEE647##1A43116081C267D78
+(1691423381.123457) vcan0 18FEE647#A43116081C267D7800
+(1691423381.123458) vcan0 18FEE647#A43116081C267D7
+(1691423381.123459) vcan0 20000004#00000000
+(1691423381.123460) vcan0  18FEE647   [8]  A4 31
+(1691423381.123461) vcan0  18FEE647   [9]  A4 31 16 08 1C 26 7D 78 00
+(1691423381.123462) vcan0  18FEE647   [8]  A4 31 16 08 1C 26 7D ZZ

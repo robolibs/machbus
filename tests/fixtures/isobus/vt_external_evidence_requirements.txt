@@ -1,0 +1,35 @@
+# VT renderer external evidence requirements.
+#
+# Format:
+# id|scope|status|required_source|required_artifacts|required_report|notes
+#
+# status is one of:
+# - missing: no checked-in independent VT object-pool evidence yet
+# - complete: source metadata, promoted fixture bytes, inspector report, and a
+#   Markdown report are checked in
+#
+# required_source names the only acceptable source class. It must never point at
+# private standard PDFs, private AEF conformance suites, or local proprietary
+# extracts unless redistribution is explicitly allowed in the report.
+#
+# required_artifacts is `-` while missing. When complete it must name every
+# checked-in artifact needed to reproduce the promotion, separated by `+`.
+# At minimum that means:
+# - a raw `.iop`/`.bin` or reviewable `.hex` fixture under tests/fixtures/isobus/
+# - an `iop_inspect --write-report-json` or `vt_trace_inspect --write-report-json` report
+# - raw RGB888/RGB565 framebuffer bytes, or an explicit report caveat explaining
+#   why they are not checked in, plus the matching rgb888/rgb565 FNV hashes from
+#   the inspector JSON for byte-for-byte target-display comparison
+#
+# required_report is `-` while missing. When complete it must point at a
+# Markdown report under tests/fixtures/isobus/vt_external_reports/.
+#
+# This file is not evidence. It prevents Phase 10 from being called complete
+# until independent pools are named, licensed, checked in, and repeatably
+# inspected.
+vt_external_pool_basic|Independent VT object pool with at least one Working Set and Data Mask|complete|independent-tool-or-open-license|tests/fixtures/isobus/VT3TestPool.iop+tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.json+tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.md|VT3 Test Pool parses and renders through iop_inspect --strict with zero unsupported records zero placeholder pixels and pinned RGB888/RGB565 framebuffer hashes
+vt_external_pool_graphics|Independent VT object pool exercising PictureGraphic GraphicData ScaledGraphic or Animation|complete|independent-tool-or-open-license|tests/fixtures/isobus/VT3TestPool.iop+tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm.json+tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_pool_graphics_vt3_alarm.md|VT3 Test Pool alarm mask renders one PictureGraphic through iop_inspect --strict with zero unsupported records zero placeholder pixels active-mask selection and pinned RGB888/RGB565 framebuffer hashes
+vt_external_pool_soft_keys|Independent VT object pool exercising soft-key paging or more keys than physical cells|complete|independent-tool-or-open-license|tests/fixtures/isobus/vt_external_pool_soft_keys_seeder_reduced.hex+tests/fixtures/isobus/vt_external_reports/vt_external_pool_soft_keys_seeder_reduced.json+tests/fixtures/isobus/vt_external_reports/vt_external_pool_soft_keys_seeder_reduced.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_pool_soft_keys_seeder_reduced-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_pool_soft_keys_seeder_reduced-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_pool_soft_keys_seeder_reduced.md|Reduced ISO11783-CAN-Stack seeder soft-key pool exercises four keys on a two-cell physical soft-key profile with strict/hash-gated RGB888/RGB565 artifacts
+vt_external_pool_inputs|Independent VT object pool exercising input fields and editable value objects|complete|independent-tool-or-open-license|tests/fixtures/isobus/vt_external_pool_inputs_seeder_reduced.hex+tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced.json+tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_pool_inputs_seeder_reduced.md|Reduced ISO11783-CAN-Stack seeder input pool exercises InputBoolean InputList selectable items and backing NumberVariables with strict/hash-gated RGB888/RGB565 artifacts
+vt_external_pool_user_layout|Independent VT object pool exercising Window Mask or Key Group user-layout placement|complete|independent-tool-or-open-license|tests/fixtures/isobus/vt_external_pool_user_layout_seeder_reduced.hex+tests/fixtures/isobus/vt_external_reports/vt_external_pool_user_layout_seeder_reduced.json+tests/fixtures/isobus/vt_external_reports/vt_external_pool_user_layout_seeder_reduced.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_pool_user_layout_seeder_reduced-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_pool_user_layout_seeder_reduced-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_pool_user_layout_seeder_reduced.md|Reduced ISO11783-CAN-Stack seeder user-layout pool exercises free-form Window Mask and Key Group placement with strict/hash-gated RGB888/RGB565 artifacts
+vt_external_command_trace|Independent or reduced ECU-to-VT command trace after pool activation|complete|independent-tool-or-open-license|tests/fixtures/isobus/VT3TestPool.iop+tests/fixtures/isobus/vt_external_trace_vt3_alarm.hex+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm.json+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final.rgb+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-initial-le.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final-be.rgb565+tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm-final-le.rgb565|tests/fixtures/isobus/vt_external_reports/vt_external_trace_vt3_alarm.md|Reduced ISO11783-CAN-Stack VT3 alarm soft-key callback trace replays Change Active Mask through vt_trace_inspect with one accepted effect and pinned initial/final RGB888/RGB565 hashes

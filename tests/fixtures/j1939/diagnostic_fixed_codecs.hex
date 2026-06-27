@@ -1,0 +1,30 @@
+# J1939-73 / ISO 11783-12 fixed-size diagnostic utility payload fixtures.
+#
+# These messages are single classic-CAN data fields. Decoders must reject
+# prefix-compatible short and overlong payloads instead of silently accepting
+# the leading fields.
+
+dm_clear_all=FFFFFFFFFFFFFFFF
+dm5_protocols_j1939_uds=05FFFFFFFFFFFFFF
+dm5_bad_padding=0500FFFFFFFFFFFF
+dm7_spn4660_test5=34120005FFFFFFFF
+dm7_spn_clamped=FFFF0705FFFFFFFF
+dm7_bad_spn_reserved_bits=3412F805FFFFFFFF
+dm7_bad_tail=3412000500FFFFFF
+dm13_suspension_announcement_5s=FFFFFFFF0500FFFF
+dm13_primary_network_stop_temp_10s=FCFFFF030A00FFFF
+dm13_current_link_stop_indefinite_10s=3FFFFF000A00FFFF
+dm13_bad_reserved_byte=FC00FF030A00FFFF
+dm13_bad_suspend_signal=FCFFFF050A00FFFF
+dm22_clear_active_spn74565_erratic=11FFFFFFFF452322
+dm22_spn_clamped=11FFFFFFFFFFFFE2
+dm22_bad_reserved_padding=11FF00FFFF452322
+dm22_bad_non_nack_reason=1100FFFFFF452322
+dm25_spn74565_erratic_frame2=4523010202FFFFFF
+dm25_spn_clamped=FFFF070202FFFFFF
+dm25_bad_spn_reserved_bits=4523F90202FFFFFF
+dm25_bad_fmi_reserved_bits=452301E202FFFFFF
+dm25_bad_tail=452301020200FFFF
+
+fixed8_short7=00000000000000
+fixed8_overlong9=000000000000000000

@@ -1,0 +1,9 @@
+# ISO 11783-13 legacy file-transfer enum/config fixtures.
+#
+# This is the old top-level PGN 0xAA00/0xAB00 enum surface. The active
+# File Server implementation lives under src/isobus/fs/*.
+
+operation_codes=010203040506101112131420212223303140415060
+error_codes=000102030405060708090A0B0C0DFF
+attribute_mask_readonly_hidden_dir_archive=33
+default_config=0010

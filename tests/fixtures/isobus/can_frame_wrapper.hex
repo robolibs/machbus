@@ -1,0 +1,8 @@
+# Reviewable protocol-frame wrapper fixtures.
+
+request_pdu1_raw_id=18EA4210
+request_pdu1_payload=010203FFFFFFFFFF
+request_pdu1_length=3
+dm1_pdu2_raw_id=18FECA80
+dm1_pdu2_payload=AAFFFFFFFFFFFFFF
+dm1_pdu2_length=1

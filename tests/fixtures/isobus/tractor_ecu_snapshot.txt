@@ -1,0 +1,22 @@
+# ISO 11783-9 Tractor ECU semantic snapshot fixtures.
+#
+# These are not wire payloads: src/isobus/tractor_ecu.rs contains the
+# classification/configuration records for composing a TECU from lower-level
+# wire codecs. Maintain-power wire bytes live in
+# tests/fixtures/j1939/heartbeat_maintain_power.hex.
+
+classification_default=Class 1
+classification_class2_nf=Class 2NF
+classification_class3_all=Class 3NFGPM
+classification_class3_all_version=2
+classification_class3_all_instance=1
+power_default_shutdown_ms=180000
+power_default_maintain_timeout_ms=2000
+power_default_ecu_pwr_current_amps=15
+power_default_pwr_current_amps=50
+tecu_default_facilities_interval_ms=2000
+tecu_default_status_interval_ms=100
+tecu_default_enable_gateway=false
+maintain_request_at_timeout_expired=false
+maintain_request_after_timeout_expired=true
+power_state_default=PowerOff

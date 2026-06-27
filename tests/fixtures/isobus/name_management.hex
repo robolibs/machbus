@@ -1,0 +1,12 @@
+# Reviewable ISO 11783-5 NAME Management payload corpus.
+# Each value is one 17-byte NAME Management payload in compact hexadecimal:
+# [mode:1][NAME:8][nack_reason_or_padding:1][padding:7].
+
+request_current_response_magic=020400000135030497FFFFFFFFFFFFFFFF
+nack_conflict_magic=04040000013503049702FFFFFFFFFFFFFF
+malformed_short16=020400000135030497FFFFFFFFFFFFFF
+malformed_overlong18=020400000135030497FFFFFFFFFFFFFFFFFF
+malformed_unknown_mode=090400000135030497FFFFFFFFFFFFFFFF
+malformed_bad_padding=02040000013503049700FFFFFFFFFFFFFF
+malformed_bad_nack_reason=04040000013503049706FFFFFFFFFFFFFF
+malformed_bad_nack_padding=0404000001350304970200FFFFFFFFFFFF

@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout machbus
+        uses: actions/checkout@v4
+        with:
+          path: machbus
+
+      - name: Checkout local path dependencies
+        run: |
+          git clone --depth 1 https://codeberg.org/robolibs/wirebit.git wirebit
+          git clone --depth 1 https://codeberg.org/robolibs/concord.git concord
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cbindgen
+            machbus/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('machbus/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install native and Python tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential python3-venv python3-pip
+          cargo install cbindgen --locked
+          python3 -m pip install --user 'maturin>=1.7,<2.0'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run local hardening gate
+        working-directory: machbus
+        run: make verify
+
+      - name: Check whitespace
+        working-directory: machbus
+        run: make whitespace-check

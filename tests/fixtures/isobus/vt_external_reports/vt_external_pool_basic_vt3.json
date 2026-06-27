@@ -1,0 +1,41 @@
+{
+  "schema": "machbus-iop-inspect-report-v1",
+  "source": "tests/fixtures/isobus/VT3TestPool.iop",
+  "pool_buffer_bytes": 149644,
+  "pool_buffer_fnv64": "0xBB86201C4656A85E",
+  "pool_objects": 34,
+  "active_mask": "0x03E8",
+  "canvas": { "width": 480, "height": 240 },
+  "layout_profile": { "canvas_width": 480, "canvas_height": 240, "soft_key_area": { "x": 480, "y": 0, "width": 64, "height": 240 }, "physical_soft_key_count": 10, "navigation_soft_key_count": 2, "soft_key_page": 0 },
+  "scene": { "nodes": 8, "soft_keys": 1, "unsupported_records": 0 },
+  "coverage": { "objects": 34, "drawable": 10, "unsupported": 0 },
+  "gtui_commands": 19,
+  "framebuffer": {
+    "rendered": true,
+    "width": 544,
+    "height": 480,
+    "pixels": 261120,
+    "rgb888_bytes": 783360,
+    "rgb565_bytes": 522240,
+    "rgb888_fnv64": "0x77683241FAAA1F7B",
+    "rgb565_be_fnv64": "0xF13724DEE9229271",
+    "rgb565_le_fnv64": "0xF13724DEE9229271",
+    "placeholder_pixels": 0,
+    "error": null
+  },
+  "artifacts": {
+    "report_json": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.json",
+    "rgb888": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3.rgb",
+    "rgb565_be": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3-be.rgb565",
+    "rgb565_le": "tests/fixtures/isobus/vt_external_reports/vt_external_pool_basic_vt3-le.rgb565"
+  },
+  "checks": {
+    "strict_requested": true,
+    "expected_unsupported_records": 0,
+    "expected_placeholder_pixels": 0,
+    "expected_rgb888_fnv64": "0x77683241FAAA1F7B",
+    "expected_rgb565_be_fnv64": "0xF13724DEE9229271",
+    "expected_rgb565_le_fnv64": "0xF13724DEE9229271",
+    "failures": []
+  }
+}

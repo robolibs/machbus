@@ -1,0 +1,6 @@
+# PGN 129540 GNSS Satellites in View fast-packet smoke stream.
+# Source address is 0x23, sequence id 0, destination is global/broadcast.
+payload=2100010120640010273002226501202831
+frame0=0011210001012064
+frame1=0100102730022265
+frame2=0201202831FFFFFF

@@ -1,0 +1,6 @@
+# PGN 129029 GNSS Position Data reference-station count length checks.
+# The base fields match `gnss_position_data_52n_5e_alt12_345_rtk.hex`;
+# byte 42 is the reference-station count and each station contributes 4 bytes.
+one_reference_station=2AFFFFFFFFFFFF000034B33E6937070000C52EBCA2B100A85EBC000000000040FF0C55008400FFFFFFFF0111223344
+malformed_unavailable_count_overlong=2AFFFFFFFFFFFF000034B33E6937070000C52EBCA2B100A85EBC000000000040FF0C55008400FFFFFFFFFF11223344
+malformed_one_reference_truncated=2AFFFFFFFFFFFF000034B33E6937070000C52EBCA2B100A85EBC000000000040FF0C55008400FFFFFFFF01

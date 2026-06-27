@@ -1,0 +1,14 @@
+# Rust/Cargo build output.
+/target/
+
+# Python demo/bootstrap environments are rebuilt by the Makefile.
+/.venv/
+**/.venv/
+
+# Local shell/tool caches.
+/.direnv/
+
+# Proptest can write local shrink seeds while developers fuzz. Keep those
+# machine-local unless a seed is intentionally promoted into tests/fixtures/.
+/proptest-regressions/
+

@@ -8,7 +8,7 @@
 //! tp, etp, fast_packet. Subsequent phases add IsoNet, NIU,
 //! name_manager, eth_can, iop_parser.
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod adapter;
 pub mod address_claimer;
 pub mod bitfield;
@@ -35,7 +35,7 @@ pub mod iop_parser;
 pub mod management;
 pub mod message;
 pub mod name;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod name_manager;
 pub mod network_manager;
 pub mod niu;
@@ -48,14 +48,14 @@ pub mod scheduler;
 pub mod session;
 pub mod state_machine;
 pub mod timer;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod topology;
 pub mod tp;
 pub mod types;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod working_set;
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use adapter::{
     AdapterCapabilities, AdapterReadiness, CapabilityCheck, REQUIRED_ADAPTER_BITRATE,
 };
@@ -98,7 +98,7 @@ pub use fault_confinement::{
 pub use frame::Frame;
 pub use identifier::Identifier;
 pub use internal_cf::{ClaimState, InternalCf};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use iop_parser::read_iop_file;
 pub use iop_parser::{RawIopObject, hash_to_version, parse_iop_data, validate};
 pub use management::{
@@ -107,7 +107,7 @@ pub use management::{
 };
 pub use message::Message;
 pub use name::Name;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use name_manager::{
     NameManagementMsg, NameManager, NameMgmtMode, NameMgmtReply, NameNackReason,
 };
@@ -135,7 +135,7 @@ pub use session::{
 };
 pub use state_machine::StateMachine;
 pub use timer::{Timeout, Timer};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use topology::{
     BusTopology, EcuType, MAX_BUS_LENGTH_M, MAX_ECUS_PER_SEGMENT, MAX_SIMPLE_STUB_LENGTH_M,
     MAX_TYPE_I_WEAK_PER_MACHINE, MIN_STUB_SPACING_M, TopologyViolation, topology_is_valid,
@@ -145,5 +145,5 @@ pub use topology::{
 pub use tp::{TpCmdtTx, TpRxFixed, TpRxFixedOutcome};
 pub use tp::{TpSessionState, TpTimerSession, TransportProtocol};
 pub use types::{Address, Pgn, Priority};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use working_set::{MEMBER_MSG_INTERVAL_MS, WorkingSetManager};

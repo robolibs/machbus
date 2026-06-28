@@ -33,7 +33,7 @@ pub const ETP_DEFAULT_MAX_SESSIONS: usize = 16;
 
 #[cfg(feature = "embedded")]
 type EtpSessions = FixedSlots<TransportSession, ETP_DEFAULT_MAX_SESSIONS>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type EtpSessions = Vec<TransportSession>;
 
 /// Receive-admission summary for an advertised ETP transfer size.
@@ -825,7 +825,7 @@ impl ExtendedTransportProtocol {
         self.sessions.iter()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     #[inline]
     #[must_use]
     pub fn active_sessions(&self) -> &[TransportSession] {
@@ -840,7 +840,7 @@ impl ExtendedTransportProtocol {
         self.sessions.push(session)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn push_session(
         &mut self,
         session: TransportSession,
@@ -856,7 +856,7 @@ impl ExtendedTransportProtocol {
             .expect("session index came from active session table")
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn remove_session(&mut self, idx: usize) -> TransportSession {
         self.sessions.swap_remove(idx)
     }

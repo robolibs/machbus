@@ -14,7 +14,7 @@
 
 use alloc::{collections::BTreeSet, format, string::String, vec::Vec};
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use std::{fs, path::Path};
 
 use super::error::{Error, ErrorCode, Result};
@@ -30,7 +30,7 @@ pub struct RawIopObject {
 }
 
 /// Read an IOP file from disk. Returns the raw bytes.
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn read_iop_file(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let path = path.as_ref();
     let data = fs::read(path).map_err(|e| {

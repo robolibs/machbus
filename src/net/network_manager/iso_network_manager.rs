@@ -118,7 +118,7 @@ struct PendingTransportTx {
 
 #[cfg(feature = "embedded")]
 type PendingTransportQueue = FixedQueue<PendingTransportTx, MAX_PENDING_TRANSPORT_TX>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type PendingTransportQueue = VecDeque<PendingTransportTx>;
 
 /// ISOBUS network layer. Owns CAN endpoints, control functions,
@@ -543,7 +543,7 @@ impl<L: Link> IsoNet<L> {
         !self.pending_transport_tx.is_full()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn pending_transport_tx_has_capacity(&self) -> bool {
         self.pending_transport_tx.len() < MAX_PENDING_TRANSPORT_TX
     }
@@ -558,7 +558,7 @@ impl<L: Link> IsoNet<L> {
         })
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn push_pending_transport_tx(&mut self, tx: PendingTransportTx) -> Result<()> {
         self.pending_transport_tx.push_back(tx);
         Ok(())

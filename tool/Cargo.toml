@@ -12,15 +12,11 @@ path = "src/main.rs"
 
 [dependencies]
 # The root crate supplies the candump frame model and the ISOBUS/J1939
-# PGN/source/destination decoder plus the NMEA 2000 PGN catalog. Default
-# features stay on because the library only supports two configurations —
-# the full hosted `default` build and the `embedded` no_std build — and a
-# hosted binary is the right fit for a CLI. The tool does its own raw
-# SocketCAN I/O via libc, exactly like the upstream can-utils, so it has
-# no direct dependency on `wirebit`.
-machbus = { path = ".." }
+# PGN/source/destination decoder. Uses the `cli` feature (hosted build
+# WITHOUT pyo3/concord so it links cleanly in a static musl binary).
+machbus = { path = "..", default-features = false, features = ["cli"] }
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
-# TUI backend for `machbus live`.
+# TUI backend for `machbus live` and `machbus term`.
 ratatui = "0.29"
 crossterm = "0.28"

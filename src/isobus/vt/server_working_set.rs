@@ -25,17 +25,17 @@ use super::working_set::WorkingSet;
 use crate::isobus::{AuxFunctionState, AuxFunctionType};
 use crate::net::constants::NULL_ADDRESS;
 use crate::net::types::Address;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use crate::vt_storage::{MAX_STORED_POOL_BYTES, VT_STORAGE_HEADER_LEN, VT_STORAGE_MAGIC};
 use crate::vt_storage::{StoredPoolVersion, is_valid_classic_label};
 use alloc::{collections::BTreeMap as HashMap, string::String, vec::Vec};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use alloc::{format, vec};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use std::fs;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use std::io::{Read, Write};
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use std::path::PathBuf;
 
 /// The VT Get Versions response carries the number of stored versions in one byte.
@@ -452,7 +452,7 @@ pub struct ServerWorkingSet {
     pub pool_activated: bool,
     pub last_status_ms: u32,
     pub stored_versions: Vec<StoredPoolVersion>,
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub storage_path: PathBuf,
     pub object_state: ServerObjectState,
 }
@@ -469,7 +469,7 @@ impl Default for ServerWorkingSet {
             pool_activated: false,
             last_status_ms: 0,
             stored_versions: Vec::new(),
-            #[cfg(feature = "default")]
+            #[cfg(any(feature = "default", feature = "cli"))]
             storage_path: PathBuf::from("./vt_storage"),
             object_state: ServerObjectState::default(),
         }
@@ -477,12 +477,12 @@ impl Default for ServerWorkingSet {
 }
 
 impl ServerWorkingSet {
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn set_storage_path(&mut self, path: impl Into<PathBuf>) {
         self.storage_path = path.into();
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     #[must_use]
     pub fn get_client_storage_dir(&self) -> PathBuf {
         self.storage_path
@@ -491,7 +491,7 @@ impl ServerWorkingSet {
 
     /// Ensure the per-client storage directory exists. Returns `true`
     /// if the directory exists (or was created) at the end of the call.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn ensure_storage_dir(&self) -> bool {
         let dir = self.get_client_storage_dir();
         fs::create_dir_all(&dir).is_ok()
@@ -503,7 +503,7 @@ impl ServerWorkingSet {
     }
 
     /// Store the current pool with a label, persisting to disk.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn store_version(&mut self, label: impl Into<String>, vt_ver: u16) -> bool {
         let Some(ver) = self.build_stored_version(label, vt_ver) else {
             return false;
@@ -532,7 +532,7 @@ impl ServerWorkingSet {
             pool_data: data,
             ..Default::default()
         };
-        #[cfg(feature = "default")]
+        #[cfg(any(feature = "default", feature = "cli"))]
         ver.update_metadata(vt_ver);
         #[cfg(feature = "embedded")]
         ver.update_metadata_at(vt_ver, 0);
@@ -572,7 +572,7 @@ impl ServerWorkingSet {
 
     /// Load a stored version into the active pool. Tries the
     /// in-memory cache first, falls back to disk.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load_version(&mut self, label: &str) -> bool {
         if !is_valid_classic_label(label) {
             return false;
@@ -671,7 +671,7 @@ impl ServerWorkingSet {
     }
 
     /// Remove a version from the in-memory cache and from disk.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn delete_version(&mut self, label: &str) -> bool {
         if !self.delete_cached_version(label) {
             return false;
@@ -695,7 +695,7 @@ impl ServerWorkingSet {
         self.delete_cached_version(label)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn save_version_to_disk(&self, ver: &StoredPoolVersion) -> bool {
         let Some(filename) = version_filename(&ver.label) else {
             return false;
@@ -713,7 +713,7 @@ impl ServerWorkingSet {
         file.write_all(&buf).is_ok()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load_version_from_disk(&self, label: &str) -> Option<StoredPoolVersion> {
         let filename = version_filename(label)?;
         let filepath = self.get_client_storage_dir().join(filename);
@@ -721,7 +721,7 @@ impl ServerWorkingSet {
         (ver.label == label).then_some(ver)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn load_version_file(&self, filepath: PathBuf) -> Option<StoredPoolVersion> {
         let mut file = fs::File::open(&filepath).ok()?;
         let mut header = [0u8; VT_STORAGE_HEADER_LEN];
@@ -745,7 +745,7 @@ impl ServerWorkingSet {
         StoredPoolVersion::from_storage_bytes(&bytes)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn delete_version_from_disk(&self, label: &str) -> bool {
         let Some(filename) = version_filename(label) else {
             return false;
@@ -756,7 +756,7 @@ impl ServerWorkingSet {
 
     /// Walk the per-client directory and load every `.vtp` file we
     /// haven't seen yet. Returns the number of newly-loaded versions.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load_all_versions_from_disk(&mut self) -> u32 {
         let dir = self.get_client_storage_dir();
         let Ok(entries) = fs::read_dir(&dir) else {
@@ -782,7 +782,7 @@ impl ServerWorkingSet {
     }
 
     /// Drop expired versions from cache and disk. Returns count.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn cleanup_expired_versions(&mut self, max_age_days: u32) -> u32 {
         let mut deleted = 0u32;
         let mut idx = 0;
@@ -800,7 +800,7 @@ impl ServerWorkingSet {
     }
 
     /// Persist every cached version. Returns count actually written.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn save_all_versions_to_disk(&self) -> u32 {
         self.stored_versions
             .iter()
@@ -809,7 +809,7 @@ impl ServerWorkingSet {
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 fn version_filename(label: &str) -> Option<String> {
     if !is_valid_classic_label(label) {
         return None;

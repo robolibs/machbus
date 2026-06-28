@@ -26,7 +26,7 @@ pub mod net;
 pub mod nmea;
 #[cfg(feature = "default")]
 pub mod python;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod session;
 #[cfg(feature = "embedded")]
 #[path = "embedded_session.rs"]
@@ -124,7 +124,7 @@ pub mod embedded {
     pub use crate::vt_storage::{StoredPoolVersion, is_valid_classic_label};
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod prelude {
     //! Common re-exports for downstream code.
     pub use crate::net::{

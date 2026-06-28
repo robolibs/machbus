@@ -128,7 +128,7 @@ impl GNSSPosition {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 fn sqrt_f64(value: f64) -> f64 {
     value.sqrt()
 }

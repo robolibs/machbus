@@ -61,7 +61,7 @@ pub const NMEA2000_INTERFACE_PGNS: [Pgn; 22] = [
 const ACTUAL_PRESSURE_RESOLUTION: f64 = 0.1;
 const DEPTH_OFFSET_RESOLUTION: f64 = 0.001;
 const DEPTH_RANGE_RESOLUTION: f64 = 10.0;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 const NEAR_INTEGER_EPSILON: f64 = 1.0e-9;
 const MAX_LATITUDE_I32_RAW: i32 = 900_000_000;
 const MAX_LONGITUDE_I32_RAW: i32 = 1_800_000_000;
@@ -81,7 +81,7 @@ fn scaled_trunc_near_integer(value: f64, resolution: f64) -> f64 {
     {
         scaled
     }
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     {
         let rounded = scaled.round();
         if (scaled - rounded).abs() <= NEAR_INTEGER_EPSILON {

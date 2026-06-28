@@ -13,7 +13,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use std::io;
 
 /// One captured CAN frame: a microsecond timestamp, the raw 29/11-bit CAN
@@ -141,7 +141,7 @@ impl CaptureRecorder {
     }
 
     /// Write the capture to a `candump` file for evidence.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn save(&self, path: impl AsRef<std::path::Path>) -> io::Result<()> {
         std::fs::write(path, self.to_candump())
     }
@@ -163,7 +163,7 @@ impl CaptureLog {
     }
 
     /// Load a `candump` capture file.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
         Ok(Self::parse(&std::fs::read_to_string(path)?))
     }

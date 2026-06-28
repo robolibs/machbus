@@ -665,7 +665,7 @@ impl NiuConfig {
 
     /// Persist the config to its `persistence_file`. Returns `Ok(false)`
     /// (no-op) when no persistence file is configured.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn save(&self) -> std::io::Result<bool> {
         match &self.persistence_file {
             Some(path) => {
@@ -677,7 +677,7 @@ impl NiuConfig {
     }
 
     /// Load a config from `path`, keeping `path` as the persistence file.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load_from(path: impl Into<String>) -> std::io::Result<Self> {
         let path = path.into();
         let text = std::fs::read_to_string(&path)?;

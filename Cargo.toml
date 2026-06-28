@@ -60,6 +60,9 @@ required-features = ["embedded"]
 #   async    — optional async support.
 [features]
 default = ["wirebit", "dep:pyo3", "dep:concord", "tracing/std"]
+# Hosted build for the CLI tool — same as default but without pyo3
+# (Python bindings can't link in a static musl binary).
+cli = ["wirebit", "dep:concord", "tracing/std"]
 embedded = []
 wirebit = ["dep:wirebit", "wirebit/socketcan"]
 async = ["dep:futures-core"]

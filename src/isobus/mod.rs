@@ -12,7 +12,7 @@
 //! `IsoNet::register_pgn_callback` / `IsoNet::send` directly.
 
 pub mod auxiliary;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod conformance;
 pub mod file_transfer;
 pub mod fs;
@@ -23,7 +23,7 @@ pub mod implement;
 pub mod sc;
 pub mod tc;
 pub mod tim;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod tractor_ecu;
 pub mod vt;
 
@@ -72,7 +72,7 @@ pub use tim::{
     TimAuthority, TimAuthorityArbiter, TimAuthorityState, TimCommand, TimInterlock, TimInterlocks,
     TimOption, TimOptionSet, TimValidationError,
 };
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub use tractor_ecu::{
     PowerConfig, PowerState, SafeModeTrigger, TecuClassification, TecuCommandKind, TecuConfig,
     TecuExclusiveMessage, TecuMaintainPowerRequest, TecuSafeMode,

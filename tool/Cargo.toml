@@ -1,0 +1,22 @@
+[package]
+name = "machbus-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CAN command-line tools (dump, send, gen) built on the machbus stack"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "machbus"
+path = "src/main.rs"
+
+[dependencies]
+# The root crate supplies the candump frame model and the ISOBUS/J1939
+# PGN/source/destination decoder. Uses the `cli` feature (hosted build
+# WITHOUT pyo3/concord so it links cleanly in a static musl binary).
+machbus = { path = "..", default-features = false, features = ["cli"] }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+# TUI backend for `machbus live` and `machbus term`.
+ratatui = "0.29"
+crossterm = "0.28"

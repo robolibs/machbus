@@ -452,7 +452,7 @@ impl TransportProtocol {
         self.sessions.iter()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     #[inline]
     #[must_use]
     pub fn active_sessions(&self) -> &[TransportSession] {
@@ -467,7 +467,7 @@ impl TransportProtocol {
         self.sessions.push(session)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn push_session(
         &mut self,
         session: TransportSession,
@@ -483,7 +483,7 @@ impl TransportProtocol {
             .expect("session index came from active session table")
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn remove_session(&mut self, idx: usize) -> TransportSession {
         self.sessions.swap_remove(idx)
     }
@@ -508,7 +508,7 @@ impl TransportProtocol {
         self.timer_sessions.push(session)
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn push_timer_session(
         &mut self,
         session: TpTimerSession,
@@ -692,7 +692,7 @@ impl TransportProtocol {
         self.timer_sessions.iter()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     #[inline]
     #[must_use]
     pub fn timer_sessions(&self) -> &[TpTimerSession] {

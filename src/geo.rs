@@ -164,35 +164,35 @@ pub mod frame {
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<Wgs> for concord::Wgs {
     fn from(value: Wgs) -> Self {
         Self::new(value.latitude, value.longitude, value.altitude)
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<concord::Wgs> for Wgs {
     fn from(value: concord::Wgs) -> Self {
         Self::new(value.latitude, value.longitude, value.altitude)
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<Ecf> for concord::Ecf {
     fn from(value: Ecf) -> Self {
         Self::new(value.x, value.y, value.z)
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<concord::Ecf> for Ecf {
     fn from(value: concord::Ecf) -> Self {
         Self::new(value.x, value.y, value.z)
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<frame::Enu> for concord::frame::Enu {
     fn from(value: frame::Enu) -> Self {
         Self::new(
@@ -204,7 +204,7 @@ impl From<frame::Enu> for concord::frame::Enu {
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<concord::frame::Enu> for frame::Enu {
     fn from(value: concord::frame::Enu) -> Self {
         Self::new(
@@ -216,7 +216,7 @@ impl From<concord::frame::Enu> for frame::Enu {
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<frame::Ned> for concord::frame::Ned {
     fn from(value: frame::Ned) -> Self {
         Self::new(
@@ -228,7 +228,7 @@ impl From<frame::Ned> for concord::frame::Ned {
     }
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 impl From<concord::frame::Ned> for frame::Ned {
     fn from(value: concord::frame::Ned) -> Self {
         Self::new(
@@ -241,7 +241,7 @@ impl From<concord::frame::Ned> for frame::Ned {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn to_ecf(wgs: Wgs) -> Ecf {
     concord::to_ecf(wgs.into()).into()
 }
@@ -256,7 +256,7 @@ pub fn to_ecf(wgs: Wgs) -> Ecf {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn to_wgs(ecf: Ecf) -> Wgs {
     concord::to_wgs(ecf.into()).into()
 }
@@ -268,13 +268,13 @@ pub fn to_wgs(ecf: Ecf) -> Wgs {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn to_enu(origin: Geo, wgs: Wgs) -> frame::Enu {
     concord::to_enu(origin.into(), wgs.into()).into()
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn to_ned(origin: Geo, wgs: Wgs) -> frame::Ned {
     concord::to_ned(origin.into(), wgs.into()).into()
 }
@@ -334,7 +334,7 @@ pub fn batch_to_ned(origin: Geo, wgs_coords: &[Wgs]) -> Vec<frame::Ned> {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn batch_to_wgs_from_enu(enu_coords: &[frame::Enu]) -> Vec<Wgs> {
     enu_coords
         .iter()
@@ -362,7 +362,7 @@ pub fn batch_to_wgs_from_enu(enu_coords: &[frame::Enu]) -> Vec<Wgs> {
 }
 
 #[must_use]
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub fn batch_to_wgs_from_ned(ned_coords: &[frame::Ned]) -> Vec<Wgs> {
     ned_coords
         .iter()

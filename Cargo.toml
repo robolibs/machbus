@@ -1,6 +1,6 @@
 [package]
 name = "machbus"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
 license = "MIT"
@@ -60,6 +60,9 @@ required-features = ["embedded"]
 #   async    — optional async support.
 [features]
 default = ["wirebit", "dep:pyo3", "dep:concord", "tracing/std"]
+# Hosted build for the CLI tool — same as default but without pyo3
+# (Python bindings can't link in a static musl binary).
+cli = ["wirebit", "dep:concord", "tracing/std"]
 embedded = []
 wirebit = ["dep:wirebit", "wirebit/socketcan"]
 async = ["dep:futures-core"]
@@ -78,3 +81,11 @@ proptest = "1"
 rstest = "0.23"
 tracing-subscriber = "0.3"
 futures = "0.3"
+
+# The `machbus` CLI binary (dump/send/gen/live) lives in `tool/` as a
+# separate crate that depends on this library. Declaring it as a workspace
+# member lets `make build` produce the binary into the shared `target/`
+# directory and keeps a single build cache.
+[workspace]
+members = ["tool"]
+resolver = "2"

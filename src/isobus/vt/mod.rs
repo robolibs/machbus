@@ -31,7 +31,7 @@ pub mod auxiliary_caps;
 pub mod client;
 pub mod commands;
 pub mod objects;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 pub mod render;
 pub mod server;
 pub mod server_working_set;

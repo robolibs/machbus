@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.5] - 2026-06-28
+
+### <!-- 0 -->⛰️  Features
+
+- Terminal virtual terminal :P
+- Terminal virtual terminal :P
+- Created a simple TOOL
+- OPENSOURCEed
+
 ## [0.1.4] - 2026-06-23
 
 ### <!-- 0 -->⛰️  Features

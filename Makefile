@@ -23,6 +23,7 @@ $(info ------------------------------------------)
 
 build:
 	@$(CARGO) build --lib
+	@$(CARGO) build -p machbus-cli
 
 b: build
 

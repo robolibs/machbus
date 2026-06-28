@@ -55,7 +55,7 @@ impl StoredPoolVersion {
     }
 
     /// Refresh size, VT version, object count, and host wall-clock timestamp.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn update_metadata(&mut self, vt_ver: u16) {
         let timestamp_us = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -76,7 +76,7 @@ impl StoredPoolVersion {
     }
 
     /// `true` once host wall-clock `now - timestamp_us > max_age_days`.
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     #[must_use]
     pub fn is_expired(&self, max_age_days: u32) -> bool {
         if self.timestamp_us == 0 {

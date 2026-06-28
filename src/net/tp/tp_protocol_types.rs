@@ -34,12 +34,12 @@ pub const TP_DEFAULT_MAX_RETRANSMITS: u8 = 3;
 
 #[cfg(feature = "embedded")]
 type TpSessions = FixedSlots<TransportSession, TP_DEFAULT_MAX_SESSIONS>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type TpSessions = Vec<TransportSession>;
 
 #[cfg(feature = "embedded")]
 type TpTimerSessions = FixedSlots<TpTimerSession, TP_DEFAULT_MAX_SESSIONS>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type TpTimerSessions = Vec<TpTimerSession>;
 
 /// Borrowed, allocation-free TP/CMDT transmit helper for `embedded-fixed`.

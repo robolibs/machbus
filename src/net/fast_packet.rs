@@ -12,7 +12,7 @@
 //! `frame_counter == 0`. Receivers correlate frames by `(source, pgn,
 //! seq)`; mismatched frame counters discard the in-flight session.
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -44,7 +44,7 @@ const FAST_PACKET_MAX_DATA_BYTES: usize = FAST_PACKET_MAX_DATA as usize;
 
 #[cfg(feature = "embedded")]
 type FastPacketPayload = FixedBytes<FAST_PACKET_MAX_DATA_BYTES>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type FastPacketPayload = Vec<u8>;
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ struct FastPacketSession {
 
 #[cfg(feature = "embedded")]
 type FastPacketSessions = FixedSlots<FastPacketSession, FAST_PACKET_DEFAULT_MAX_RX_SESSIONS>;
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 type FastPacketSessions = Vec<FastPacketSession>;
 
 /// NMEA2000 Fast Packet sender / reassembler.
@@ -483,7 +483,7 @@ impl FastPacketProtocol {
         self.rx_sessions.push(session).map_err(|_| ())
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn push_rx_session(&mut self, session: FastPacketSession) -> core::result::Result<(), ()> {
         self.rx_sessions.push(session);
         Ok(())
@@ -496,7 +496,7 @@ impl FastPacketProtocol {
             .expect("rx session index came from active session table")
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     fn remove_rx_session(&mut self, idx: usize) -> FastPacketSession {
         self.rx_sessions.swap_remove(idx)
     }
@@ -537,7 +537,7 @@ fn new_rx_payload(total_bytes: usize, first: &[u8]) -> Option<FastPacketPayload>
     Some(data)
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 fn new_rx_payload(total_bytes: usize, first: &[u8]) -> Option<FastPacketPayload> {
     let mut data = vec![0xFFu8; total_bytes];
     data[..first.len()].copy_from_slice(first);
@@ -549,7 +549,7 @@ fn payload_as_slice(payload: &FastPacketPayload) -> &[u8] {
     payload.as_slice()
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 fn payload_as_slice(payload: &FastPacketPayload) -> &[u8] {
     payload
 }
@@ -559,7 +559,7 @@ fn payload_as_mut_slice(payload: &mut FastPacketPayload) -> &mut [u8] {
     payload.as_mut_slice()
 }
 
-#[cfg(feature = "default")]
+#[cfg(any(feature = "default", feature = "cli"))]
 fn payload_as_mut_slice(payload: &mut FastPacketPayload) -> &mut [u8] {
     payload
 }

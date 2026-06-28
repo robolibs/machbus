@@ -31,7 +31,7 @@ impl VTServer {
 
     pub fn stop(&mut self) -> Result<()> {
         self.transition(VTServerState::Disconnected);
-        #[cfg(feature = "default")]
+        #[cfg(any(feature = "default", feature = "cli"))]
         let _ = self.save_all_versions();
         self.clients.clear();
         Ok(())
@@ -216,7 +216,7 @@ impl VTServer {
 
     // ─── Storage management ───────────────────────────────────────────
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn set_storage_path(&mut self, path: impl AsRef<std::path::Path>) {
         let p = path.as_ref().to_path_buf();
         for c in &mut self.clients {
@@ -224,7 +224,7 @@ impl VTServer {
         }
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn load_all_versions(&mut self) -> u32 {
         self.clients
             .iter_mut()
@@ -232,7 +232,7 @@ impl VTServer {
             .sum()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn save_all_versions(&self) -> u32 {
         self.clients
             .iter()
@@ -240,7 +240,7 @@ impl VTServer {
             .sum()
     }
 
-    #[cfg(feature = "default")]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn cleanup_expired_versions(&mut self, max_age_days: u32) -> u32 {
         self.clients
             .iter_mut()

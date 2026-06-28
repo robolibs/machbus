@@ -30,6 +30,7 @@ pub struct VtClient {
     connect_requested: bool,
     events: Rc<RefCell<Vec<VtEvent>>>,
     pending: Vec<(Pgn, Vec<u8>, Address)>,
+    last_tick: Option<Instant>,
 }
 
 impl VtClient {
@@ -49,6 +50,7 @@ impl VtClient {
             connect_requested: false,
             events,
             pending: Vec::new(),
+            last_tick: None,
         }
     }
 
@@ -265,8 +267,14 @@ impl Plugin for VtClient {
             self.connect_requested = false;
             let _ = self.client.connect();
         }
-        // FSM-driven frames.
-        let frames: Vec<_> = self.client.update(0).into_iter().collect();
+        // Drive the FSM with real elapsed time so its timeouts/settles
+        // (e.g. the object-pool-transfer settle before EndOfPool) actually
+        // advance. Passing 0 would freeze the connect handshake at
+        // WaitForPoolStore forever.
+        let now = ctx.now();
+        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
+        self.last_tick = Some(now);
+        let frames: Vec<_> = self.client.update(elapsed).into_iter().collect();
         for out in frames {
             self.queue(out);
         }

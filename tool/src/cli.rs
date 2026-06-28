@@ -24,6 +24,11 @@ pub enum Command {
     Generate(GenArgs),
     /// Interactive live CAN monitor ("mechdump live") with a ratatui UI.
     Live(LiveArgs),
+    /// ISOBUS Virtual Terminal (render a pool, or run a live VT server/client).
+    Term {
+        #[command(subcommand)]
+        command: TermSub,
+    },
 }
 
 // ── dump ────────────────────────────────────────────────────────────────
@@ -168,4 +173,65 @@ pub struct LiveArgs {
     /// Log every received frame to this `candump -L` file in the background.
     #[arg(short = 'L', long = "logfile", value_name = "FILE")]
     pub logfile: Option<String>,
+}
+
+// ── term (Virtual Terminal) ─────────────────────────────────────────────
+//
+// `machbus term` is a group with three subcommands:
+//   machbus term file   <pool.iop>      — render offline
+//   machbus term server --iface vcan0   — live VT server
+//   machbus term client <pool.iop> --iface vcan0 — upload a pool (test)
+
+#[derive(Subcommand, Debug)]
+pub enum TermSub {
+    /// Render an object pool from a `.iop` file (offline).
+    File(TermFileArgs),
+    /// Live VT server: receive a pool over CAN and render it.
+    Server(TermServerArgs),
+    /// Live VT client: upload a pool to a server (the test counterpart).
+    Client(TermClientArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct TermFileArgs {
+    /// Path to the ISOBUS object pool (`.iop`) file to render.
+    pub iop: String,
+    /// Initial mask object ID (hex), e.g. `1F`.
+    #[arg(short = 'm', long = "mask", value_name = "ID")]
+    pub mask: Option<String>,
+    /// VT canvas size in pixels, e.g. `480x240`.
+    #[arg(long = "canvas", value_name = "WxH")]
+    pub canvas: Option<String>,
+    /// Physical soft-key count (0 = legacy unlimited).
+    #[arg(long = "physical-soft-keys", value_name = "N")]
+    pub physical_soft_keys: Option<u8>,
+    /// Navigation soft-key count.
+    #[arg(long = "navigation-soft-keys", value_name = "N")]
+    pub navigation_soft_keys: Option<u8>,
+}
+
+#[derive(Args, Debug)]
+pub struct TermServerArgs {
+    /// SocketCAN interface.
+    #[arg(short = 'i', long = "iface", default_value = "vcan0")]
+    pub iface: String,
+    /// Preferred VT source address (hex).
+    #[arg(long = "addr", default_value = "26")]
+    pub addr: String,
+}
+
+#[derive(Args, Debug)]
+pub struct TermClientArgs {
+    /// Path to the ISOBUS object pool (`.iop`) file to upload. Omit with
+    /// `--demo` to upload a built-in small pool.
+    pub iop: Option<String>,
+    /// SocketCAN interface.
+    #[arg(short = 'i', long = "iface", default_value = "vcan0")]
+    pub iface: String,
+    /// Preferred client (ECU) source address (hex).
+    #[arg(long = "addr", default_value = "80")]
+    pub addr: String,
+    /// Upload a built-in small demo pool (fast connect; good for testing).
+    #[arg(long = "demo")]
+    pub demo: bool,
 }

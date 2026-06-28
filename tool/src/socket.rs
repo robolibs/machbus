@@ -207,6 +207,13 @@ impl RawSocket {
             Ok(Some((frame, iface)))
         }
     }
+
+    /// Non-blocking receive: returns the next frame if one is immediately
+    /// available, else `Ok(None)`. Used by the live VT pump so it never
+    /// stalls the render loop.
+    pub fn try_recv(&self) -> io::Result<Option<(RawFrame, String)>> {
+        self.recv(Duration::ZERO)
+    }
 }
 
 #[cfg(target_os = "linux")]

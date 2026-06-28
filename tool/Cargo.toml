@@ -1,0 +1,26 @@
+[package]
+name = "machbus-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CAN command-line tools (dump, send, gen) built on the machbus stack"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "machbus"
+path = "src/main.rs"
+
+[dependencies]
+# The root crate supplies the candump frame model and the ISOBUS/J1939
+# PGN/source/destination decoder plus the NMEA 2000 PGN catalog. Default
+# features stay on because the library only supports two configurations —
+# the full hosted `default` build and the `embedded` no_std build — and a
+# hosted binary is the right fit for a CLI. The tool does its own raw
+# SocketCAN I/O via libc, exactly like the upstream can-utils, so it has
+# no direct dependency on `wirebit`.
+machbus = { path = ".." }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+# TUI backend for `machbus live`.
+ratatui = "0.29"
+crossterm = "0.28"

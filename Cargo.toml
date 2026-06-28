@@ -78,3 +78,11 @@ proptest = "1"
 rstest = "0.23"
 tracing-subscriber = "0.3"
 futures = "0.3"
+
+# The `machbus` CLI binary (dump/send/gen/live) lives in `tool/` as a
+# separate crate that depends on this library. Declaring it as a workspace
+# member lets `make build` produce the binary into the shared `target/`
+# directory and keeps a single build cache.
+[workspace]
+members = ["tool"]
+resolver = "2"

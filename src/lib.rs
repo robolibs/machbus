@@ -12,6 +12,8 @@
 //! - `nmea` — *(phase 16)* NMEA2000 definitions, parsing/generation, GNSS.
 
 #![cfg_attr(feature = "embedded", no_std)]
+// Rust 1.96 added collapsible_match; these patterns pre-date it.
+#![allow(clippy::collapsible_match)]
 
 extern crate alloc;
 

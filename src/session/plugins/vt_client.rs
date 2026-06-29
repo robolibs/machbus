@@ -263,7 +263,10 @@ impl Plugin for VtClient {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         self.client.set_self_address(ctx.address());
-        if self.connect_requested {
+        // Only kick off the connect FSM once the address claim has completed
+        // (otherwise IsoNet silently drops the WS-Master / Get-Memory frames
+        // because the source address is still NULL).
+        if self.connect_requested && ctx.address() != crate::net::NULL_ADDRESS {
             self.connect_requested = false;
             let _ = self.client.connect();
         }

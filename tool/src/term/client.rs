@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use machbus::isobus::vt::{
     DataMaskBody, FillAttributesBody, FontAttributesBody, LineAttributesBody, ObjectID, ObjectPool,
-    ObjectType, OutputRectangleBody, OutputStringBody, VTClientConfig, VTState, WorkingSet,
-    WorkingSetBody, create_data_mask, create_fill_attributes, create_font_attributes,
+    ObjectType, OutputRectangleBody, OutputStringBody, VTClientConfig, VTState, VTVersion,
+    WorkingSet, WorkingSetBody, create_data_mask, create_fill_attributes, create_font_attributes,
     create_line_attributes, create_output_rectangle, create_output_string, create_working_set,
 };
 use machbus::net::Name;
@@ -43,7 +43,13 @@ pub fn run(args: TermClientArgs) -> Result<(), String> {
     let mut ws = WorkingSet::default();
     ws.set_active_mask(first_mask);
 
-    let plugin = VtClientPlugin::new(VTClientConfig::default(), pool, ws);
+    let vt_version = match args.vt_version {
+        3 => VTClientConfig::default().with_version(VTVersion::Version3),
+        5 => VTClientConfig::default().with_version(VTVersion::Version5),
+        6 => VTClientConfig::default().with_version(VTVersion::Version6),
+        _ => VTClientConfig::default(), // version 4
+    };
+    let plugin = VtClientPlugin::new(vt_version, pool, ws);
     let mut session = Session::builder(client_name(), addr)
         .plug(plugin)
         .build()

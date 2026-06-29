@@ -1,4 +1,3 @@
-use machbus::isobus::GuidanceData;
 use machbus::isobus::implement::{
     AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommandStatus, DriveStrategyCmd,
     DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue, GroundBasedSpeedDist,
@@ -16,7 +15,7 @@ use machbus::j1939::{
     HeartbeatTracker, PGN_HEARTBEAT_REQUEST, SpeedAndDistance, heartbeat::hb_seq,
 };
 use machbus::net::pgn_defs::{
-    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_GUIDANCE_MACHINE, PGN_GUIDANCE_SYSTEM,
+    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD,
     PGN_HEARTBEAT, PGN_MACHINE_SPEED, PGN_REAR_HITCH_ROLL_PITCH_CMD, PGN_SHORTCUT_BUTTON,
     PGN_TIME_DATE, PGN_WHEEL_SPEED,
 };
@@ -924,61 +923,6 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         integrity_level: 3,
     };
     assert_eq!(GuidanceSystemStatus::decode(&status.encode()), Some(status));
-}
-
-#[test]
-fn implement_top_level_guidance_rejects_wrong_pgn_width_sources_and_reserved_tail() {
-    let data = GuidanceData {
-        curvature: Some(1.25),
-        status: Some(2),
-        ..GuidanceData::default()
-    };
-    let encoded = data.encode();
-    let machine = Message::new(PGN_GUIDANCE_MACHINE, encoded.to_vec(), 0x31);
-    let system = Message::new(PGN_GUIDANCE_SYSTEM, encoded.to_vec(), 0x31);
-
-    for msg in [machine, system] {
-        let decoded = GuidanceData::decode(&msg).unwrap();
-        assert!((decoded.curvature.unwrap() - 1.25).abs() < 0.25);
-        assert_eq!(decoded.status, Some(2));
-        assert_eq!(decoded.timestamp_us, msg.timestamp_us);
-    }
-
-    assert_eq!(
-        GuidanceData::decode(&Message::new(PGN_TIME_DATE, encoded.to_vec(), 0x31)),
-        None,
-        "the shared top-level guidance helper must not accept unrelated PGNs"
-    );
-
-    for source in [NULL_ADDRESS, BROADCAST_ADDRESS] {
-        assert_eq!(
-            GuidanceData::decode(&Message::new(
-                PGN_GUIDANCE_MACHINE,
-                encoded.to_vec(),
-                source
-            )),
-            None,
-            "guidance messages from invalid network sources must be rejected before decode"
-        );
-    }
-
-    assert_eq!(
-        GuidanceData::decode(&Message::new(
-            PGN_GUIDANCE_MACHINE,
-            encoded[..7].to_vec(),
-            0x31
-        )),
-        None,
-        "classic guidance messages require a complete fixed payload"
-    );
-
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(
-        GuidanceData::decode(&Message::new(PGN_GUIDANCE_MACHINE, bad_tail.to_vec(), 0x31)),
-        None,
-        "reserved tail bytes must remain canonical"
-    );
 }
 
 #[test]

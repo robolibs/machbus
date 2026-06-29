@@ -44,12 +44,15 @@ fn main() -> Result<()> {
     // ANCHOR_END: build
 
     // ANCHOR: command
-    // Command the tractor to follow a 50 m-radius turn (curvature = 1000/50 = 20/km),
-    // then straighten out. `command_curvature(0.0)` is the same as `command_straight`.
-    session
-        .get_mut::<Guidance>()
-        .expect("guidance plugged")
-        .command_radius(50.0);
+    // Engage (assert "intend to steer"), then command a 50 m-radius turn
+    // (curvature = 1000/50 = 20/km). Without engaging, the command is sent with
+    // status "not intended to steer" and a conformant steering ECU will not move.
+    // `command_curvature(0.0)` is the same as `command_straight`.
+    {
+        let g = session.get_mut::<Guidance>().expect("guidance plugged");
+        g.engage();
+        g.command_radius(50.0);
+    }
 
     now = now.add_millis(50);
     session.tick(now); // flushes the queued command to the transmit buffer

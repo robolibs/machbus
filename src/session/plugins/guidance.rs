@@ -6,8 +6,13 @@
 //! the wheels to achieve it. Speed is separate (the tractor owns its speed).
 //!
 //! This plugin acts as the *guidance controller*:
-//! - it broadcasts the **Guidance System Command** (PGN 0xAD00) carrying the
-//!   commanded curvature ([`Guidance::command_curvature`] / [`Guidance::command_radius`]);
+//! - it broadcasts the **Agricultural Guidance System Command** (PGN 0xAD00),
+//!   carrying both the commanded curvature
+//!   ([`Guidance::command_curvature`] / [`Guidance::command_radius`]) **and** the
+//!   *Curvature Command Status* — the 2-bit "intend to steer" request that the
+//!   steering ECU needs in order to engage. Assert it with [`Guidance::engage`]
+//!   and clear it with [`Guidance::disengage`]; until you engage, every command
+//!   is sent with status *not intended to steer* and the ECU will not autosteer;
 //! - it decodes the steering ECU's **Agricultural Guidance Machine Info**
 //!   (PGN 0xAC00) into [`Event::Guidance`] and caches the latest
 //!   [`GuidanceMachineInfo`] (estimated curvature, steering readiness, limit
@@ -16,10 +21,10 @@
 //! Turning a path + GNSS pose into a curvature each cycle (pure-pursuit / Stanley)
 //! is the application's job; this plugin moves the resulting command on the wire.
 
-use crate::isobus::implement::guidance::{
-    GenericSaeBs02SlotValue, GuidanceMachineInfo, GuidanceSystemStatus, SteeringReadiness,
+use crate::isobus::implement::guidance::{GenericSaeBs02SlotValue, GuidanceMachineInfo};
+use crate::isobus::implement::{
+    CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
 };
-use crate::isobus::implement::{MachineDirection, MachineSpeedCommandMsg};
 use crate::net::pgn_defs::{
     PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
 };
@@ -35,29 +40,75 @@ const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO];
 #[derive(Default)]
 pub struct Guidance {
     latest: Option<GuidanceMachineInfo>,
+    /// Whether the controller is currently requesting the steering ECU to steer
+    /// (the *Curvature Command Status* sent on PGN 0xAD00).
+    engaged: bool,
+    /// Last curvature handed to the controller (1/km); re-sent verbatim whenever
+    /// the engage state changes so the new intent reaches the bus immediately.
+    commanded_curvature: f64,
     pending: Vec<(Pgn, Vec<u8>)>,
 }
 
 impl Guidance {
     /// A guidance controller that commands curvature and listens for machine info.
+    /// Starts **disengaged**: call [`engage`](Self::engage) before commands will steer.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Queue an Agricultural Guidance System Command (PGN 0xAD00) carrying the
+    /// current commanded curvature and the engage-derived Curvature Command Status.
+    fn queue_system_command(&mut self) {
+        let cmd = GuidanceSystemCmd {
+            commanded_curvature: self.commanded_curvature,
+            status: if self.engaged {
+                CurvatureCommandStatus::IntendedToSteer
+            } else {
+                CurvatureCommandStatus::NotIntendedToSteer
+            },
+        };
+        self.pending
+            .push((PGN_GUIDANCE_SYSTEM_CMD, cmd.encode().to_vec()));
+    }
+
+    /// Request the steering ECU to engage and steer to the commanded curvature.
+    ///
+    /// Sets the Curvature Command Status to *intended to steer* and immediately
+    /// re-queues the last commanded curvature so the intent reaches the bus on the
+    /// next tick. The ECU only actually engages if its own machine info reports it
+    /// ready (see [`is_steering_ready`](Self::is_steering_ready)).
+    pub fn engage(&mut self) {
+        self.engaged = true;
+        self.queue_system_command();
+    }
+
+    /// Stop requesting steering: clears the engage request and commands straight.
+    ///
+    /// Sends curvature `0.0` with status *not intended to steer*, so a conformant
+    /// steering ECU drops back to manual control.
+    pub fn disengage(&mut self) {
+        self.engaged = false;
+        self.commanded_curvature = 0.0;
+        self.queue_system_command();
+    }
+
+    /// Whether the controller is currently requesting steering (its own intent —
+    /// not the ECU's readiness; for that see [`is_steering_ready`](Self::is_steering_ready)).
+    #[must_use]
+    pub fn is_engaged(&self) -> bool {
+        self.engaged
     }
 
     /// Command the steering system to follow a path **curvature** in 1/km.
     ///
     /// `0.0` = drive straight. Positive and negative follow the ISO 11783-7
     /// wire convention; out-of-range values are clamped by the codec. Queued and
-    /// flushed on the next tick as a Guidance System Command (PGN 0xAD00).
+    /// flushed on the next tick as a Guidance System Command (PGN 0xAD00). The
+    /// command only steers while the controller is [`engage`](Self::engage)d.
     pub fn command_curvature(&mut self, curvature_per_km: f64) {
-        let cmd = GuidanceSystemStatus {
-            estimated_curvature: curvature_per_km,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 0,
-        };
-        self.pending
-            .push((PGN_GUIDANCE_SYSTEM_CMD, cmd.encode().to_vec()));
+        self.commanded_curvature = curvature_per_km;
+        self.queue_system_command();
     }
 
     /// Command a turn of the given **radius in metres** (a convenience over
@@ -226,5 +277,52 @@ mod tests {
         }
         assert!(saw_curv, "twist must emit a curvature command (PGN 0xAD00)");
         assert!(saw_speed, "twist must emit a speed command (PGN 0xFD43)");
+    }
+
+    /// The Guidance System Command (PGN 0xAD00) must carry the Curvature Command
+    /// Status in byte 2 bits 0..1: `NotIntendedToSteer` (0) while disengaged,
+    /// `IntendedToSteer` (1) after `engage()`. Bits 2..7 are reserved (sent as 1).
+    #[test]
+    fn engage_sets_curvature_command_status_on_the_wire() {
+        use crate::isobus::implement::{CurvatureCommandStatus, GuidanceSystemCmd};
+
+        fn last_system_cmd(s: &mut Session) -> GuidanceSystemCmd {
+            let mut cmd = None;
+            while let Some((_, frame)) = s.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                    cmd = GuidanceSystemCmd::decode(&frame.data);
+                }
+            }
+            cmd.expect("a Guidance System Command was transmitted")
+        }
+
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+
+        // Disengaged: a curvature command requests no steering.
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        assert!(!s.get::<Guidance>().unwrap().is_engaged());
+        s.tick(now);
+        let cmd = last_system_cmd(&mut s);
+        assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
+        assert!((cmd.commanded_curvature - 20.0).abs() < 0.25);
+
+        // engage() re-queues the last curvature with the intend-to-steer flag.
+        s.get_mut::<Guidance>().unwrap().engage();
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+        now = now.add_millis(50);
+        s.tick(now);
+        let cmd = last_system_cmd(&mut s);
+        assert_eq!(cmd.status, CurvatureCommandStatus::IntendedToSteer);
+        assert!((cmd.commanded_curvature - 20.0).abs() < 0.25);
+
+        // disengage() drops the request and commands straight.
+        s.get_mut::<Guidance>().unwrap().disengage();
+        assert!(!s.get::<Guidance>().unwrap().is_engaged());
+        now = now.add_millis(50);
+        s.tick(now);
+        let cmd = last_system_cmd(&mut s);
+        assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
+        assert_eq!(cmd.commanded_curvature, 0.0);
     }
 }

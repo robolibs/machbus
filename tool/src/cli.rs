@@ -29,6 +29,29 @@ pub enum Command {
         #[command(subcommand)]
         command: TermSub,
     },
+    /// ISOBUS drive: WASD guidance + telemetry over CAN.
+    Drive(DriveArgs),
+}
+
+// ── drive ───────────────────────────────────────────────────────────────
+#[derive(Args, Debug)]
+pub struct DriveArgs {
+    /// SocketCAN interface.
+    #[arg(short = 'i', long = "iface", default_value = "vcan0")]
+    pub iface: String,
+    /// Preferred ECU source address (hex).
+    #[arg(long = "addr", default_value = "80")]
+    pub addr: String,
+    /// Default forward speed limit in m/s (W accelerates toward this). Start
+    /// at 0 and use I/K to raise it.
+    #[arg(long = "default-speed", default_value = "0")]
+    pub default_speed: f64,
+    /// Speed step per I/K keypress in m/s.
+    #[arg(long = "speed-step", default_value = "0.5")]
+    pub speed_step: f64,
+    /// Maximum curvature in 1/km for full A/D deflection.
+    #[arg(long = "max-curvature", default_value = "40")]
+    pub max_curvature: f64,
 }
 
 // ── dump ────────────────────────────────────────────────────────────────

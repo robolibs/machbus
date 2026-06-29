@@ -2,6 +2,7 @@ mod bus;
 mod can;
 mod cli;
 mod cmd;
+mod drive;
 mod rng;
 mod signal;
 mod socket;
@@ -20,6 +21,7 @@ fn main() -> std::process::ExitCode {
         Command::Generate(args) => cmd::generate::run(args),
         Command::Live(args) => cmd::live::run(args),
         Command::Term { command } => cmd::term::run(command),
+        Command::Drive(args) => drive::run(args),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -30,7 +32,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// Error-prefix label for the active command.
 fn command_label(command: &Command) -> &'static str {
     match command {
         Command::Dump(_) => "dump",
@@ -42,5 +43,6 @@ fn command_label(command: &Command) -> &'static str {
             TermSub::Server(_) => "term server",
             TermSub::Client(_) => "term client",
         },
+        Command::Drive(_) => "drive",
     }
 }

@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "machbus"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "concord",
  "futures",

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] - 2026-06-29
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Allow rustdoc broken/private intra-doc links
+
 ## [0.1.0] - 2026-06-28
 
 ### <!-- 0 -->⛰️  Features

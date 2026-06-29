@@ -14,6 +14,8 @@
 #![cfg_attr(feature = "embedded", no_std)]
 // Rust 1.96 added collapsible_match; these patterns pre-date it.
 #![allow(clippy::collapsible_match)]
+#![allow(rustdoc::broken_intra_doc_links)]
+#![allow(rustdoc::private_intra_doc_links)]
 
 extern crate alloc;
 

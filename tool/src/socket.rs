@@ -98,7 +98,7 @@ fn resolve_ifindex(fd: &OwnedFd, iface: &str) -> io::Result<libc::c_int> {
     ifr.ifr_name[..n].copy_from_slice(unsafe {
         std::slice::from_raw_parts(bytes.as_ptr() as *const libc::c_char, n)
     });
-    let rc = unsafe { libc::ioctl(fd.as_raw_fd(), libc::SIOCGIFINDEX, &mut ifr) };
+    let rc = unsafe { libc::ioctl(fd.as_raw_fd(), libc::SIOCGIFINDEX as _, &mut ifr) };
     if rc < 0 {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,

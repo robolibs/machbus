@@ -234,4 +234,8 @@ pub struct TermClientArgs {
     /// Upload a built-in small demo pool (fast connect; good for testing).
     #[arg(long = "demo")]
     pub demo: bool,
+    /// VT protocol version to request (2, 3, 4, 5, 6). Default 4. Try a
+    /// lower version if the real VT rejects the connection.
+    #[arg(long = "vt-version", default_value = "4")]
+    pub vt_version: u8,
 }

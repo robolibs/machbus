@@ -1,6 +1,6 @@
 [package]
 name = "machbus"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
 license = "MIT"

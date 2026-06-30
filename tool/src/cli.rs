@@ -30,10 +30,21 @@ pub enum Command {
         command: TermSub,
     },
     /// ISOBUS drive: WASD guidance + telemetry over CAN.
-    Drive(DriveArgs),
+    Drive {
+        #[command(subcommand)]
+        command: DriveSub,
+    },
 }
 
 // ── drive ───────────────────────────────────────────────────────────────
+#[derive(Subcommand, Debug)]
+pub enum DriveSub {
+    /// Drive with WASD keyboard input.
+    Keyboard(DriveArgs),
+    /// Drive with a gamepad/joystick (Xbox, PlayStation, Logitech, etc.).
+    Joystick(DriveArgs),
+}
+
 #[derive(Args, Debug)]
 pub struct DriveArgs {
     /// SocketCAN interface.

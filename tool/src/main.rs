@@ -10,7 +10,7 @@ mod term;
 mod tui;
 
 use clap::Parser;
-use cli::{Cli, Command, TermSub};
+use cli::{Cli, Command, DriveSub, TermSub};
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
@@ -21,7 +21,10 @@ fn main() -> std::process::ExitCode {
         Command::Generate(args) => cmd::generate::run(args),
         Command::Live(args) => cmd::live::run(args),
         Command::Term { command } => cmd::term::run(command),
-        Command::Drive(args) => drive::run(args),
+        Command::Drive { command } => match command {
+            DriveSub::Keyboard(args) => drive::keyboard::run(args),
+            DriveSub::Joystick(args) => drive::joystick::run(args),
+        },
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -43,6 +46,9 @@ fn command_label(command: &Command) -> &'static str {
             TermSub::Server(_) => "term server",
             TermSub::Client(_) => "term client",
         },
-        Command::Drive(_) => "drive",
+        Command::Drive { command } => match command {
+            DriveSub::Keyboard(_) => "drive keyboard",
+            DriveSub::Joystick(_) => "drive joystick",
+        },
     }
 }

@@ -8,57 +8,28 @@
 //! no binary snap — the terminal's irregular repeat timing just
 //! refreshes the intensity back to 1.0.
 
+//! `machbus drive` — shared physics + state. Input is in `keyboard.rs` or
+//! `joystick.rs`; rendering is in `view.rs`.
+
+pub mod joystick;
+pub mod keyboard;
 mod view;
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use machbus::isobus::implement::tractor_commands::{HitchCommand, PtoCommand};
 use machbus::net::Name;
 use machbus::session::Session;
 use machbus::session::plugins::{Gnss, Guidance, Implement};
-use machbus::session::{Hitch, Pto};
 use machbus::time::Instant as MbInstant;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::bus::Bus;
 use crate::cli::DriveArgs;
-use crate::signal;
-
-// How fast key intensity decays (seconds to reach 0 after last press).
-// Must be long enough to survive the terminal's repeat pauses (~1s gap
-// after ~1s of holding on some systems). 2s gives comfortable margin.
-const KEY_DECAY: f64 = 1.0;
 
 // Physics rates (per second, proportional to setpoint).
 const R_WITH: f64 = 0.10;
 const R_DRAG: f64 = 0.05;
-
-/// A key with continuous intensity (0.0–1.0). Press = 1.0, decays to 0
-/// over `KEY_DECAY` seconds. No binary snap = no flicker.
-pub struct Key {
-    intensity: f64,
-}
-
-impl Key {
-    pub fn new() -> Self {
-        Self { intensity: 0.0 }
-    }
-
-    fn press(&mut self) {
-        self.intensity = 1.0;
-    }
-
-    fn tick(&mut self, dt: f64) {
-        self.intensity = (self.intensity - dt / KEY_DECAY).max(0.0);
-    }
-
-    /// Visual: lit while there's any intensity left.
-    pub fn lit(&self) -> bool {
-        self.intensity > 0.05
-    }
-}
 
 pub struct DriveState {
     pub speed: f64,
@@ -66,27 +37,14 @@ pub struct DriveState {
     pub speed_step: f64,
     pub max_curvature: f64,
     pub steer: f64,
-    /// Counter-direction multiplier (1x, 2x, 3x, 4x). Cycled by X key.
     pub counter_mult: u8,
     pub status: String,
     pub claimed: bool,
     pub claimed_addr: u8,
-    pub kw: Key,
-    pub ks: Key,
-    pub ka: Key,
-    pub kd: Key,
-    pub ki: Key,
-    pub kk: Key,
-    pub kh: Key,
-    pub kj: Key,
-    pub kp: Key,
-    pub ko: Key,
-    pub kx: Key,
-    pub kenter: Key,
 }
 
 impl DriveState {
-    fn new(args: &DriveArgs) -> Self {
+    pub fn new(args: &DriveArgs) -> Self {
         Self {
             speed: 0.0,
             speed_limit: args.default_speed,
@@ -94,21 +52,9 @@ impl DriveState {
             max_curvature: args.max_curvature,
             steer: 0.0,
             counter_mult: 2,
-            status: "press I to set speed, then W".into(),
+            status: String::new(),
             claimed: false,
             claimed_addr: 0,
-            kw: Key::new(),
-            ks: Key::new(),
-            ka: Key::new(),
-            kd: Key::new(),
-            ki: Key::new(),
-            kk: Key::new(),
-            kh: Key::new(),
-            kj: Key::new(),
-            kp: Key::new(),
-            ko: Key::new(),
-            kx: Key::new(),
-            kenter: Key::new(),
         }
     }
 
@@ -116,40 +62,49 @@ impl DriveState {
         self.steer * self.max_curvature
     }
 
-    fn tick_keys(&mut self, dt: f64) {
-        self.kw.tick(dt);
-        self.ks.tick(dt);
-        self.ka.tick(dt);
-        self.kd.tick(dt);
-        self.ki.tick(dt);
-        self.kk.tick(dt);
-        self.kh.tick(dt);
-        self.kj.tick(dt);
-        self.kp.tick(dt);
-        self.ko.tick(dt);
-        self.kx.tick(dt);
-        self.kenter.tick(dt);
-    }
-
-    fn tick_physics(&mut self, dt: f64) {
-        let w_eff = self.kw.intensity - self.ks.intensity;
-        let s_eff = self.ks.intensity - self.kw.intensity;
-        let steer_eff = self.kd.intensity - self.ka.intensity;
+    /// Apply physics from an analog input (-1..+1 for each axis).
+    /// `throttle`: +1 = full forward, -1 = full reverse/brake.
+    /// `steer_input`: +1 = full right, -1 = full left.
+    /// Values are applied directly (the stick IS the gradual control).
+    pub fn apply_analog(&mut self, throttle: f64, steer_input: f64, dt: f64) {
         let limit = self.speed_limit.abs().max(0.5);
         let against = R_WITH * self.counter_mult as f64;
 
-        // Speed.
-        if w_eff > 0.0 {
-            let r = if self.speed >= 0.0 { R_WITH } else { against };
-            self.speed =
-                (self.speed + r * limit * dt * w_eff).clamp(-self.speed_limit, self.speed_limit);
+        // Speed: throttle directly sets target speed as fraction of limit.
+        let target = throttle * limit;
+        let rate =
+            if (target - self.speed).signum() == self.speed.signum() || self.speed.abs() < 0.01 {
+                R_WITH * 3.0 // moving toward target direction: moderate
+            } else {
+                against * 3.0 // countering: faster
+            };
+        let max_delta = rate * limit * dt;
+        let diff = target - self.speed;
+        if diff.abs() <= max_delta {
+            self.speed = target;
+        } else {
+            self.speed += diff.signum() * max_delta;
         }
-        if s_eff > 0.0 {
-            let r = if self.speed <= 0.0 { R_WITH } else { against };
-            self.speed =
-                (self.speed - r * limit * dt * s_eff).clamp(-self.speed_limit, self.speed_limit);
+        self.speed = self.speed.clamp(-limit, limit);
+
+        // Steer: analog input directly sets target steer.
+        let steer_target = steer_input.clamp(-1.0, 1.0);
+        let steer_rate = if steer_target.signum() == self.steer.signum() || self.steer.abs() < 0.01
+        {
+            R_WITH * 3.0
+        } else {
+            against * 3.0
+        };
+        let max_s = steer_rate * dt;
+        let s_diff = steer_target - self.steer;
+        if s_diff.abs() <= max_s {
+            self.steer = steer_target;
+        } else {
+            self.steer += s_diff.signum() * max_s;
         }
-        if w_eff <= 0.0 && s_eff <= 0.0 {
+
+        // If no input, drift toward 0.
+        if throttle.abs() < 0.05 {
             let d2 = R_DRAG * limit * dt;
             if self.speed > 0.0 {
                 self.speed = (self.speed - d2).max(0.0);
@@ -157,15 +112,7 @@ impl DriveState {
                 self.speed = (self.speed + d2).min(0.0);
             }
         }
-
-        // Steering.
-        if steer_eff > 0.0 {
-            let r = if self.steer >= 0.0 { R_WITH } else { against };
-            self.steer = (self.steer + r * dt * steer_eff).clamp(-1.0, 1.0);
-        } else if steer_eff < 0.0 {
-            let r = if self.steer <= 0.0 { R_WITH } else { against };
-            self.steer = (self.steer + r * dt * steer_eff).clamp(-1.0, 1.0);
-        } else {
+        if steer_input.abs() < 0.05 {
             let r = R_DRAG * dt;
             if self.steer.abs() <= r {
                 self.steer = 0.0;
@@ -175,7 +122,7 @@ impl DriveState {
         }
     }
 
-    fn flush(&mut self, session: &mut Session) {
+    pub fn flush(&mut self, session: &mut Session) {
         if !self.claimed {
             return;
         }
@@ -185,59 +132,21 @@ impl DriveState {
         }
     }
 
-    fn press(&mut self, c: char, session: &mut Session) {
-        match c {
-            'w' => self.kw.press(),
-            's' => self.ks.press(),
-            'a' => self.ka.press(),
-            'd' => self.kd.press(),
-            'i' => {
-                self.ki.press();
-                self.speed_limit += self.speed_step;
-            }
-            'k' => {
-                self.kk.press();
-                self.speed_limit = (self.speed_limit - self.speed_step).max(0.0);
-            }
-            'h' => {
-                self.kh.press();
-                if let Some(imp) = session.get_mut::<Implement>() {
-                    imp.command_hitch(Hitch::Rear, HitchCommand::Raise);
-                }
-            }
-            'j' => {
-                self.kj.press();
-                if let Some(imp) = session.get_mut::<Implement>() {
-                    imp.command_hitch(Hitch::Rear, HitchCommand::Lower);
-                }
-            }
-            'p' => {
-                self.kp.press();
-                if let Some(imp) = session.get_mut::<Implement>() {
-                    imp.command_pto(Pto::Rear, PtoCommand::Engage);
-                }
-            }
-            'o' => {
-                self.ko.press();
-                if let Some(imp) = session.get_mut::<Implement>() {
-                    imp.command_pto(Pto::Rear, PtoCommand::Disengage);
-                }
-            }
-            'x' => {
-                self.kx.press();
-                self.counter_mult = (self.counter_mult % 4) + 1; // 1→2→3→4→1
-            }
-            '\n' => {
-                self.kenter.press();
-                self.speed = 0.0;
-                self.steer = 0.0;
-            }
-            _ => {}
+    pub fn update_status(&mut self) {
+        if self.claimed {
+            self.status = format!(
+                "v={:.2}  κ={:.1}  steer={:+.2}  limit={:.1}",
+                self.speed,
+                self.curvature(),
+                self.steer,
+                self.speed_limit,
+            );
         }
     }
 }
 
-pub fn run(args: DriveArgs) -> Result<(), String> {
+/// Shared session setup for both keyboard and joystick modes.
+pub fn setup_session(args: &DriveArgs) -> Result<(Session, Bus, DriveState), String> {
     let addr = parse_addr(&args.addr)?;
     let name = Name::default()
         .with_self_configurable(true)
@@ -253,90 +162,26 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
         .map_err(|e| format!("session: {e}"))?;
     session.start().map_err(|e| format!("start: {e}"))?;
     let bus = Bus::open(&args.iface).map_err(|e| format!("open: {e}"))?;
-
-    signal::install_cancel_handler();
-    let mut terminal = setup_terminal()?;
-    let result = drive_loop(&mut terminal, &mut session, &bus, &args);
-    restore_terminal(&mut terminal);
-    result
+    let state = DriveState::new(args);
+    Ok((session, bus, state))
 }
 
-fn drive_loop(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    session: &mut Session,
-    bus: &Bus,
-    args: &DriveArgs,
-) -> Result<(), String> {
-    let mut state = DriveState::new(args);
-    let start = Instant::now();
-    let mut last = start;
-    let mut should_quit = false;
+/// Shared pump + claim + flush tick.
+pub fn shared_tick(session: &mut Session, bus: &Bus, state: &mut DriveState, start: Instant) {
+    let mb = MbInstant::ZERO.add_millis(start.elapsed().as_millis() as u64);
+    bus.pump(session, mb);
+    session.tick(mb);
 
-    while !should_quit {
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f64().min(0.1);
-        last = now;
-
-        // 1. Drain all input FIRST (before key decay).
-        while event::poll(Duration::from_millis(3)).map_err(|e| format!("poll: {e}"))? {
-            if let Ok(Event::Key(k)) = event::read()
-                && k.kind == KeyEventKind::Press
-            {
-                if (k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL))
-                    || k.code == KeyCode::Char('q')
-                {
-                    should_quit = true;
-                    break;
-                }
-                let c = match k.code {
-                    KeyCode::Char(ch) => ch.to_ascii_lowercase(),
-                    KeyCode::Enter => '\n',
-                    _ => continue,
-                };
-                state.press(c, session);
-            }
-        }
-
-        // 2. Bus + session.
-        let mb = MbInstant::ZERO.add_millis(start.elapsed().as_millis() as u64);
-        bus.pump(session, mb);
-        session.tick(mb);
-
-        // 3. Claim.
-        let was = state.claimed;
-        state.claimed = session.is_claimed();
-        if state.claimed && !was {
-            state.claimed_addr = session.address();
-        }
-
-        // 4. Decay keys + physics.
-        state.tick_keys(dt);
-        state.tick_physics(dt);
-        state.flush(session);
-
-        // 5. Status + render.
-        if state.claimed {
-            state.status = format!(
-                "v={:.2}  κ={:.1}  steer={:+.2}  limit={:.1}",
-                state.speed,
-                state.curvature(),
-                state.steer,
-                state.speed_limit,
-            );
-        }
-
-        terminal
-            .draw(|f| view::render(f, &state, session))
-            .map_err(|e| format!("draw: {e}"))?;
-
-        if signal::cancel_requested() {
-            should_quit = true;
-        }
+    let was = state.claimed;
+    state.claimed = session.is_claimed();
+    if state.claimed && !was {
+        state.claimed_addr = session.address();
     }
-    Ok(())
+    state.flush(session);
+    state.update_status();
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>, String> {
+pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>, String> {
     crossterm::terminal::enable_raw_mode().map_err(|e| format!("raw mode: {e}"))?;
     crossterm::execute!(
         std::io::stdout(),
@@ -347,7 +192,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>, Strin
     Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(|e| format!("terminal: {e}"))
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) {
+pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) {
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(
         terminal.backend_mut(),
@@ -357,7 +202,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) 
     let _ = terminal.show_cursor();
 }
 
-fn parse_addr(spec: &str) -> Result<u8, String> {
+pub fn parse_addr(spec: &str) -> Result<u8, String> {
     u8::from_str_radix(spec.trim_start_matches("0x"), 16)
         .map_err(|_| format!("--addr '{spec}': expected hex byte"))
 }

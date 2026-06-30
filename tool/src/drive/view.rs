@@ -1,4 +1,4 @@
-//! Rendering for `machbus drive`: keyboard + compact telemetry.
+//! Rendering for `machbus drive`: keyboard + joystick + compact telemetry.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -10,6 +10,8 @@ use machbus::session::Session;
 use machbus::session::plugins::{Gnss, Guidance};
 
 use super::DriveState;
+use super::joystick::PadState;
+use super::keyboard::KeyboardState;
 
 const CYAN: Color = Color::Cyan;
 const GOLD: Color = Color::Yellow;
@@ -18,7 +20,7 @@ const RED: Color = Color::Red;
 const GRAY: Color = Color::DarkGray;
 const WHITE: Color = Color::White;
 
-pub fn render(f: &mut Frame, state: &DriveState, session: &Session) {
+pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, session: &Session) {
     let area = f.area();
     let cols = Layout::default()
         .direction(Direction::Vertical)
@@ -31,7 +33,227 @@ pub fn render(f: &mut Frame, state: &DriveState, session: &Session) {
         .split(area);
 
     draw_title(f, state, cols[0]);
-    draw_keyboard(f, state, cols[1]);
+    draw_keyboard(f, state, kb, cols[1]);
+    draw_telemetry(f, state, session, cols[2]);
+    draw_status(f, state, cols[3]);
+}
+
+// ─── gamepad layout ─────────────────────────────────────────────────────
+
+fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .border_style(Style::default().fg(GRAY))
+        .title(Span::styled(
+            format!(
+                " {} ",
+                if pad.pad_name.is_empty() {
+                    "Gamepad"
+                } else {
+                    &pad.pad_name
+                }
+            ),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height < 10 {
+        return;
+    }
+
+    let cx = inner.x + inner.width / 2;
+    let cy = inner.y + inner.height / 2;
+
+    // Left stick circle (steering + throttle source).
+    draw_stick(f, cx - 16, cy - 2, pad.lstick_x, pad.lstick_y, "L", GOLD);
+    // Right stick circle (unused for now, but show it).
+    draw_stick(f, cx + 10, cy - 2, 0.0, 0.0, "R", GRAY);
+
+    // Trigger bars above.
+    let ty = inner.y + 1;
+    draw_trigger(f, cx - 24, ty, "L2", pad.ltrigger, RED);
+    draw_trigger(f, cx + 14, ty, "R2", pad.rtrigger, GREEN);
+
+    // Buttons (A/B/X/Y) in a diamond on the right side.
+    let bx = cx + 14;
+    let by = cy + 1;
+    draw_pad_btn(f, bx, by - 2, "Y", pad.y_held);
+    draw_pad_btn(f, bx - 4, by, "X", pad.x_held);
+    draw_pad_btn(f, bx + 4, by, "B", pad.b_held);
+    draw_pad_btn(f, bx, by + 2, "A", pad.a_held);
+
+    // D-pad on the left.
+    let dx = cx - 14;
+    draw_pad_btn(f, dx, by - 2, "↑", pad.dpad_up);
+    draw_pad_btn(f, dx - 4, by, "←", false);
+    draw_pad_btn(f, dx + 4, by, "→", false);
+    draw_pad_btn(f, dx, by + 2, "↓", pad.dpad_down);
+
+    // Start button.
+    draw_pad_btn(f, cx, by, "⌖", pad.start_held);
+
+    // Labels under sticks.
+    f.render_widget(
+        Paragraph::new("steer")
+            .style(Style::default().fg(GRAY))
+            .alignment(Alignment::Center),
+        Rect {
+            x: cx - 20,
+            y: cy + 3,
+            width: 8,
+            height: 1,
+        },
+    );
+    f.render_widget(
+        Paragraph::new("throttle")
+            .style(Style::default().fg(GRAY))
+            .alignment(Alignment::Center),
+        Rect {
+            x: cx - 20,
+            y: cy + 4,
+            width: 8,
+            height: 1,
+        },
+    );
+
+    // Info line.
+    f.render_widget(
+        Paragraph::new(format!(
+            "L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
+            pad.lstick_x,
+            pad.lstick_y,
+            pad.rtrigger * 100.0,
+            pad.ltrigger * 100.0,
+            state.counter_mult,
+        ))
+        .style(Style::default().fg(WHITE)),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y + inner.height.saturating_sub(1),
+            width: inner.width - 2,
+            height: 1,
+        },
+    );
+}
+
+fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col: Color) {
+    let w = 8u16;
+    let h = 4u16;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .border_style(Style::default().fg(col))
+        .title(Span::styled(format!(" {label} "), Style::default().fg(col)));
+    let inner = block.inner(Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    });
+    f.render_widget(
+        block,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        },
+    );
+
+    // Centre cross.
+    let ccx = inner.x + inner.width / 2;
+    let ccy = inner.y + inner.height / 2;
+
+    // Stick dot position (clamped to inner area).
+    let dot_x = inner.x + ((sx + 1.0) * 0.5 * (inner.width as f64 - 1.0)).round() as u16;
+    let dot_y = inner.y + ((1.0 - (sy + 1.0) * 0.5) * (inner.height as f64 - 1.0)).round() as u16;
+
+    // Draw crosshair lines.
+    if inner.height > 0 {
+        let mut line = String::new();
+        for i in 0..inner.width {
+            line.push(if ccx == inner.x + i { '┼' } else { '─' });
+        }
+        f.render_widget(
+            Paragraph::new(Span::styled(line, Style::default().fg(GRAY))),
+            Rect {
+                x: inner.x,
+                y: ccy,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+
+    // Draw the dot.
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            "●",
+            Style::default().fg(col).add_modifier(Modifier::BOLD),
+        )),
+        Rect {
+            x: dot_x,
+            y: dot_y,
+            width: 1,
+            height: 1,
+        },
+    );
+}
+
+fn draw_trigger(f: &mut Frame, x: u16, y: u16, label: &str, value: f64, col: Color) {
+    let w = 10u16;
+    let pct = (value.clamp(0.0, 1.0) * w as f64).round() as u16;
+    let bar: String = "▰".repeat(pct as usize) + &"▱".repeat((w - pct) as usize);
+    let line = format!("{label} {bar}");
+    f.render_widget(
+        Paragraph::new(Span::styled(line, Style::default().fg(col))),
+        Rect {
+            x,
+            y,
+            width: w + 4,
+            height: 1,
+        },
+    );
+}
+
+fn draw_pad_btn(f: &mut Frame, x: u16, y: u16, label: &str, held: bool) {
+    let style = if held {
+        Style::default()
+            .fg(Color::Black)
+            .bg(CYAN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(WHITE).bg(Color::Indexed(236))
+    };
+    f.render_widget(
+        Paragraph::new(format!(" {label} "))
+            .style(style)
+            .alignment(Alignment::Center),
+        Rect {
+            x,
+            y,
+            width: label.chars().count() as u16 + 2,
+            height: 1,
+        },
+    );
+}
+
+pub fn render_joystick(f: &mut Frame, state: &DriveState, pad: &PadState, session: &Session) {
+    let area = f.area();
+    let cols = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(8),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    draw_title(f, state, cols[0]);
+    draw_gamepad(f, state, pad, cols[1]);
     draw_telemetry(f, state, session, cols[2]);
     draw_status(f, state, cols[3]);
 }
@@ -64,7 +286,7 @@ fn draw_title(f: &mut Frame, state: &DriveState, area: Rect) {
 
 // ─── keyboard ────────────────────────────────────────────────────────────
 
-fn draw_keyboard(f: &mut Frame, state: &DriveState, area: Rect) {
+fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
@@ -83,27 +305,27 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, area: Rect) {
     let step = 4u16;
 
     // W
-    key(f, cx, y, 'W', state.kw.lit(), "forward");
+    key(f, cx, y, 'W', kb.kw.lit(), "forward");
     y += step;
     // A S D
-    key(f, cx - 14, y, 'A', state.ka.lit(), "left");
-    key(f, cx, y, 'S', state.ks.lit(), "brake");
-    key(f, cx + 14, y, 'D', state.kd.lit(), "right");
+    key(f, cx - 14, y, 'A', kb.ka.lit(), "left");
+    key(f, cx, y, 'S', kb.ks.lit(), "brake");
+    key(f, cx + 14, y, 'D', kb.kd.lit(), "right");
     y += step;
     // ENTER
-    key_wide(f, cx, y, "ENTER", 14, state.kenter.lit(), "stop");
+    key_wide(f, cx, y, "ENTER", 14, kb.kenter.lit(), "stop");
     y += step;
     // I K
-    key(f, cx - 7, y, 'I', state.ki.lit(), "limit +");
-    key(f, cx + 7, y, 'K', state.kk.lit(), "limit −");
+    key(f, cx - 7, y, 'I', kb.ki.lit(), "limit +");
+    key(f, cx + 7, y, 'K', kb.kk.lit(), "limit −");
     y += step;
     // H J
-    key(f, cx - 7, y, 'H', state.kh.lit(), "hitch ↑");
-    key(f, cx + 7, y, 'J', state.kj.lit(), "hitch ↓");
+    key(f, cx - 7, y, 'H', kb.kh.lit(), "hitch ↑");
+    key(f, cx + 7, y, 'J', kb.kj.lit(), "hitch ↓");
     y += step;
     // P O
-    key(f, cx - 7, y, 'P', state.kp.lit(), "PTO on");
-    key(f, cx + 7, y, 'O', state.ko.lit(), "PTO off");
+    key(f, cx - 7, y, 'P', kb.kp.lit(), "PTO on");
+    key(f, cx + 7, y, 'O', kb.ko.lit(), "PTO off");
     y += step;
     // X
     key_fmt(
@@ -112,7 +334,7 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, area: Rect) {
         y,
         &format!("X×{}", state.counter_mult),
         9,
-        state.kx.lit(),
+        kb.kx.lit(),
         "counter rate",
     );
 }

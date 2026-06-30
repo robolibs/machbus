@@ -110,41 +110,96 @@ broadcasts:
 You command through 0xAD00 and you always verify through 0xAC00. Never assume the
 machine reached the curvature you requested — read back the estimated curvature.
 
-## Readiness, limits, and operator override
+## What each signal means, in plain terms
 
-Autosteer is **operator-supervised, not autonomous.** A person is in the seat and
-is expected to stay ready to take over. Several gates sit between your command and
-the wheels actually moving:
+Two messages, a handful of fields. Here is what each field is actually telling you —
+no jargon.
 
-- **Readiness.** The steering system reports whether it is ready and engaged. If it
-  is not ready, your command will not move anything no matter how often you send it.
-  Gate on readiness before you treat a command as effective.
-- **Limit status.** The steering enforces its own curvature and rate limits. A
-  request beyond what the machine can do is clamped, and the limit status tells you
-  so. A non-recoverable fault in that status means the system has given up — stop
-  asking it to steer.
-- **Operator override.** The operator can always take the wheel. Touching the
-  steering input drops the system out of automatic mode immediately. This is a hard
-  rule of the design, not an optional courtesy: when the operator intervenes, your
-  command no longer governs the machine, and you must stop asserting intent.
+**On the command (PGN 0xAD00), controller → tractor:**
 
-The discipline that overrides every optimisation: **honour a dropout at once and
-respect the steering system's limits.** The steering ECU is the authority on its
-own safety. Your guidance controller defers to it, every cycle.
+| Field | What it means |
+| --- | --- |
+| Commanded curvature | How hard to turn, in 1/km (0 = straight, sign = direction). |
+| Curvature Command Status | The **engage request**. *Intended to steer* = "take the wheel"; *not intended to steer* = "I'm only reporting a number, don't steer." This single flag is the difference between a suggestion and a request — it is exactly what `engage()` and `disengage()` flip. |
 
-## Where the tractor advertises that it can steer
+**On the feedback (PGN 0xAC00), tractor → bus.** The steering ECU broadcasts this
+every 100 ms the whole time it is powered. *Seeing this message on the bus at all is
+the first signal that the ECU can be steered.* Inside it:
 
-A tractor does not silently accept guidance commands. Under **ISO 11783-9** (the
-tractor ECU), a tractor advertises the facilities it offers, and a
-guidance/steering-readiness facility is one of them. A guidance controller can read
-that advertisement to know, before it commands anything, whether this tractor is
-even capable of being steered over the bus.
+| Field | What it means | Value that means "good to steer" |
+| --- | --- | --- |
+| Steering System Readiness State | The headline "am I ready?" flag. | **On / active** = ready and engaged. Off/passive = not ready. |
+| Mechanical Lockout | A physical safety cut-out (e.g. a lockout switch). | **Not active.** If it is Active, you cannot engage at all. |
+| Remote Engage Switch Status | The operator's **arm switch** — most systems need the person in the seat to flip a switch or hold a button before autosteer is allowed to take the wheel. | **On / active** (operator has armed it). |
+| Steering Input Position Status | Whether the operator's steering wheel is being moved — the basis for override detection. | _(informational)_ |
+| Guidance Limit Status | Whether your command is being clamped, the system is at a limit, or has a non-recoverable fault. | **Not limited.** |
+| Exit / reason code | *Why* the system is refusing or last dropped out (a diagnostic — see below). | **No reason / all clear.** |
+| Estimated curvature | What the wheels are actually producing right now — not necessarily what you asked for. | _(always read it back; never assume)_ |
 
-On top of the raw messages sits the **AEF TIM / automation layer**, which treats
-steering as an **authority-controlled automated function**. Authority to steer must
-be granted, and it comes with operator-override interlocks: the same principle as
-the wheel-touch dropout, formalised as part of the automation contract. See
-[TIM](tim.md) for how the tractor grants and revokes that authority.
+`is_steering_ready()` is exactly the "Steering System Readiness State == on/active"
+check. For everything else, read the full record with `latest_machine_info()`.
+
+### When it refuses: the exit / reason code
+
+When the steering ECU will not — or will no longer — accept your commands, it says
+why in the exit/reason code. The reasons a real system reports (from the AEF
+automation guideline's external-guidance table) include:
+
+- required level of operator presence/awareness not detected
+- **operator override of function** — someone touched the wheel
+- operator control not in a valid position
+- **remote command timeout** — your command heartbeat stalled
+- remote command out of range / invalid
+- system not calibrated
+- alternate guidance system active
+- vehicle speed too high / too low
+- transmission gear does not allow remote commands (park, etc.)
+
+Treat any non-clear reason as "stop asserting intent and tell the operator," not as
+something to retry blindly.
+
+## The lifecycle: when each thing happens
+
+Read the two messages in order and a normal engage → steer → release cycle looks
+like this:
+
+1. **Power on.** The steering ECU starts broadcasting Agricultural Guidance Machine
+   Info (0xAC00) at 100 ms with readiness = *not ready*. Its mere presence tells your
+   controller the machine is steerable. A deeper, up-front capability check is the
+   **ISO 11783-9** tractor-facilities advertisement, which you can read *before* any
+   guidance traffic to know the tractor supports being steered at all.
+2. **Operator arms it.** The person in the seat flips the remote-engage switch (or
+   holds the button). Remote Engage Switch Status goes on, and the system moves toward
+   ready. Until this happens, *nothing your code sends will steer.*
+3. **Controller asks for the wheel.** Your app calls `engage()` and starts sending
+   the Guidance System Command (0xAD00) carrying the curvature **and** Curvature
+   Command Status = *intended to steer*, on a fixed ~100 ms heartbeat.
+4. **System engages.** With the operator armed, no lockout, speed in range, and the
+   command stream alive, the steering ECU engages: readiness reports *on/active* and
+   the estimated curvature begins tracking your command.
+5. **Steady state.** Every cycle you recompute a curvature from your path + GNSS and
+   resend it, and you read back readiness, limit status, and estimated curvature to
+   confirm the machine is actually following.
+6. **Drop out.** The instant the operator touches the wheel — or speed leaves the
+   window, or your heartbeat stalls — the system leaves automatic mode, readiness
+   drops to *not ready*, and the exit/reason code says why. Your controller must
+   `disengage()` and stop asserting intent at once. It does not fight the operator.
+7. **Release.** When you are done, call `disengage()`: the next command goes out with
+   *not intended to steer*, and the operator has the wheel back.
+
+The rule under all of it: **the steering ECU is the authority on its own safety. Your
+controller asks, the tractor decides, and a dropout is honoured immediately** — every
+cycle.
+
+## Two layers of "is it allowed?"
+
+The fields above are the **raw ISO 11783-7** handshake. On top of them sits the
+**AEF TIM / automation layer**, which treats steering as an
+**authority-controlled automated function**: authority to steer must be granted, and
+it comes with the same operator-override interlocks formalised as part of the
+automation contract. Both layers say the same thing — the operator and the tractor
+stay in charge — at different levels of formality. See [TIM](tim.md) for how that
+authority is granted and revoked.
 
 ## machbus is not a safety system
 
@@ -156,17 +211,18 @@ hardware, and interoperability evidence this crate does not provide.
 
 ## From concept to code
 
-The high-level `session::plugins::Guidance` plugin is the whole surface: command a
-curvature, command by radius, command straight, and read back the steering system's
-estimated curvature, readiness, and limit status. It is also exposed in the C and
-Python bindings (session-level `guidance_*` functions/methods, behind an
-`enable_guidance` flag).
+The high-level `session::plugins::Guidance` plugin is the whole surface: **engage**
+(assert intent to steer) and **disengage**, command a curvature / radius / straight,
+and read back the steering system's estimated curvature, readiness, and limit
+status. It is also exposed in the C and Python bindings (session-level `guidance_*`
+functions/methods, behind an `enable_guidance` flag).
 
 | You read about… | Build it with… | See… |
 | --- | --- | --- |
+| Asking for / releasing the wheel (intent to steer) | `Guidance::engage` / `Guidance::disengage` (sets the Curvature Command Status on 0xAD00) | [Guidance tutorial](../tutorials/guidance.md) |
 | Commanding a path by curvature | `session::plugins::Guidance` (`command_curvature`, `command_radius`, `command_straight`) | [Guidance tutorial](../tutorials/guidance.md) |
 | Commanding in robotics (v, ω) terms | `Guidance::command_velocity` (sends curvature on 0xAD00 + speed on 0xFD43) | [Guidance tutorial](../tutorials/guidance.md) |
-| Reading the steering ECU's feedback | `Guidance::estimated_curvature`, `is_steering_ready`, `Event::Guidance` | [Guidance tutorial](../tutorials/guidance.md) |
+| Reading the steering ECU's feedback | `Guidance::estimated_curvature`, `is_steering_ready`, `latest_machine_info`, `Event::Guidance` | [Guidance tutorial](../tutorials/guidance.md) |
 | The tractor advertising it can steer | ISO 11783-9 facilities | [ISO 11783-9 — the tractor ECU](iso11783-tractor-ecu.md) |
 | Steering as a granted, revocable authority | `session::plugins::Tim` | [TIM (AEF)](tim.md) |
 

@@ -63,6 +63,9 @@ pub struct DriveArgs {
     /// Maximum curvature in 1/km for full A/D deflection.
     #[arg(long = "max-curvature", default_value = "40")]
     pub max_curvature: f64,
+    /// Run without a TUI (headless daemon). Still sends guidance commands.
+    #[arg(long = "daemon")]
+    pub daemon: bool,
 }
 
 // ── dump ────────────────────────────────────────────────────────────────

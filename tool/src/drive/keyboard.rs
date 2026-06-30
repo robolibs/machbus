@@ -181,6 +181,9 @@ impl KeyboardState {
 use machbus::session::plugins::Implement;
 
 pub fn run(args: DriveArgs) -> Result<(), String> {
+    if args.daemon {
+        return run_daemon(args);
+    }
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
     let mut kb = KeyboardState::new();
@@ -229,5 +232,62 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
         }
     }
     restore_terminal(&mut terminal);
+    Ok(())
+}
+
+/// Headless daemon mode — no TUI, just reads keys and prints status.
+fn run_daemon(args: DriveArgs) -> Result<(), String> {
+    signal::install_cancel_handler();
+    let (mut session, bus, mut drive) = setup_session(&args)?;
+    let mut kb = KeyboardState::new();
+    let start = Instant::now();
+    let mut last = start;
+    let mut should_quit = false;
+
+    // Set raw mode for key reading without a full-screen TUI.
+    crossterm::terminal::enable_raw_mode().map_err(|e| format!("raw mode: {e}"))?;
+
+    println!("machbus drive keyboard --daemon  (Ctrl+C to quit)");
+
+    while !should_quit {
+        let now = Instant::now();
+        let dt = now.duration_since(last).as_secs_f64().min(0.1);
+        last = now;
+
+        while event::poll(Duration::from_millis(3)).map_err(|e| format!("poll: {e}"))? {
+            if let Ok(Event::Key(k)) = event::read()
+                && k.kind == KeyEventKind::Press
+            {
+                if (k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL))
+                    || k.code == KeyCode::Char('q')
+                {
+                    should_quit = true;
+                    break;
+                }
+                let c = match k.code {
+                    KeyCode::Char(ch) => ch.to_ascii_lowercase(),
+                    KeyCode::Enter => '\n',
+                    _ => continue,
+                };
+                kb.handle_press(c, &mut drive, &mut session);
+            }
+        }
+
+        shared_tick(&mut session, &bus, &mut drive, start);
+        kb.tick(dt);
+        kb.apply_physics(&mut drive, dt);
+        drive.flush(&mut session);
+
+        // Print status every ~500ms.
+        if start.elapsed().as_millis() % 500 < 3 {
+            drive.update_status();
+            println!("\r{}", drive.status);
+        }
+
+        if signal::cancel_requested() {
+            should_quit = true;
+        }
+    }
+    let _ = crossterm::terminal::disable_raw_mode();
     Ok(())
 }

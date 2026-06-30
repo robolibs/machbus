@@ -206,6 +206,9 @@ fn handle_buttons(pad: &PadState, drive: &mut DriveState, session: &mut Session)
 }
 
 pub fn run(args: DriveArgs) -> Result<(), String> {
+    if args.daemon {
+        return run_daemon(args);
+    }
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
     let mut terminal = setup_terminal()?;
@@ -243,11 +246,14 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
         // 2. Handle one-shot buttons.
         handle_buttons(&pad, &mut drive, &mut session);
 
-        // 3. Compute throttle from sticks + triggers.
-        //    Left stick Y is primary. Triggers add/subtract.
-        let stick_throttle = pad.lstick_y; // +1 = forward, -1 = reverse
-        let trigger_throttle = pad.rtrigger - pad.ltrigger; // R2 = forward, L2 = brake
-        let throttle = (stick_throttle + trigger_throttle).clamp(-1.0, 1.0);
+        // 3. Compute throttle from left stick Y only.
+        //    R2 (right trigger) is now the "dead-man's switch" — the
+        //    engaged button. Nothing moves unless R2 is held.
+        let throttle = if pad.rtrigger > 0.3 {
+            pad.lstick_y // +1 = full forward, -1 = full reverse
+        } else {
+            0.0 // dead-man released: no throttle
+        };
 
         // 4. Apply analog physics.
         drive.apply_analog(throttle, pad.lstick_x, dt);
@@ -278,5 +284,60 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
     }
 
     restore_terminal(&mut terminal);
+    Ok(())
+}
+
+/// Headless daemon mode — no TUI, just gamepad + CAN.
+fn run_daemon(args: DriveArgs) -> Result<(), String> {
+    signal::install_cancel_handler();
+    let (mut session, bus, mut drive) = setup_session(&args)?;
+
+    let mut gilrs = Gilrs::new().map_err(|e| format!("gilrs: {e}"))?;
+    let mut pad = PadState::new();
+    let mut active_id: Option<gilrs::GamepadId> = None;
+
+    let start = Instant::now();
+    let mut last = start;
+    let mut should_quit = false;
+
+    println!("machbus drive joystick --daemon  (Ctrl+C to quit)");
+
+    while !should_quit {
+        let now = Instant::now();
+        let dt = now.duration_since(last).as_secs_f64().min(0.1);
+        last = now;
+
+        poll_gamepad(&mut gilrs, &mut pad, &mut active_id);
+        if let Some(id) = active_id {
+            let gp = gilrs.gamepad(id);
+            pad.lstick_y = deadzone(gp.value(Axis::LeftStickY) as f64);
+            pad.lstick_x = deadzone(gp.value(Axis::LeftStickX) as f64);
+            pad.rtrigger = gp
+                .button_data(Button::RightTrigger)
+                .map_or(0.0, |d| d.value() as f64);
+            pad.ltrigger = gp
+                .button_data(Button::LeftTrigger)
+                .map_or(0.0, |d| d.value() as f64);
+        }
+
+        handle_buttons(&pad, &mut drive, &mut session);
+
+        let throttle = if pad.rtrigger > 0.3 {
+            pad.lstick_y
+        } else {
+            0.0
+        };
+        drive.apply_analog(throttle, pad.lstick_x, dt);
+        shared_tick(&mut session, &bus, &mut drive, start);
+
+        if start.elapsed().as_millis() % 500 < 3 {
+            drive.update_status();
+            println!("\r{}", drive.status);
+        }
+
+        if signal::cancel_requested() {
+            should_quit = true;
+        }
+    }
     Ok(())
 }

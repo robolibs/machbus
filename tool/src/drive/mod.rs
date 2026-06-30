@@ -74,9 +74,9 @@ impl DriveState {
         let target = throttle * limit;
         let rate =
             if (target - self.speed).signum() == self.speed.signum() || self.speed.abs() < 0.01 {
-                R_WITH * 3.0 // moving toward target direction: moderate
+                R_WITH * 0.3 // moving toward target direction: moderate
             } else {
-                against * 3.0 // countering: faster
+                against * 0.3 // countering: faster
             };
         let max_delta = rate * limit * dt;
         let diff = target - self.speed;
@@ -91,9 +91,9 @@ impl DriveState {
         let steer_target = steer_input.clamp(-1.0, 1.0);
         let steer_rate = if steer_target.signum() == self.steer.signum() || self.steer.abs() < 0.01
         {
-            R_WITH * 3.0
+            R_WITH * 0.3
         } else {
-            against * 3.0
+            against * 0.3
         };
         let max_s = steer_rate * dt;
         let s_diff = steer_target - self.steer;

@@ -71,10 +71,13 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     // Right stick circle (unused for now, but show it).
     draw_stick(f, cx + 10, cy - 2, 0.0, 0.0, "R", GRAY);
 
-    // Trigger bars above.
+    // Trigger bars above. R2 = engage (dead-man), L2 unused.
     let ty = inner.y + 1;
-    draw_trigger(f, cx - 24, ty, "L2", pad.ltrigger, RED);
-    draw_trigger(f, cx + 14, ty, "R2", pad.rtrigger, GREEN);
+    let engaged = pad.rtrigger > 0.3;
+    draw_trigger(f, cx - 24, ty, "L2", pad.ltrigger, GRAY);
+    let r2_col = if engaged { GREEN } else { RED };
+    let r2_label = if engaged { "R2 ENGAGED" } else { "R2 HOLD" };
+    draw_trigger(f, cx + 14, ty, r2_label, pad.rtrigger, r2_col);
 
     // Buttons (A/B/X/Y) in a diamond on the right side.
     let bx = cx + 14;

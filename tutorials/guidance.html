@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3786a31f.js";
+            window.path_to_searchindex_js = "../searchindex-4a581924.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-bd034089.js"></script>
@@ -244,12 +244,15 @@ address before you command anything.</p>
 </ul>
 <p>The command is queued on the plugin and flushed to the transmit buffer on the next
 <code>tick</code>, where it becomes a Guidance System Command frame (PGN 0xAD00).</p>
-<pre><code class="language-rust ignore">    // Command the tractor to follow a 50 m-radius turn (curvature = 1000/50 = 20/km),
-    // then straighten out. `command_curvature(0.0)` is the same as `command_straight`.
-    session
-        .get_mut::&lt;Guidance&gt;()
-        .expect("guidance plugged")
-        .command_radius(50.0);
+<pre><code class="language-rust ignore">    // Engage (assert "intend to steer"), then command a 50 m-radius turn
+    // (curvature = 1000/50 = 20/km). Without engaging, the command is sent with
+    // status "not intended to steer" and a conformant steering ECU will not move.
+    // `command_curvature(0.0)` is the same as `command_straight`.
+    {
+        let g = session.get_mut::&lt;Guidance&gt;().expect("guidance plugged");
+        g.engage();
+        g.command_radius(50.0);
+    }
 
     now = now.add_millis(50);
     session.tick(now); // flushes the queued command to the transmit buffer

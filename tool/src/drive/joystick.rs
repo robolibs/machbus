@@ -195,13 +195,13 @@ fn handle_buttons(pad: &PadState, drive: &mut DriveState, session: &mut Session)
     if pad.start_pressed {
         drive.counter_mult = (drive.counter_mult % 4) + 1;
     }
-    // D-pad up = speed limit +.
+    // D-pad up = speed limit +. Held every frame, so scale down 10× to tame sensitivity.
     if pad.dpad_up {
-        drive.speed_limit += drive.speed_step;
+        drive.speed_limit += drive.speed_step * 0.1;
     }
     // D-pad down = speed limit −.
     if pad.dpad_down {
-        drive.speed_limit = (drive.speed_limit - drive.speed_step).max(0.0);
+        drive.speed_limit = (drive.speed_limit - drive.speed_step * 0.1).max(0.0);
     }
 }
 

@@ -58,7 +58,7 @@ pub struct DriveArgs {
     #[arg(long = "default-speed", default_value = "0")]
     pub default_speed: f64,
     /// Speed step per I/K keypress in m/s.
-    #[arg(long = "speed-step", default_value = "0.5")]
+    #[arg(long = "speed-step", default_value = "0.1")]
     pub speed_step: f64,
     /// Maximum curvature in 1/km for full A/D deflection.
     #[arg(long = "max-curvature", default_value = "40")]

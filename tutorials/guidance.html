@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4a581924.js";
+            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-bd034089.js"></script>
@@ -203,6 +203,9 @@ supervise the operator. Treat everything below as protocol plumbing.</li>
 <h2 id="the-plugin-in-one-minute"><a class="header" href="#the-plugin-in-one-minute">The plugin in one minute</a></h2>
 <p><code>Guidance</code> is a session plugin. Plug it, claim an address, and you can:</p>
 <ul>
+<li><strong>engage / disengage</strong> — <code>engage()</code> asks for the wheel (sets the <em>intent to steer</em>
+flag the steering ECU needs); <code>disengage()</code> releases it and commands straight. The
+plugin starts <strong>disengaged</strong>, so commands do not steer until you engage;</li>
 <li><strong>command</strong> a curvature — <code>command_curvature(1/km)</code>, or the convenience
 <code>command_radius(metres)</code> and <code>command_straight()</code>;</li>
 <li><strong>command</strong> in robotics <code>(v, ω)</code> terms — <code>command_velocity(linear_mps, angular_rad_s)</code>,
@@ -266,10 +269,19 @@ address before you command anything.</p>
             );
         }
     }</code></pre>
-<p>That command also carries the controller’s <strong>intent to steer</strong>. A curvature number
-on its own is never a request to take the wheel — the intent is what arms it. The
-controller is expected to keep sending a fresh command on a fixed cadence; it is a
-heartbeat, and a stalled stream is a reason for the steering system to drop out.</p>
+<p>Every command also carries the controller’s <strong>intent to steer</strong> — and that is what
+<code>engage()</code> sets. A curvature number on its own is never a request to take the wheel:
+while the plugin is disengaged, commands ride the bus with <em>not intended to steer</em>
+and a conformant steering ECU moves nothing. Call <code>engage()</code> once to flip that flag
+(it re-sends the last curvature immediately), then <code>disengage()</code> to release the wheel
+and command straight. The controller is also expected to keep sending a fresh command
+on a fixed cadence; it is a heartbeat, and a stalled stream is itself a reason for the
+steering system to drop out.</p>
+<pre><code class="language-rust ignore">let g = session.get_mut::&lt;Guidance&gt;().unwrap();
+g.engage();              // assert intent to steer
+g.command_radius(50.0);  // 50 m-radius turn, now actually requested
+// …later…
+g.disengage();           // release the wheel; commands straight</code></pre>
 <h2 id="commanding-like-a-robot-v-ω"><a class="header" href="#commanding-like-a-robot-v-ω">Commanding like a robot: (v, ω)</a></h2>
 <p>If you think in mobile-robotics terms — a linear velocity <code>v</code> and an angular (yaw)
 velocity <code>ω</code> — use <code>command_velocity(v, ω)</code>. Because curvature is just <code>κ = ω / v</code>,
@@ -308,6 +320,10 @@ ready, your command moves nothing.</li>
 <li><code>estimated_curvature()</code> — <code>Some(c)</code> with the curvature the wheels are actually
 producing now, or <code>None</code> if the steering reports none. Never assume the machine
 reached the curvature you asked for — read it back here.</li>
+<li><code>latest_machine_info()</code> — the full decoded record when you need more than the two
+headline reads: mechanical lockout, the operator’s remote-engage switch, steering
+limit status, and the exit/reason code that explains <em>why</em> a system refused or
+dropped out. See <a href="../standards/autosteer.html#what-each-signal-means-in-plain-terms">the signals, in plain terms</a>.</li>
 </ul>
 <pre><code class="language-rust ignore">    // A real steering ECU would broadcast Guidance Machine Info (PGN 0xAC00);
     // the plugin decodes it and exposes the tractor's view:

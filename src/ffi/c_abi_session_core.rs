@@ -1689,6 +1689,54 @@ pub extern "C" fn machbus_session_guidance_command_straight(h: *mut MachbusSessi
     true
 }
 
+/// Request the steering ECU to engage and steer to the commanded curvature
+/// (sets the Curvature Command Status to *intended to steer* on PGN 0xAD00 and
+/// re-sends the last curvature). The ECU only steers if it reports itself ready.
+/// Requires the guidance subsystem.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_engage(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let g = plugin_mut!(h, Guidance);
+    g.engage();
+    clear_last_error();
+    true
+}
+
+/// Stop requesting steering: clears the engage request and commands straight
+/// (curvature `0.0`, status *not intended to steer*). Requires the guidance
+/// subsystem.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_disengage(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let g = plugin_mut!(h, Guidance);
+    g.disengage();
+    clear_last_error();
+    true
+}
+
+/// Whether the controller is currently requesting steering (its own intent, not
+/// the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_is_engaged(h: *const MachbusSession) -> bool {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<Guidance>())
+        .map(|g| g.is_engaged())
+        .unwrap_or(false)
+}
+
 /// Write the steering system's last estimated curvature (1/km) into `out`.
 /// Returns `false` (without setting an error) when no machine info has arrived
 /// yet, or when the guidance subsystem is not plugged.

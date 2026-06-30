@@ -887,6 +887,26 @@ impl PySession {
         Ok(())
     }
 
+    /// Request the steering ECU to engage (Curvature Command Status = intended to
+    /// steer on PGN 0xAD00); re-sends the last commanded curvature. The ECU only
+    /// steers while it reports itself ready.
+    fn guidance_engage(&mut self) -> PyResult<()> {
+        self.guidance()?.engage();
+        Ok(())
+    }
+
+    /// Stop requesting steering: clears the engage request and commands straight.
+    fn guidance_disengage(&mut self) -> PyResult<()> {
+        self.guidance()?.disengage();
+        Ok(())
+    }
+
+    /// `True` if the controller is currently requesting steering (its own intent,
+    /// not the steering ECU's readiness).
+    fn guidance_is_engaged(&mut self) -> PyResult<bool> {
+        Ok(self.guidance()?.is_engaged())
+    }
+
     /// The steering system's last reported estimated curvature (1/km), or `None`.
     fn guidance_estimated_curvature(&mut self) -> PyResult<Option<f64>> {
         Ok(self.guidance()?.estimated_curvature())

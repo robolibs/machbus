@@ -52,7 +52,7 @@ use machbus::isobus::{
     FILE_SERVER_BUSY_STATUS_INTERVAL_MS, FILE_SERVER_STATUS_INTERVAL_MS, FS_REQUEST_TIMEOUT_MS,
     FileAttribute, FileOperation, FileProperties, FileServerConfig as LegacyFileServerConfig,
     FileTransferError, Functionalities, Functionality, FunctionalityData, GroupFunctionError,
-    GroupFunctionMsg, GroupFunctionType, GuidanceData, MinimumControlFunctionOptions,
+    GroupFunctionMsg, GroupFunctionType, MinimumControlFunctionOptions,
     TractorImplementManagementOptions,
 };
 use machbus::j1939::acknowledgment::{AckControl, Acknowledgment};
@@ -95,8 +95,8 @@ use machbus::net::pgn_defs::{
     PGN_FRONT_HITCH, PGN_FRONT_HITCH_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_FRONT_PTO,
     PGN_FRONT_PTO_CMD, PGN_GNSS_COG_SOG_RAPID, PGN_GNSS_DOPS, PGN_GNSS_POSITION_DATA,
     PGN_GNSS_POSITION_RAPID, PGN_GNSS_SATELLITES_IN_VIEW, PGN_GROUND_BASED_SPEED_DIST,
-    PGN_GUIDANCE_CURVATURE_CMD, PGN_GUIDANCE_MACHINE, PGN_GUIDANCE_MACHINE_INFO,
-    PGN_GUIDANCE_SYSTEM, PGN_GUIDANCE_SYSTEM_CMD, PGN_HEADING_TRACK, PGN_HEARTBEAT,
+    PGN_GUIDANCE_CURVATURE_CMD, PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM,
+    PGN_GUIDANCE_SYSTEM_CMD, PGN_HEADING_TRACK, PGN_HEARTBEAT,
     PGN_HEARTBEAT_N2K, PGN_HITCH_PTO_COMBINED_CMD, PGN_HUMIDITY, PGN_LANGUAGE_COMMAND,
     PGN_LIGHTING_DATA, PGN_MACHINE_SELECTED_SPEED, PGN_MACHINE_SELECTED_SPEED_CMD,
     PGN_MAGNETIC_VARIATION, PGN_MAINTAIN_POWER, PGN_NIU_NETWORK_MSG, PGN_OUTSIDE_ENVIRONMENTAL,
@@ -172,7 +172,6 @@ const ISOBUS_NIU_CONTROL_HEX: &str = include_str!("../fixtures/isobus/niu_contro
 const REAR_HITCH_RAISE: &[u8; 8] = include_bytes!("../fixtures/isobus/rear_hitch_raise.bin");
 const ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX: &str =
     include_str!("../fixtures/isobus/implement_controls_status.hex");
-const ISOBUS_GUIDANCE_BASIC_HEX: &str = include_str!("../fixtures/isobus/guidance_basic.hex");
 const ISOBUS_SC_STATUS_HEX: &str = include_str!("../fixtures/isobus/sc_status.hex");
 const ISOBUS_TC_DDI_DATABASE_SNAPSHOT: &str =
     include_str!("../fixtures/isobus/tc_ddi_database_snapshot.txt");
@@ -1540,47 +1539,6 @@ fn fixture_isobus_aux_and_group_function_codecs_are_stable() {
             "{fixture}"
         );
     }
-}
-
-#[test]
-fn fixture_isobus_guidance_basic_scaling_is_stable() {
-    let zero_status2 =
-        parse_named_hex_frame(ISOBUS_GUIDANCE_BASIC_HEX, "machine_zero_curvature_status2");
-    let encoded_zero_status2 = GuidanceData {
-        curvature: Some(0.0),
-        status: Some(2),
-        ..Default::default()
-    }
-    .encode();
-    assert_eq!(encoded_zero_status2, zero_status2);
-    let decoded_zero_status2 = GuidanceData::decode(&Message::new(
-        PGN_GUIDANCE_MACHINE,
-        zero_status2.to_vec(),
-        0x80,
-    ))
-    .expect("zero-curvature guidance fixture must decode");
-    assert_eq!(decoded_zero_status2.curvature, Some(0.0));
-    assert_eq!(decoded_zero_status2.status, Some(2));
-
-    let not_available = parse_named_hex_frame(ISOBUS_GUIDANCE_BASIC_HEX, "system_not_available");
-    assert_eq!(GuidanceData::default().encode(), not_available);
-    let decoded_not_available = GuidanceData::decode(&Message::new(
-        PGN_GUIDANCE_SYSTEM,
-        not_available.to_vec(),
-        0x80,
-    ))
-    .expect("not-available guidance fixture must decode");
-    assert_eq!(decoded_not_available.curvature, None);
-    assert_eq!(decoded_not_available.status, None);
-
-    assert!(
-        GuidanceData::decode(&Message::new(
-            PGN_GUIDANCE_MACHINE,
-            not_available[..7].to_vec(),
-            0x80,
-        ))
-        .is_none()
-    );
 }
 
 #[test]

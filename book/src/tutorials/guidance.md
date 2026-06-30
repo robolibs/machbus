@@ -26,6 +26,9 @@ your code does:
 
 `Guidance` is a session plugin. Plug it, claim an address, and you can:
 
+- **engage / disengage** — `engage()` asks for the wheel (sets the *intent to steer*
+  flag the steering ECU needs); `disengage()` releases it and commands straight. The
+  plugin starts **disengaged**, so commands do not steer until you engage;
 - **command** a curvature — `command_curvature(1/km)`, or the convenience
   `command_radius(metres)` and `command_straight()`;
 - **command** in robotics `(v, ω)` terms — `command_velocity(linear_mps, angular_rad_s)`,
@@ -64,10 +67,22 @@ The command is queued on the plugin and flushed to the transmit buffer on the ne
 {{#include ../../../examples/guidance_autosteer.rs:command}}
 ```
 
-That command also carries the controller's **intent to steer**. A curvature number
-on its own is never a request to take the wheel — the intent is what arms it. The
-controller is expected to keep sending a fresh command on a fixed cadence; it is a
-heartbeat, and a stalled stream is a reason for the steering system to drop out.
+Every command also carries the controller's **intent to steer** — and that is what
+`engage()` sets. A curvature number on its own is never a request to take the wheel:
+while the plugin is disengaged, commands ride the bus with *not intended to steer*
+and a conformant steering ECU moves nothing. Call `engage()` once to flip that flag
+(it re-sends the last curvature immediately), then `disengage()` to release the wheel
+and command straight. The controller is also expected to keep sending a fresh command
+on a fixed cadence; it is a heartbeat, and a stalled stream is itself a reason for the
+steering system to drop out.
+
+```rust,ignore
+let g = session.get_mut::<Guidance>().unwrap();
+g.engage();              // assert intent to steer
+g.command_radius(50.0);  // 50 m-radius turn, now actually requested
+// …later…
+g.disengage();           // release the wheel; commands straight
+```
 
 ## Commanding like a robot: (v, ω)
 
@@ -113,6 +128,10 @@ the tractor's own view:
 - `estimated_curvature()` — `Some(c)` with the curvature the wheels are actually
   producing now, or `None` if the steering reports none. Never assume the machine
   reached the curvature you asked for — read it back here.
+- `latest_machine_info()` — the full decoded record when you need more than the two
+  headline reads: mechanical lockout, the operator's remote-engage switch, steering
+  limit status, and the exit/reason code that explains *why* a system refused or
+  dropped out. See [the signals, in plain terms](../standards/autosteer.md#what-each-signal-means-in-plain-terms).
 
 ```rust,ignore
 {{#include ../../../examples/guidance_autosteer.rs:feedback}}

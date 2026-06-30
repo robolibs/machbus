@@ -15,8 +15,8 @@ use std::collections::VecDeque;
 
 use machbus::geo::Wgs;
 use machbus::isobus::{
-    AuxFunctionState, AuxFunctionType, AuxNFunction, Functionalities, GroupFunctionMsg,
-    GuidanceData, PtoState, TimOption, TimOptionSet,
+    AuxFunctionState, AuxFunctionType, AuxNFunction, CurvatureCommandStatus, Functionalities,
+    GroupFunctionMsg, GuidanceSystemCmd, PtoState, TimOption, TimOptionSet,
 };
 use machbus::net::{
     BROADCAST_ADDRESS, Frame, Identifier, Name, Priority, hash_to_version, parse_iop_data,
@@ -139,10 +139,9 @@ fn main() -> machbus::net::Result<()> {
         Some(aux)
     );
 
-    let guidance = GuidanceData {
-        curvature: Some(0.25),
-        status: Some(1),
-        ..Default::default()
+    let guidance = GuidanceSystemCmd {
+        commanded_curvature: 0.25,
+        status: CurvatureCommandStatus::IntendedToSteer,
     };
     assert_eq!(guidance.encode().len(), 8);
 

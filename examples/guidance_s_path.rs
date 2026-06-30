@@ -94,6 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("claimed 0x{:02X}", ctrl.address());
 
     // ── 4. Stream the S path: sweep curvature κ(t) = κmax·sin(2π·t/T) ─────────
+    // Engage first: assert "intend to steer" so the steering ECU acts on the
+    // curvature stream instead of treating each command as advisory.
+    ctrl.with_mut::<Guidance, _>(|g| g.engage());
     println!("steering the S (Ctrl-C to stop)…");
     let dt = Duration::from_secs_f64(1.0 / rate_hz);
     let s_start = wall.elapsed().as_secs_f64();
@@ -127,8 +130,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sleep(dt);
     }
 
-    // ── 5. Settle straight and finish ────────────────────────────────────────
+    // ── 5. Settle straight, disengage, and finish ────────────────────────────
     ctrl.with_mut::<Guidance, _>(|g| g.command_straight());
+    ctrl.with_mut::<Guidance, _>(|g| g.disengage());
     for _ in 0..5 {
         while drv.poll_at(now(&wall))?.is_some() {}
         sleep(Duration::from_millis(20));

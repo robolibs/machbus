@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4] - 2026-06-30
+
+### <!-- 0 -->⛰️  Features
+
+- Changes
+- Autosteer fix
+- Autosteer fix
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Remove CI workflow for project cleanup
+
 ## [0.1.3] - 2026-06-29
 
 ### <!-- 1 -->🐛 Bug Fixes

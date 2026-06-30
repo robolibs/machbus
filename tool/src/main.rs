@@ -2,6 +2,7 @@ mod bus;
 mod can;
 mod cli;
 mod cmd;
+mod drive;
 mod rng;
 mod signal;
 mod socket;
@@ -9,7 +10,7 @@ mod term;
 mod tui;
 
 use clap::Parser;
-use cli::{Cli, Command, TermSub};
+use cli::{Cli, Command, DriveSub, TermSub};
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
@@ -20,6 +21,10 @@ fn main() -> std::process::ExitCode {
         Command::Generate(args) => cmd::generate::run(args),
         Command::Live(args) => cmd::live::run(args),
         Command::Term { command } => cmd::term::run(command),
+        Command::Drive { command } => match command {
+            DriveSub::Keyboard(args) => drive::keyboard::run(args),
+            DriveSub::Joystick(args) => drive::joystick::run(args),
+        },
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -30,7 +35,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// Error-prefix label for the active command.
 fn command_label(command: &Command) -> &'static str {
     match command {
         Command::Dump(_) => "dump",
@@ -41,6 +45,10 @@ fn command_label(command: &Command) -> &'static str {
             TermSub::File(_) => "term file",
             TermSub::Server(_) => "term server",
             TermSub::Client(_) => "term client",
+        },
+        Command::Drive { command } => match command {
+            DriveSub::Keyboard(_) => "drive keyboard",
+            DriveSub::Joystick(_) => "drive joystick",
         },
     }
 }

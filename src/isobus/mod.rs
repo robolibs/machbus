@@ -18,7 +18,6 @@ pub mod file_transfer;
 pub mod fs;
 pub mod functionalities;
 pub mod group_function;
-pub mod guidance;
 pub mod implement;
 pub mod sc;
 pub mod tc;
@@ -42,7 +41,6 @@ pub use group_function::{
     GroupFunctionError, GroupFunctionMsg, GroupFunctionResponder, GroupFunctionSupport,
     GroupFunctionType,
 };
-pub use guidance::GuidanceData;
 pub use implement::{
     AuxValveCommandMsg, AuxValveFlowMsg, CURVATURE_MAX_PER_KM, CURVATURE_MIN_PER_KM,
     CurvatureCommand, CurvatureCommandStatus, DriveStrategyCmd, DriveStrategyMode, ExitReasonCode,
@@ -91,7 +89,7 @@ mod arbitrary_decode_tests {
     use crate::net::Message;
     use crate::net::pgn_defs::{
         PGN_AUX_INPUT_STATUS, PGN_AUX_INPUT_TYPE2, PGN_AUX_VALVE_0_7, PGN_FRONT_HITCH,
-        PGN_FRONT_PTO, PGN_GUIDANCE_MACHINE, PGN_REAR_HITCH, PGN_REAR_PTO,
+        PGN_FRONT_PTO, PGN_REAR_HITCH, PGN_REAR_PTO,
     };
     use proptest::prelude::*;
 
@@ -112,12 +110,10 @@ mod arbitrary_decode_tests {
             let tim_pto = msg(PGN_FRONT_PTO, &data);
             let tim_hitch = msg(PGN_FRONT_HITCH, &data);
             let tim_aux = msg(PGN_AUX_VALVE_0_7, &data);
-            let guidance = msg(PGN_GUIDANCE_MACHINE, &data);
 
             let _ = AuxOFunction::decode(&aux_o);
             let _ = AuxNFunction::decode(&aux_n);
             let _ = GroupFunctionMsg::decode(&data);
-            let _ = GuidanceData::decode(&guidance);
 
             let _ = PtoState::decode(&tim_pto);
             let _ = HitchState::decode(&tim_hitch);

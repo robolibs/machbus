@@ -56,7 +56,7 @@ pub mod embedded {
         BasicTractorEcuOptions, FileAttribute, FileClientState, FileOperation, FileProperties,
         FileServerConfig, FileServerState, FileTransferError, Functionalities, Functionality,
         FunctionalityData, GroupFunctionError, GroupFunctionMsg, GroupFunctionResponder,
-        GroupFunctionSupport, GroupFunctionType, GuidanceData, MinimumControlFunctionOptions,
+        GroupFunctionSupport, GroupFunctionType, MinimumControlFunctionOptions,
         OpenFileState, TaskControllerGeoServerOptions, TractorImplementManagementOptions,
         VolumeInfo,
     };

@@ -59,149 +59,105 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if inner.height < 10 {
+    if inner.height < 14 {
         return;
     }
 
     let cx = inner.x + inner.width / 2;
     let cy = inner.y + inner.height / 2;
 
-    // Left stick circle (steering + throttle source).
-    draw_stick(f, cx - 16, cy - 2, pad.lstick_x, pad.lstick_y, "L", GOLD);
-    // Right stick circle (unused for now, but show it).
-    draw_stick(f, cx + 10, cy - 2, 0.0, 0.0, "R", GRAY);
+    // Left stick circle — bigger: 14 wide × 7 tall.
+    draw_stick(f, cx - 22, cy - 4, pad.lstick_x, pad.lstick_y, "L", GOLD);
+    // Right stick circle — same size.
+    draw_stick(f, cx + 12, cy - 4, 0.0, 0.0, "R", GRAY);
 
-    // Trigger bars above. R2 = engage (dead-man), L2 unused.
+    // Trigger bars above.
     let ty = inner.y + 1;
     let engaged = pad.rtrigger > 0.3;
-    draw_trigger(f, cx - 24, ty, "L2", pad.ltrigger, GRAY);
+    draw_trigger(f, cx - 26, ty, "L2", pad.ltrigger, GRAY);
     let r2_col = if engaged { GREEN } else { RED };
     let r2_label = if engaged { "R2 ENGAGED" } else { "R2 HOLD" };
     draw_trigger(f, cx + 14, ty, r2_label, pad.rtrigger, r2_col);
 
-    // Buttons (A/B/X/Y) in a diamond on the right side.
-    let bx = cx + 14;
-    let by = cy + 1;
-    draw_pad_btn(f, bx, by - 2, "Y", pad.y_held);
-    draw_pad_btn(f, bx - 4, by, "X", pad.x_held);
-    draw_pad_btn(f, bx + 4, by, "B", pad.b_held);
-    draw_pad_btn(f, bx, by + 2, "A", pad.a_held);
+    // Buttons (A/B/X/Y) in a diamond — bigger spacing.
+    let bx = cx + 18;
+    let by = cy;
+    draw_pad_btn(f, bx, by - 3, "Y", pad.y_held);
+    draw_pad_btn(f, bx - 6, by, "X", pad.x_held);
+    draw_pad_btn(f, bx + 6, by, "B", pad.b_held);
+    draw_pad_btn(f, bx, by + 3, "A", pad.a_held);
 
-    // D-pad on the left.
-    let dx = cx - 14;
-    draw_pad_btn(f, dx, by - 2, "↑", pad.dpad_up);
-    draw_pad_btn(f, dx - 4, by, "←", false);
-    draw_pad_btn(f, dx + 4, by, "→", false);
-    draw_pad_btn(f, dx, by + 2, "↓", pad.dpad_down);
+    // D-pad on the left — bigger spacing.
+    let dx = cx - 18;
+    draw_pad_btn(f, dx, by - 3, "↑", pad.dpad_up);
+    draw_pad_btn(f, dx - 6, by, "←", false);
+    draw_pad_btn(f, dx + 6, by, "→", false);
+    draw_pad_btn(f, dx, by + 3, "↓", pad.dpad_down);
 
     // Start button.
     draw_pad_btn(f, cx, by, "⌖", pad.start_held);
 
-    // Labels under sticks.
+    // Labels under left stick.
     f.render_widget(
-        Paragraph::new("steer")
+        Paragraph::new("steer / throttle")
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
-        Rect {
-            x: cx - 20,
-            y: cy + 3,
-            width: 8,
-            height: 1,
-        },
-    );
-    f.render_widget(
-        Paragraph::new("throttle")
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx - 20,
-            y: cy + 4,
-            width: 8,
-            height: 1,
-        },
+        Rect { x: cx - 28, y: cy + 4, width: 16, height: 1 },
     );
 
-    // Info line.
+    // Info line at the bottom.
     f.render_widget(
         Paragraph::new(format!(
-            "L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
-            pad.lstick_x,
-            pad.lstick_y,
-            pad.rtrigger * 100.0,
-            pad.ltrigger * 100.0,
+            " L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
+            pad.lstick_x, pad.lstick_y,
+            pad.rtrigger * 100.0, pad.ltrigger * 100.0,
             state.counter_mult,
         ))
         .style(Style::default().fg(WHITE)),
-        Rect {
-            x: inner.x + 1,
-            y: inner.y + inner.height.saturating_sub(1),
-            width: inner.width - 2,
-            height: 1,
-        },
+        Rect { x: inner.x + 1, y: inner.y + inner.height.saturating_sub(1), width: inner.width - 2, height: 1 },
     );
 }
 
 fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col: Color) {
-    let w = 8u16;
-    let h = 4u16;
+    let w = 14u16;
+    let h = 7u16;
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
         .border_style(Style::default().fg(col))
         .title(Span::styled(format!(" {label} "), Style::default().fg(col)));
-    let inner = block.inner(Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    });
-    f.render_widget(
-        block,
-        Rect {
-            x,
-            y,
-            width: w,
-            height: h,
-        },
-    );
+    let inner = block.inner(Rect { x, y, width: w, height: h });
+    f.render_widget(block, Rect { x, y, width: w, height: h });
 
-    // Centre cross.
     let ccx = inner.x + inner.width / 2;
-    let ccy = inner.y + inner.height / 2;
+    let mid_y = inner.y + inner.height / 2;
 
-    // Stick dot position (clamped to inner area).
+    // Dot position (scaled into the inner area).
     let dot_x = inner.x + ((sx + 1.0) * 0.5 * (inner.width as f64 - 1.0)).round() as u16;
     let dot_y = inner.y + ((1.0 - (sy + 1.0) * 0.5) * (inner.height as f64 - 1.0)).round() as u16;
 
-    // Draw crosshair lines.
-    if inner.height > 0 {
-        let mut line = String::new();
-        for i in 0..inner.width {
-            line.push(if ccx == inner.x + i { '┼' } else { '─' });
-        }
+    // Crosshair — horizontal line through centre.
+    let h_line: String = (0..inner.width)
+        .map(|i| if inner.x + i == ccx { '┼' } else { '─' })
+        .collect();
+    f.render_widget(
+        Paragraph::new(Span::styled(h_line, Style::default().fg(GRAY))),
+        Rect { x: inner.x, y: mid_y, width: inner.width, height: 1 },
+    );
+
+    // Crosshair — vertical line through centre.
+    for ry in inner.y..inner.y + inner.height {
+        let ch = if ry == mid_y { '┼' } else { '│' };
         f.render_widget(
-            Paragraph::new(Span::styled(line, Style::default().fg(GRAY))),
-            Rect {
-                x: inner.x,
-                y: ccy,
-                width: inner.width,
-                height: 1,
-            },
+            Paragraph::new(Span::styled(ch.to_string(), Style::default().fg(GRAY))),
+            Rect { x: ccx, y: ry, width: 1, height: 1 },
         );
     }
 
-    // Draw the dot.
+    // The dot.
     f.render_widget(
-        Paragraph::new(Span::styled(
-            "●",
-            Style::default().fg(col).add_modifier(Modifier::BOLD),
-        )),
-        Rect {
-            x: dot_x,
-            y: dot_y,
-            width: 1,
-            height: 1,
-        },
+        Paragraph::new(Span::styled("●", Style::default().fg(col).add_modifier(Modifier::BOLD))),
+        Rect { x: dot_x, y: dot_y, width: 1, height: 1 },
     );
 }
 

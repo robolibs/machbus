@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "machbus"
-version = "0.1.5"
+version = "0.1.6"
 description = "Python bindings for the machbus ISO 11783 / J1939 / NMEA2000 networking stack"
 readme = "README.md"
 license = { text = "MIT" }

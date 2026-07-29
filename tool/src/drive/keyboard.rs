@@ -172,6 +172,11 @@ impl KeyboardState {
                 self.kenter.press();
                 drive.speed = 0.0;
                 drive.steer = 0.0;
+                drive.engaged = false; // stop also drops autosteer to manual
+            }
+            ' ' => {
+                // Toggle autosteer engage (command "intend to steer" on 0xAD00).
+                drive.engaged = !drive.engaged;
             }
             _ => {}
         }
@@ -186,6 +191,9 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
     }
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
+    // Keyboard engage is a deliberate SPACE toggle (no held dead-man), so there
+    // is nothing to arm — treat it as armed; SPACE still gates actual steering.
+    drive.armed = true;
     let mut kb = KeyboardState::new();
     let mut terminal = setup_terminal()?;
     let start = Instant::now();
@@ -239,6 +247,8 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
 fn run_daemon(args: DriveArgs) -> Result<(), String> {
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
+    // Keyboard has no held dead-man to arm; SPACE gates steering deliberately.
+    drive.armed = true;
     let mut kb = KeyboardState::new();
     let start = Instant::now();
     let mut last = start;

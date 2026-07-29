@@ -36,10 +36,19 @@ use core::any::Any;
 
 const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO];
 
+/// A steering ECU broadcasts Machine Info (PGN 0xAC00) every 100 ms. If none has
+/// arrived within this window the guidance link is considered dead.
+const LINK_TIMEOUT_MS: u32 = 500;
+
 /// Automatic-guidance (autosteer) plugin.
 #[derive(Default)]
 pub struct Guidance {
     latest: Option<GuidanceMachineInfo>,
+    /// When the last Machine Info (PGN 0xAC00) was received, for link liveness.
+    last_info_at: Option<Instant>,
+    /// Cached liveness: fresh Machine Info seen within [`LINK_TIMEOUT_MS`].
+    /// Recomputed each tick so it decays when the ECU stops broadcasting.
+    link_alive: bool,
     /// Whether the controller is currently requesting the steering ECU to steer
     /// (the *Curvature Command Status* sent on PGN 0xAD00).
     engaged: bool,
@@ -176,12 +185,35 @@ impl Guidance {
     }
 
     /// Whether the steering system last reported it is ready/engaged to steer.
+    ///
+    /// This is the ECU's *self-reported* readiness slot. Note that some machines
+    /// never populate it (they leave it `NotAvailable`) even while genuinely
+    /// steering — use [`is_link_alive`](Self::is_link_alive) to tell whether
+    /// guidance data is actually flowing.
     #[must_use]
     pub fn is_steering_ready(&self) -> bool {
         matches!(
             self.latest.map(|m| m.steering_system_readiness_state),
             Some(GenericSaeBs02SlotValue::EnabledOnActive)
         )
+    }
+
+    /// Whether a steering ECU is currently broadcasting Machine Info (PGN 0xAC00)
+    /// — i.e. the guidance link is live (fresh frame within [`LINK_TIMEOUT_MS`]).
+    ///
+    /// This reflects that guidance data is flowing regardless of what the ECU's
+    /// readiness slot reports, so it stays true for machines that stream valid
+    /// machine info without ever asserting `EnabledOnActive`.
+    #[must_use]
+    pub fn is_link_alive(&self) -> bool {
+        self.link_alive
+    }
+
+    /// The steering system's last self-reported readiness slot, if any Machine
+    /// Info has arrived — for displaying the raw state verbatim.
+    #[must_use]
+    pub fn steering_readiness_state(&self) -> Option<GenericSaeBs02SlotValue> {
+        self.latest.map(|m| m.steering_system_readiness_state)
     }
 }
 
@@ -199,6 +231,8 @@ impl Plugin for Guidance {
             && let Some(info) = GuidanceMachineInfo::decode(&msg.data)
         {
             self.latest = Some(info);
+            self.last_info_at = Some(ctx.now());
+            self.link_alive = true;
             ctx.emit(Event::Guidance(GuidanceEvent::MachineInfo {
                 source: msg.source,
                 estimated_curvature: info.estimated_curvature,
@@ -212,6 +246,11 @@ impl Plugin for Guidance {
     }
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+        // Decay link liveness if no fresh Machine Info arrived within the window.
+        self.link_alive = self
+            .last_info_at
+            .is_some_and(|t| ctx.now().millis_since(t) < LINK_TIMEOUT_MS);
+
         for (pgn, data) in self.pending.drain(..) {
             ctx.send(pgn, data, BROADCAST_ADDRESS, Priority::Default);
         }
@@ -254,6 +293,57 @@ mod tests {
             }
         }
         s
+    }
+
+    #[test]
+    fn link_liveness_tracks_machine_info_arrival_and_decay() {
+        use crate::net::pgn_defs::PGN_GUIDANCE_MACHINE_INFO;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+
+        let mut s = claimed_session();
+
+        // Before any Machine Info: link dead, readiness unknown.
+        assert!(!s.get::<Guidance>().unwrap().is_link_alive());
+        assert!(
+            s.get::<Guidance>()
+                .unwrap()
+                .steering_readiness_state()
+                .is_none()
+        );
+
+        // Feed a real captured GMS frame (PGN 0xAC00) — this machine reports
+        // readiness = NotAvailable even though it streams valid machine info.
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GUIDANCE_MACHINE_INFO,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF],
+            8,
+        );
+        s.feed(0, &frame, Instant::from_millis(10_000));
+        s.tick(Instant::from_millis(10_050));
+
+        let g = s.get::<Guidance>().unwrap();
+        assert!(g.is_link_alive(), "fresh Machine Info ⇒ link live");
+        assert_eq!(
+            g.steering_readiness_state(),
+            Some(GenericSaeBs02SlotValue::NotAvailableTakeNoAction)
+        );
+        assert!(
+            !g.is_steering_ready(),
+            "this machine never asserts EnabledOnActive"
+        );
+        assert!(g.estimated_curvature().is_some(), "est curvature is known");
+
+        // No further frames past the timeout window ⇒ link decays to dead, but
+        // the last readiness/curvature stays cached for display.
+        s.tick(Instant::from_millis(10_000 + LINK_TIMEOUT_MS as u64 + 10));
+        let g = s.get::<Guidance>().unwrap();
+        assert!(!g.is_link_alive(), "stale link ⇒ dead");
+        assert!(g.steering_readiness_state().is_some());
     }
 
     #[test]

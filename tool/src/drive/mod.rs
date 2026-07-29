@@ -31,6 +31,10 @@ use crate::cli::DriveArgs;
 const R_WITH: f64 = 0.10;
 const R_DRAG: f64 = 0.05;
 
+/// Seconds the joystick dead-man (R2) must be held continuously to arm
+/// autosteer commanding. Until armed, R2 does nothing — no throttle, no steer.
+pub const ARM_HOLD_SECS: f64 = 1.5;
+
 pub struct DriveState {
     pub speed: f64,
     pub speed_limit: f64,
@@ -41,6 +45,18 @@ pub struct DriveState {
     pub status: String,
     pub claimed: bool,
     pub claimed_addr: u8,
+    /// Whether we want the steering ECU to actually steer to our commands
+    /// (asserts the Curvature Command Status "intend to steer" on PGN 0xAD00).
+    /// Driven by the dead-man switch (joystick R2) / engage toggle (keyboard).
+    pub engaged: bool,
+    /// Safety latch: autosteer commanding is inert until the operator arms it
+    /// (holds R2 for [`ARM_HOLD_SECS`]). Prevents instant steer-on at startup.
+    pub armed: bool,
+    /// Arming hold progress, 0.0..1.0, while R2 is held pre-arm (for the UI).
+    pub arm_progress: f64,
+    /// After a disarm, block re-arming until the dead-man is fully released, so
+    /// hitting stop while still holding R2 cannot silently re-arm.
+    pub arm_block: bool,
 }
 
 impl DriveState {
@@ -55,7 +71,46 @@ impl DriveState {
             status: String::new(),
             claimed: false,
             claimed_addr: 0,
+            engaged: false,
+            armed: false,
+            arm_progress: 0.0,
+            arm_block: false,
         }
+    }
+
+    /// Disarm autosteer: stop commanding, drop the arm latch, and require the
+    /// dead-man to be released before it can be re-armed.
+    pub fn disarm(&mut self) {
+        self.engaged = false;
+        self.armed = false;
+        self.arm_progress = 0.0;
+        self.arm_block = true;
+    }
+
+    /// Advance the arming latch from the dead-man state and return whether
+    /// autosteer may command this tick (armed **and** dead-man held). Holding
+    /// the dead-man for [`ARM_HOLD_SECS`] arms; releasing it before that resets
+    /// the hold. Once armed, it stays armed until [`disarm`](Self::disarm).
+    pub fn update_arm(&mut self, deadman: bool, dt: f64) -> bool {
+        // After a disarm, ignore the dead-man until it is fully released once.
+        if self.arm_block {
+            self.arm_progress = 0.0;
+            if !deadman {
+                self.arm_block = false;
+            }
+            return false;
+        }
+        if !self.armed {
+            if deadman {
+                self.arm_progress = (self.arm_progress + dt / ARM_HOLD_SECS).min(1.0);
+                if self.arm_progress >= 1.0 {
+                    self.armed = true;
+                }
+            } else {
+                self.arm_progress = 0.0;
+            }
+        }
+        self.armed && deadman
     }
 
     pub fn curvature(&self) -> f64 {
@@ -127,6 +182,14 @@ impl DriveState {
             return;
         }
         if let Some(g) = session.get_mut::<Guidance>() {
+            // Match the plugin's engage state to our desired (dead-man) state so
+            // commands carry "intend to steer" only while engaged. Transition
+            // only on change to avoid re-queueing an extra command every tick.
+            if self.engaged && !g.is_engaged() {
+                g.engage();
+            } else if !self.engaged && g.is_engaged() {
+                g.disengage();
+            }
             let v = self.speed;
             g.command_velocity(v, v * self.curvature() / 1000.0);
         }

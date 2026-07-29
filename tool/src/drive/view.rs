@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use machbus::isobus::implement::guidance::GenericSaeBs02SlotValue;
 use machbus::session::Session;
 use machbus::session::plugins::{Gnss, Guidance};
 
@@ -296,6 +297,9 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
         kb.kx.lit(),
         "counter rate",
     );
+    y += step;
+    // SPACE — toggle autosteer engage.
+    key_wide(f, cx, y, "SPACE", 14, state.engaged, "autosteer");
 }
 
 fn key(f: &mut Frame, cx: u16, y: u16, ch: char, held: bool, hint: &str) {
@@ -466,16 +470,31 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             state.steer,
             inner.width,
         ),
-        // 4: Steering readiness + est curvature
+        // 4: Steering link + raw readiness + est curvature
         {
             let mut spans = vec![Span::styled("str ", Style::default().fg(GRAY))];
             if let Some(g) = session.get::<Guidance>() {
-                let ready = g.is_steering_ready();
+                // Link liveness: are we actually receiving Machine Info (0xAC00)?
+                // This is the honest "guidance data flowing" signal — some ECUs
+                // stream valid info while never asserting readiness=on.
+                let live = g.is_link_alive();
                 spans.push(Span::styled(
-                    if ready { "●READY" } else { "○OFFLINE" },
+                    if live { "●LIVE" } else { "○OFFLINE" },
                     Style::default()
-                        .fg(if ready { GREEN } else { RED })
+                        .fg(if live { GREEN } else { RED })
                         .add_modifier(Modifier::BOLD),
+                ));
+                // The ECU's self-reported readiness slot, shown verbatim.
+                let rdy = match g.steering_readiness_state() {
+                    Some(GenericSaeBs02SlotValue::EnabledOnActive) => "on",
+                    Some(GenericSaeBs02SlotValue::DisabledOffPassive) => "off",
+                    Some(GenericSaeBs02SlotValue::ErrorIndication) => "err",
+                    Some(GenericSaeBs02SlotValue::NotAvailableTakeNoAction) => "n/a",
+                    None => "—",
+                };
+                spans.push(Span::styled(
+                    format!("  rdy:{rdy}"),
+                    Style::default().fg(GRAY),
                 ));
                 if let Some(est) = g.estimated_curvature() {
                     spans.push(Span::styled(
@@ -485,6 +504,36 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
                 }
             } else {
                 spans.push(Span::styled("—", Style::default().fg(GRAY)));
+            }
+            // Safety latch: until armed, show the "hold R2 to arm" prompt with a
+            // fill bar; once armed, show whether we're commanding steer.
+            if !state.armed {
+                if state.arm_block {
+                    // Disarmed while R2 still held — must release before re-arming.
+                    spans.push(Span::styled(
+                        "  ⚠ RELEASE R2 TO RE-ARM",
+                        Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    let filled = (state.arm_progress * 6.0).round() as usize;
+                    let bar: String =
+                        (0..6).map(|i| if i < filled { '█' } else { '░' }).collect();
+                    spans.push(Span::styled(
+                        format!("  ⚠ HOLD R2 TO ARM [{bar}]"),
+                        Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            } else {
+                spans.push(Span::styled(
+                    if state.engaged {
+                        "  ARMED  cmd:ENGAGED"
+                    } else {
+                        "  ARMED  cmd:hold"
+                    },
+                    Style::default()
+                        .fg(if state.engaged { GREEN } else { GRAY })
+                        .add_modifier(Modifier::BOLD),
+                ));
             }
             spans.push(Span::styled(
                 format!("  │  {}× counter", state.counter_mult),

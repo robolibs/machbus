@@ -351,9 +351,10 @@ impl GuidanceMachineInfo {
         if !fixed8_with_ff_tail(data, 5) {
             return None;
         }
-        if data[3] & 0x1F != 0 {
-            return None;
-        }
+        // Byte 3 bits 0..4 are reserved. Conformant ECUs transmit reserved bits
+        // as 1 (J1939 convention), so a real frame has byte 3 = 0xFF. Ignore
+        // these bits rather than rejecting the frame — only bits 5..7 (guidance
+        // limit status) carry meaning here.
         let raw = (data[0] as u16) | ((data[1] as u16) << 8);
         Some(Self {
             estimated_curvature: decode_curvature(raw)?,
@@ -397,9 +398,9 @@ impl GuidanceSystemStatus {
         if !fixed8_with_ff_tail(data, 3) {
             return None;
         }
-        if data[2] & 0xC8 != 0 {
-            return None;
-        }
+        // Byte 2 bit 3 and bits 6..7 are reserved; conformant transmitters set
+        // them to 1. Ignore them instead of rejecting — only the readiness
+        // (bits 0..2) and integrity level (bits 4..5) fields carry meaning.
         let raw = (data[0] as u16) | ((data[1] as u16) << 8);
         Some(Self {
             estimated_curvature: decode_curvature(raw)?,
@@ -433,6 +434,21 @@ mod tests {
         assert!(!curvature_within_range(CURVATURE_MIN_PER_KM - 1.0));
         assert!(!curvature_within_range(f64::NAN));
         assert!(!curvature_within_range(f64::INFINITY));
+    }
+
+    #[test]
+    fn decodes_real_captured_machine_info_with_reserved_bits_set() {
+        // Real Agricultural Guidance Machine Info frames (PGN 0xAC00) captured
+        // off a tractor's ISOBUS. Reserved bits in bytes 3..7 are transmitted
+        // as 1 (byte 3 = 0xFF), per J1939 convention. The decoder must accept
+        // these frames — rejecting on the reserved bits blinds the guidance
+        // plugin to every real machine-info message.
+        let frame = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
+        let info =
+            GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
+        assert!((info.estimated_curvature - -7.0).abs() < 0.25);
+        assert_eq!(info.lockout, MechanicalLockout::NotActive);
+        assert_eq!(info.guidance_limit_status, GuidanceLimitStatus::NotAvailable);
     }
 
     #[test]
@@ -515,10 +531,14 @@ mod tests {
         machine_bad_tail[5] = 0x00;
         assert!(GuidanceMachineInfo::decode(&machine_bad_tail).is_none());
 
-        let mut machine_bad_reserved = machine_bad_tail;
-        machine_bad_reserved[5] = 0xFF;
-        machine_bad_reserved[3] |= 0x01;
-        assert!(GuidanceMachineInfo::decode(&machine_bad_reserved).is_none());
+        // Reserved bits in byte 3 set to 1 (as conformant ECUs transmit them)
+        // must be ignored, not rejected — the frame still decodes.
+        let mut machine_reserved_set = machine_bad_tail;
+        machine_reserved_set[5] = 0xFF;
+        machine_reserved_set[3] |= 0x01;
+        let decoded = GuidanceMachineInfo::decode(&machine_reserved_set)
+            .expect("reserved bits set to 1 must not reject the frame");
+        assert_eq!(decoded.guidance_limit_status, GuidanceLimitStatus::LimitedLow);
 
         let mut status_bad_tail = GuidanceSystemStatus {
             estimated_curvature: 1.0,
@@ -534,9 +554,14 @@ mod tests {
         status_reserved_readiness[2] = (2 << 4) | 4;
         assert!(GuidanceSystemStatus::decode(&status_reserved_readiness).is_none());
 
+        // Reserved bit 3 set to 1 with a valid readiness slot must be ignored,
+        // not rejected — the frame still decodes.
         let mut status_reserved_bits = status_reserved_readiness;
         status_reserved_bits[2] = (2 << 4) | 2 | 0x08;
-        assert!(GuidanceSystemStatus::decode(&status_reserved_bits).is_none());
+        let decoded = GuidanceSystemStatus::decode(&status_reserved_bits)
+            .expect("reserved bits set to 1 must not reject the frame");
+        assert_eq!(decoded.readiness, SteeringReadiness::FullyReady);
+        assert_eq!(decoded.integrity_level, 2);
     }
 
     #[test]

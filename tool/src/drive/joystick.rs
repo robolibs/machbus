@@ -168,10 +168,12 @@ fn deadzone(v: f64) -> f64 {
 
 /// Handle one-shot button presses (actions that fire once per press).
 fn handle_buttons(pad: &PadState, drive: &mut DriveState, session: &mut Session) {
-    // A / Cross = emergency stop.
+    // A / Cross = emergency stop + disarm. Zeroes motion and drops the arm
+    // latch; you must release R2 and hold it again for 1.5 s to re-arm.
     if pad.a_pressed {
         drive.speed = 0.0;
         drive.steer = 0.0;
+        drive.disarm();
     }
     // B / Circle = hitch raise.
     if pad.b_pressed
@@ -246,14 +248,18 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
         // 2. Handle one-shot buttons.
         handle_buttons(&pad, &mut drive, &mut session);
 
-        // 3. Compute throttle from left stick Y only.
-        //    R2 (right trigger) is now the "dead-man's switch" — the
-        //    engaged button. Nothing moves unless R2 is held.
-        let throttle = if pad.rtrigger > 0.3 {
+        // 3. R2 (right trigger) is the dead-man switch. It must first be held
+        //    for ARM_HOLD_SECS to arm; after that it engages autosteer and
+        //    enables throttle only while held. Nothing moves until armed+held.
+        let deadman = pad.rtrigger > 0.3;
+        let active = drive.update_arm(deadman, dt);
+        let throttle = if active {
             pad.lstick_y // +1 = full forward, -1 = full reverse
         } else {
-            0.0 // dead-man released: no throttle
+            0.0 // not armed / dead-man released: no throttle
         };
+        // Command "intend to steer" only while armed and held.
+        drive.engaged = active;
 
         // 4. Apply analog physics.
         drive.apply_analog(throttle, pad.lstick_x, dt);
@@ -322,11 +328,10 @@ fn run_daemon(args: DriveArgs) -> Result<(), String> {
 
         handle_buttons(&pad, &mut drive, &mut session);
 
-        let throttle = if pad.rtrigger > 0.3 {
-            pad.lstick_y
-        } else {
-            0.0
-        };
+        let deadman = pad.rtrigger > 0.3;
+        let active = drive.update_arm(deadman, dt);
+        let throttle = if active { pad.lstick_y } else { 0.0 };
+        drive.engaged = active;
         drive.apply_analog(throttle, pad.lstick_x, dt);
         shared_tick(&mut session, &bus, &mut drive, start);
 

@@ -58,7 +58,12 @@ impl Instant {
     #[must_use]
     pub const fn millis_since(self, earlier: Instant) -> u32 {
         let micros = self.0.saturating_sub(earlier.0);
-        (micros / 1_000) as u32
+        let millis = micros / 1_000;
+        if millis > (u32::MAX as u64) {
+            u32::MAX
+        } else {
+            millis as u32
+        }
     }
 
     /// This instant advanced by `micros` microseconds (saturating).

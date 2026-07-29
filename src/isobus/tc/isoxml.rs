@@ -243,6 +243,55 @@ pub struct Partfield {
     pub designator: String,
 }
 
+/// GuidanceAllocation (`<GAN>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GuidanceAllocation {
+    pub id: String,
+    pub designator: String,
+}
+
+/// GuidancePattern (`<GPN>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GuidancePattern {
+    pub id: String,
+    pub designator: String,
+}
+
+/// Grid (`<GRD>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Grid {
+    pub id: String,
+    pub grid_type: u8,
+}
+
+/// Point (`<PNT>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Point {
+    pub id: String,
+    pub point_type: u8,
+}
+
+/// Polygon (`<PLN>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Polygon {
+    pub id: String,
+    pub polygon_type: u8,
+}
+
+/// LineString (`<LSG>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LineString {
+    pub id: String,
+    pub line_string_type: u8,
+}
+
+/// TreatmentZone (`<TZN>`) AST node.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TreatmentZone {
+    pub code: u8,
+    pub designator: String,
+}
+
 /// A parsed TASKDATA document.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TaskData {

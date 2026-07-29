@@ -66,6 +66,16 @@ fn bool_result<T, E: std::fmt::Display>(r: Result<T, E>) -> bool {
     }
 }
 
+fn catch_unwind_ffi<T>(default: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(_) => {
+            set_last_error("panic occurred during FFI execution");
+            default
+        }
+    }
+}
+
 // ─── Public POD types ─────────────────────────────────────────────────
 
 /// Node configuration. Build a default with [`machbus_session_default_config`]
@@ -202,6 +212,11 @@ fn can_bus_config_from_abi(
         loopback,
     }
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<MachbusConfig>() > 0);
+    assert!(core::mem::size_of::<MachbusCanBusValidation>() > 0);
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

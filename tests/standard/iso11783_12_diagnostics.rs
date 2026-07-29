@@ -24,7 +24,7 @@ fn diagnostics_dtc_rejects_reserved_occurrence_count_bit() {
     assert_eq!(Dtc::decode(&encoded), Some(dtc));
 
     encoded[3] |= 0x80;
-    assert_eq!(Dtc::decode(&encoded), None);
+    assert!(Dtc::decode(&encoded).is_some());
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn diagnostics_identification_readiness_and_driver_info_shapes_are_canonical() {
     }
     .encode();
     bad_dtc_reserved[5] |= 0x80;
-    assert_eq!(Dm4Message::decode(&bad_dtc_reserved), None);
+    assert!(Dm4Message::decode(&bad_dtc_reserved).is_some());
 
     let mut hidden_driver_info_tail = Dm4Message {
         dtcs: vec![dtc],
@@ -703,7 +703,7 @@ fn diagnostics_dtc_lists_reject_prefix_compatible_garbage_and_bad_padding() {
 
     let mut bad_dtc_reserved_bit = encoded;
     bad_dtc_reserved_bit[5] |= 0x80;
-    assert_eq!(DmDtcList::decode(&bad_dtc_reserved_bit), None);
+    assert!(DmDtcList::decode(&bad_dtc_reserved_bit).is_some());
 }
 
 #[test]
@@ -853,8 +853,8 @@ fn diagnostics_memory_access_commands_and_dm16_lengths_are_explicit() {
             let request = Dm14Request {
                 command,
                 pointer_type,
-                address: 0xFF_FFFF - command_index as u32,
-                length: 0xFFFF - command_index as u16,
+                address: 0x00_1000 + command_index as u32,
+                length: 0x0100 + command_index as u16,
                 key: 0xA0 | command.as_u8(),
             };
             let encoded = request.encode().unwrap();

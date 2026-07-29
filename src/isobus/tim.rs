@@ -563,6 +563,61 @@ fn decode_bool_byte(byte: u8) -> Option<bool> {
     }
 }
 
+// ─── AEF 023 RIG 2 PKI Mutual Authentication Handshake ─────────────────────
+
+/// AEF 023 RIG 2 TIM PKI Authentication State.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TimPkiState {
+    #[default]
+    Unauthenticated,
+    Authenticating,
+    Authenticated,
+    Failed,
+}
+
+/// AEF 023 RIG 2 TIM PKI Mutual Authentication Handshake FSM.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TimPkiHandshake {
+    state: TimPkiState,
+    challenge_nonce: [u8; 8],
+}
+
+impl TimPkiHandshake {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn state(&self) -> TimPkiState {
+        self.state
+    }
+
+    pub fn generate_challenge(&mut self, nonce: [u8; 8]) -> [u8; 8] {
+        self.challenge_nonce = nonce;
+        self.state = TimPkiState::Authenticating;
+        self.challenge_nonce
+    }
+
+    pub fn verify_response(&mut self, expected_signature: &[u8], actual_signature: &[u8]) -> bool {
+        if self.state != TimPkiState::Authenticating {
+            return false;
+        }
+        if !expected_signature.is_empty() && expected_signature == actual_signature {
+            self.state = TimPkiState::Authenticated;
+            true
+        } else {
+            self.state = TimPkiState::Failed;
+            false
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.state = TimPkiState::Unauthenticated;
+        self.challenge_nonce = [0u8; 8];
+    }
+}
+
 // ─── PTO ───────────────────────────────────────────────────────────────
 
 /// PTO state (front or rear). Same wire format used by both
@@ -1175,5 +1230,20 @@ mod tests {
         // With no comms timeout configured, ticks never revoke.
         assert!(!authority.tick(100_000));
         assert_eq!(authority.state(), TimAuthorityState::Granted);
+    }
+
+    #[test]
+    fn tim_pki_handshake_flow() {
+        let mut pki = TimPkiHandshake::new();
+        assert_eq!(pki.state(), TimPkiState::Unauthenticated);
+        let challenge = pki.generate_challenge([1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(challenge, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(pki.state(), TimPkiState::Authenticating);
+
+        assert!(pki.verify_response(b"sig123", b"sig123"));
+        assert_eq!(pki.state(), TimPkiState::Authenticated);
+
+        pki.reset();
+        assert_eq!(pki.state(), TimPkiState::Unauthenticated);
     }
 }

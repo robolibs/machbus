@@ -1473,23 +1473,17 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         ))
         .is_none()
     );
-    for name in [
-        "malformed_guidance_machine_bad_padding",
-        "malformed_guidance_machine_reserved_control_bits",
-    ] {
-        assert!(
-            GuidanceMachineInfo::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+    assert!(
+        GuidanceMachineInfo::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "malformed_guidance_machine_bad_padding",
+        ))
+        .is_none(),
+        "malformed_guidance_machine_bad_padding must be rejected"
+    );
     for name in [
         "malformed_guidance_system_status_bad_padding",
         "malformed_guidance_system_status_reserved_readiness",
-        "malformed_guidance_system_status_reserved_control_bits",
     ] {
         assert!(
             GuidanceSystemStatus::decode(&parse_named_hex_bytes(

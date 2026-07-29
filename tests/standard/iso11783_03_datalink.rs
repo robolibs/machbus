@@ -16,7 +16,7 @@ use machbus::net::tp::TP_T_HOLD_MS;
 use machbus::net::{
     BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ErrorCode, ExtendedTransportProtocol, Frame,
     Identifier, NULL_ADDRESS, Priority, SessionState, TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
-    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState, TransportAbortReason,
+    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState, TransportAbortReason,
     TransportProtocol,
 };
 
@@ -1427,7 +1427,7 @@ fn datalink_tp_timeout_windows_abort_without_leaking_partial_sessions() {
         rx_waiting_for_data.active_sessions()[0].state,
         SessionState::WaitingForData
     );
-    assert!(rx_waiting_for_data.update(TP_TIMEOUT_T1_MS - 1).is_empty());
+    assert!(rx_waiting_for_data.update(TP_TIMEOUT_T2_MS - 1).is_empty());
     assert_eq!(
         rx_waiting_for_data.active_sessions()[0].state,
         SessionState::WaitingForData

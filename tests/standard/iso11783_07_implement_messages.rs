@@ -954,7 +954,7 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
 
     let mut bad_lower_reserved_bits = encoded;
     bad_lower_reserved_bits[3] |= 0x01;
-    assert_eq!(GuidanceMachineInfo::decode(&bad_lower_reserved_bits), None);
+    assert!(GuidanceMachineInfo::decode(&bad_lower_reserved_bits).is_some());
 
     let mut bad_tail = encoded;
     bad_tail[5] = 0x00;

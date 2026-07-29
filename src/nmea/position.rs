@@ -187,6 +187,82 @@ impl GNSSBatch {
     }
 }
 
+// ─── AIS Position Reports (PGN 129038 & PGN 129039) ────────────────────
+
+/// AIS Class A Position Report (PGN 129038 / 0x01F806).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AisClassAPositionReport {
+    pub mmsi: u32,
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub cog_rad: f64,
+    pub sog_mps: f64,
+    pub heading_rad: f64,
+    pub rot_rad_per_sec: f64,
+    pub nav_status: u8,
+}
+
+impl AisClassAPositionReport {
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 24 {
+            return None;
+        }
+        let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+        let lat_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lon_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        let cog_raw = u16::from_le_bytes([data[15], data[16]]);
+        let sog_raw = u16::from_le_bytes([data[17], data[18]]);
+        let heading_raw = u16::from_le_bytes([data[19], data[20]]);
+        let rot_raw = i16::from_le_bytes([data[21], data[22]]);
+        let nav_status = data[23] & 0x0F;
+
+        Some(Self {
+            mmsi,
+            latitude_deg: f64::from(lat_raw) * 1e-7,
+            longitude_deg: f64::from(lon_raw) * 1e-7,
+            cog_rad: f64::from(cog_raw) * 0.0001,
+            sog_mps: f64::from(sog_raw) * 0.01,
+            heading_rad: f64::from(heading_raw) * 0.0001,
+            rot_rad_per_sec: f64::from(rot_raw) * 0.001,
+            nav_status,
+        })
+    }
+}
+
+/// AIS Class B Position Report (PGN 129039 / 0x01F807).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AisClassBPositionReport {
+    pub mmsi: u32,
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub cog_rad: f64,
+    pub sog_mps: f64,
+    pub heading_rad: f64,
+}
+
+impl AisClassBPositionReport {
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 21 {
+            return None;
+        }
+        let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+        let lat_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lon_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        let cog_raw = u16::from_le_bytes([data[15], data[16]]);
+        let sog_raw = u16::from_le_bytes([data[17], data[18]]);
+        let heading_raw = u16::from_le_bytes([data[19], data[20]]);
+
+        Some(Self {
+            mmsi,
+            latitude_deg: f64::from(lat_raw) * 1e-7,
+            longitude_deg: f64::from(lon_raw) * 1e-7,
+            cog_rad: f64::from(cog_raw) * 0.0001,
+            sog_mps: f64::from(sog_raw) * 0.01,
+            heading_rad: f64::from(heading_raw) * 0.0001,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +441,18 @@ mod tests {
         assert!(GNSSBatch::wgs_from_enu_batch(&[]).is_empty());
         assert!(GNSSBatch::wgs_from_ned_batch(&[]).is_empty());
         assert!(GNSSBatch::wgs_from_ecf_batch(&[]).is_empty());
+    }
+
+    #[test]
+    fn ais_position_reports_decode() {
+        let mut data_a = [0u8; 30];
+        data_a[1..5].copy_from_slice(&244000111u32.to_le_bytes());
+        let report_a = AisClassAPositionReport::decode(&data_a).unwrap();
+        assert_eq!(report_a.mmsi, 244000111);
+
+        let mut data_b = [0u8; 25];
+        data_b[1..5].copy_from_slice(&244000222u32.to_le_bytes());
+        let report_b = AisClassBPositionReport::decode(&data_b).unwrap();
+        assert_eq!(report_b.mmsi, 244000222);
     }
 }

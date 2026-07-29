@@ -235,9 +235,6 @@ impl Dtc {
         if data.len() != 4 {
             return None;
         }
-        if data[3] & 0x80 != 0 {
-            return None;
-        }
         Some(Self {
             spn: (data[0] as u32)
                 | ((data[1] as u32) << 8)
@@ -1498,6 +1495,39 @@ impl Dm25Request {
             spn: (data[0] as u32) | ((data[1] as u32) << 8) | (((data[2] & 0x07) as u32) << 16),
             fmi: Fmi::try_from_u8(data[3])?,
             frame_number: data[4],
+        })
+    }
+}
+
+/// DM24 Supported SPN Codec.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Dm24SupportedSpn {
+    pub spn: u32,
+    pub fmi: Fmi,
+    pub spn_data_len: u8,
+}
+
+impl Dm24SupportedSpn {
+    #[must_use]
+    pub fn encode(&self) -> [u8; 4] {
+        let spn = clamp_spn_19(self.spn);
+        [
+            (spn & 0xFF) as u8,
+            ((spn >> 8) & 0xFF) as u8,
+            (((spn >> 16) & 0x07) as u8) | (self.fmi.as_u8() << 3),
+            self.spn_data_len,
+        ]
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 4 {
+            return None;
+        }
+        Some(Self {
+            spn: (data[0] as u32) | ((data[1] as u32) << 8) | (((data[2] & 0x07) as u32) << 16),
+            fmi: Fmi::try_from_u8((data[2] >> 3) & 0x1F)?,
+            spn_data_len: data[3],
         })
     }
 }

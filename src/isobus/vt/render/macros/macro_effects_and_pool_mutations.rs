@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap as HashMap;
 
 use crate::isobus::vt::objects::{
     change_attribute_targets_one_byte_field, change_attribute_targets_two_byte_field,

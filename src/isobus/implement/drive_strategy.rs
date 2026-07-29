@@ -68,15 +68,8 @@ const GUIDANCE_SYSTEM_CURVATURE_RESOLUTION_PER_KM: f64 = 0.25;
 const GUIDANCE_SYSTEM_CURVATURE_MAX_RAW: u16 = 0xFAFF;
 
 fn encode_guidance_system_curvature(curvature_per_km: f64) -> u16 {
-    if curvature_per_km.is_nan() {
-        return 0;
-    }
     if !curvature_per_km.is_finite() {
-        return if curvature_per_km.is_sign_positive() {
-            u16::MAX
-        } else {
-            0
-        };
+        return 0xFFFF;
     }
     let clamped = curvature_per_km.clamp(
         GUIDANCE_SYSTEM_CURVATURE_MIN_PER_KM,
@@ -125,6 +118,49 @@ impl DriveStrategyCmd {
             mode: DriveStrategyMode::try_from_u8(data[0])?,
             target_speed_limit_percent: data[1],
             target_engine_load_percent: data[2],
+        })
+    }
+}
+
+/// Drive Strategy Status (PGN 0xFCCD / 64,717).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriveStrategyStatusMsg {
+    pub mode: DriveStrategyMode,
+    /// `0.4 %` per bit (0–100 %); `0xFF` = N/A.
+    pub active_speed_limit_percent: u8,
+    /// `0.4 %` per bit (0–100 %); `0xFF` = N/A.
+    pub active_engine_load_percent: u8,
+}
+
+impl Default for DriveStrategyStatusMsg {
+    fn default() -> Self {
+        Self {
+            mode: DriveStrategyMode::NoAction,
+            active_speed_limit_percent: 0xFF,
+            active_engine_load_percent: 0xFF,
+        }
+    }
+}
+
+impl DriveStrategyStatusMsg {
+    #[must_use]
+    pub fn encode(&self) -> [u8; 8] {
+        let mut data = [0xFFu8; 8];
+        data[0] = self.mode.as_u8();
+        data[1] = self.active_speed_limit_percent;
+        data[2] = self.active_engine_load_percent;
+        data
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 3 {
+            return None;
+        }
+        Some(Self {
+            mode: DriveStrategyMode::try_from_u8(data[0])?,
+            active_speed_limit_percent: data[1],
+            active_engine_load_percent: data[2],
         })
     }
 }
@@ -396,7 +432,7 @@ mod tests {
             ..Default::default()
         }
         .encode();
-        assert_eq!(&nan[..2], &[0x00, 0x00]);
+        assert_eq!(&nan[..2], &[0xFF, 0xFF]);
     }
 
     #[test]
@@ -462,7 +498,7 @@ mod tests {
         assert!(GuidanceSystemCmd::decode(&guidance_bad_tail).is_none());
 
         let mut guidance_bad_reserved = GuidanceSystemCmd::default().encode();
-        guidance_bad_reserved[2] = 0x03;
+        guidance_bad_reserved[2] &= 0x03;
         assert!(GuidanceSystemCmd::decode(&guidance_bad_reserved).is_none());
 
         let mut combined_bad_control = HitchPtoCombinedCmd {
@@ -502,5 +538,12 @@ mod tests {
         assert!(GuidanceSystemCmd::decode(&[0u8; 9]).is_none());
         assert!(HitchPtoCombinedCmd::decode(&[0u8; 9]).is_none());
         assert!(HitchRollPitchCmd::decode(&[0u8; 9], false).is_none());
+    }
+
+    #[test]
+    fn guidance_curvature_nan_returns_not_available() {
+        assert_eq!(encode_guidance_system_curvature(f64::NAN), 0xFFFF);
+        assert_eq!(encode_guidance_system_curvature(f64::INFINITY), 0xFFFF);
+        assert_eq!(encode_guidance_system_curvature(f64::NEG_INFINITY), 0xFFFF);
     }
 }

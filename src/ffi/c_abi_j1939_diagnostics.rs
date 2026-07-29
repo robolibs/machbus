@@ -79,20 +79,22 @@ pod_codec!(
 /// PGN). Returns true on a valid DM9 request.
 #[unsafe(no_mangle)]
 pub extern "C" fn machbus_j1939_dm9_request_decode(data: *const u8, len: usize) -> bool {
-    let bytes = match read_bytes(data, len) {
-        Ok(b) => b,
-        Err(e) => {
-            set_last_error(e);
-            return false;
+    catch_unwind_ffi(false, || {
+        let bytes = match read_bytes(data, len) {
+            Ok(b) => b,
+            Err(e) => {
+                set_last_error(e);
+                return false;
+            }
+        };
+        if crate::j1939::Dm9VehicleIdentificationRequest::decode(bytes).is_some() {
+            clear_last_error();
+            true
+        } else {
+            set_last_error("Dm9 request decode failed");
+            false
         }
-    };
-    if crate::j1939::Dm9VehicleIdentificationRequest::decode(bytes).is_some() {
-        clear_last_error();
-        true
-    } else {
-        set_last_error("Dm9 request decode failed");
-        false
-    }
+    })
 }
 
 /// Encode a DM9 Vehicle Identification request into the caller's 3-byte buffer.

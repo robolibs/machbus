@@ -341,7 +341,7 @@ impl TransportProtocol {
             // Timeout per state.
             let timed_out = match self.sessions[i].state {
                 SessionState::WaitingForCTS => self.sessions[i].timer_ms >= TP_TIMEOUT_T3_MS,
-                SessionState::WaitingForData => self.sessions[i].timer_ms >= TP_TIMEOUT_T1_MS,
+                SessionState::WaitingForData => self.sessions[i].timer_ms >= TP_TIMEOUT_T2_MS,
                 SessionState::WaitingForEndOfMsg => self.sessions[i].timer_ms >= TP_TIMEOUT_T3_MS,
                 SessionState::ReceivingData => self.sessions[i].timer_ms >= TP_TIMEOUT_T1_MS,
                 _ => false,

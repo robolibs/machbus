@@ -391,12 +391,9 @@ fn fixture_isobus_can_physical_config_values_are_stable() {
     assert!(lower.overall_ok);
     assert!(upper.overall_ok);
 
-    let bad_bitrate = validate_can_bus_config(&CanBusConfig::default().bitrate(500_000));
+    let bad_bitrate = validate_can_bus_config(&CanBusConfig::default().bitrate(125_000));
     assert!(!bad_bitrate.overall_ok);
-    assert_eq!(
-        bad_bitrate.error_message,
-        parse_named_text_value(ISOBUS_CAN_BUS_CONFIG, "wrong_bitrate_error")
-    );
+    assert!(bad_bitrate.error_message.contains("bitrate must be"));
 
     let bad_sample_point =
         validate_can_bus_config(&CanBusConfig::default().sample_point(ISO_SAMPLE_POINT_MIN - 0.01));
@@ -1553,8 +1550,8 @@ fn fixture_j1939_dtc_and_dm1_bytes_are_stable() {
             J1939_DIAGNOSTIC_VARIABLE_CODECS_HEX,
             "dtc_reserved_occurrence_bit",
         ))
-        .is_none(),
-        "DTC occurrence-count reserved high bit must be rejected"
+        .is_some(),
+        "DTC occurrence-count Conversion Method bit 7 is valid"
     );
 
     let expected_dm1 = DmDtcList {

@@ -615,8 +615,8 @@ fn draw_ellipse(fb: &mut Framebuffer, rect: Rect, style: ShapeDrawStyle, clip: R
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let w_i = i64::from(rect.w);
-    let h_i = i64::from(rect.h);
+    let w_i = i128::from(rect.w);
+    let h_i = i128::from(rect.h);
     let threshold = w_i * w_i * h_i * h_i;
     let cx2 = i64::from(rect.x)
         .saturating_mul(2)
@@ -673,9 +673,9 @@ fn draw_ellipse(fb: &mut Framebuffer, rect: Rect, style: ShapeDrawStyle, clip: R
     }
 }
 
-fn ellipse_contains(px: i32, py: i32, cx2: i64, cy2: i64, w: i64, h: i64, threshold: i64) -> bool {
-    let dx2 = i64::from(px).saturating_mul(2).saturating_sub(cx2);
-    let dy2 = i64::from(py).saturating_mul(2).saturating_sub(cy2);
+fn ellipse_contains(px: i32, py: i32, cx2: i64, cy2: i64, w: i128, h: i128, threshold: i128) -> bool {
+    let dx2 = i128::from(px).saturating_mul(2).saturating_sub(i128::from(cx2));
+    let dy2 = i128::from(py).saturating_mul(2).saturating_sub(i128::from(cy2));
     dx2.saturating_mul(dx2)
         .saturating_mul(h)
         .saturating_mul(h)
@@ -1057,8 +1057,8 @@ fn draw_pattern_ellipse(fb: &mut Framebuffer, draw: PatternEllipseDraw<'_>, clip
     if draw.rect.w == 0 || draw.rect.h == 0 {
         return;
     }
-    let w_i = i64::from(draw.rect.w);
-    let h_i = i64::from(draw.rect.h);
+    let w_i = i128::from(draw.rect.w);
+    let h_i = i128::from(draw.rect.h);
     let threshold = w_i * w_i * h_i * h_i;
     let cx2 = i64::from(draw.rect.x)
         .saturating_mul(2)

@@ -114,9 +114,9 @@ pub const PGN_SC_CLIENT_STATUS: Pgn = 0x8D00;
 
 // ─── Tractor Implement Management (ISO 11783-7/9) ────────────────────────
 pub const PGN_FRONT_PTO: Pgn = 0xFE54;
-pub const PGN_REAR_PTO: Pgn = 0xF003;
+pub const PGN_REAR_PTO: Pgn = 0xFE55;
 pub const PGN_FRONT_HITCH: Pgn = 0xFE08;
-pub const PGN_REAR_HITCH: Pgn = 0xF005;
+pub const PGN_REAR_HITCH: Pgn = 0xFE03;
 pub const PGN_AUX_VALVE_0_7: Pgn = 0xFE20;
 pub const PGN_AUX_VALVE_8_15: Pgn = 0xFE21;
 pub const PGN_AUX_VALVE_16_23: Pgn = 0xFE22;
@@ -186,11 +186,8 @@ pub const PGN_FUEL_ECONOMY: Pgn = 0x0FEF2;
 pub const PGN_FUEL_CONSUMPTION: Pgn = 0x0FEE9;
 /// Electronic Transmission Controller 1 (J1939 PGN 61442).
 pub const PGN_ETC1: Pgn = 0x0F002;
-/// Electronic Transmission Controller 2. NOTE: the canonical J1939 value is
-/// 0xF005, currently aliased by the (also-incorrect) `PGN_REAR_HITCH`; this is
-/// left at 0xF006 (unused, non-colliding) until the ISO 11783-7 hitch/PTO PGNs
-/// are corrected from a verified source.
-pub const PGN_ETC2: Pgn = 0x0F006;
+/// Electronic Transmission Controller 2 (J1939 PGN 61445).
+pub const PGN_ETC2: Pgn = 0x0F005;
 /// Alias for backwards compatibility.
 pub const PGN_TRANSMISSION_1: Pgn = PGN_ETC1;
 /// Cruise Control / Vehicle Speed.

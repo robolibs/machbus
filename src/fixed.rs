@@ -530,6 +530,49 @@ impl<const N: usize> FixedMessage<N> {
     }
 }
 
+/// Zero-allocation fixed buffer pool for `#![no_std]` targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedBufferPool<const SLOTS: usize, const BUF_LEN: usize> {
+    buffers: [[u8; BUF_LEN]; SLOTS],
+    used: [bool; SLOTS],
+}
+
+impl<const SLOTS: usize, const BUF_LEN: usize> Default for FixedBufferPool<SLOTS, BUF_LEN> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const SLOTS: usize, const BUF_LEN: usize> FixedBufferPool<SLOTS, BUF_LEN> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buffers: [[0u8; BUF_LEN]; SLOTS],
+            used: [false; SLOTS],
+        }
+    }
+
+    pub fn acquire(&mut self) -> Option<(usize, &mut [u8; BUF_LEN])> {
+        for (i, used) in self.used.iter_mut().enumerate() {
+            if !*used {
+                *used = true;
+                return Some((i, &mut self.buffers[i]));
+            }
+        }
+        None
+    }
+
+    pub fn release(&mut self, slot: usize) -> bool {
+        if slot < SLOTS && self.used[slot] {
+            self.used[slot] = false;
+            self.buffers[slot].fill(0);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

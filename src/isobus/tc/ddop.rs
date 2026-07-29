@@ -463,9 +463,9 @@ impl DDOP {
             for pd in &self.process_data {
                 if pd.id == cid {
                     xml.push_str(&format!(
-                        "      <DPD A=\"DPD-{}\" B=\"{}\" C=\"{}\" D=\"{}\"",
+                        "      <DPD A=\"DPD-{}\" B=\"{:04X}\" C=\"{}\" D=\"{}\"",
                         pd.id,
-                        pd.ddi,
+                        pd.ddi.raw(),
                         u32::from(pd.trigger_methods),
                         xml_escape(&pd.designator),
                     ));

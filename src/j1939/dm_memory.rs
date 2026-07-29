@@ -147,11 +147,16 @@ impl Dm14Request {
             return None;
         }
         let command = Dm14Command::try_from_u8(data[0] & 0x07)?;
+        let length = (data[1] as u16) | ((data[2] as u16) << 8);
+        let address = (data[3] as u32) | ((data[4] as u32) << 8) | ((data[5] as u32) << 16);
+        if (address as u64) + (length as u64) > 0x0100_0000 {
+            return None;
+        }
         Some(Self {
             command,
             pointer_type: Dm14PointerType::try_from_u8(data[0] >> 4)?,
-            length: (data[1] as u16) | ((data[2] as u16) << 8),
-            address: (data[3] as u32) | ((data[4] as u32) << 8) | ((data[5] as u32) << 16),
+            length,
+            address,
             key: data[6],
         })
     }

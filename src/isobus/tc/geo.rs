@@ -381,8 +381,12 @@ pub fn point_in_polygon(point: Wgs, polygon: &[Wgs]) -> bool {
         let yi = a.latitude;
         let xj = b.longitude;
         let yj = b.latitude;
+        let denom = yj - yi;
+        if denom.abs() < 1e-9 {
+            continue;
+        }
         let intersect = (yi > point.latitude) != (yj > point.latitude)
-            && point.longitude < (xj - xi) * (point.latitude - yi) / (yj - yi) + xi;
+            && point.longitude < (xj - xi) * (point.latitude - yi) / denom + xi;
         if intersect {
             inside = !inside;
         }

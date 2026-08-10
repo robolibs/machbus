@@ -119,6 +119,44 @@ fn u16_signal(raw: u16, resolution: f64) -> Option<Signal<f64>> {
     }
 }
 
+/// Split an 8-bit raw signal into value / error / not-available
+/// (ISO 11783-7:2022 Table 1, 8-bit row).
+///
+/// `0xFE` is the error indicator and `0xFF` not-available; `0xFB..=0xFD` are
+/// reserved and are the only genuine decode failure. Treating `0xFE` as one
+/// meant a hitch reporting a failed position sensor dropped the whole PG,
+/// including the limit status and exit code that say *why* it failed.
+fn u8_signal(raw: u8, resolution: f64) -> Option<Signal<f64>> {
+    match raw {
+        0..=250 => Some(Signal::Value(f64::from(raw) * resolution)),
+        0xFE => Some(Signal::Error),
+        0xFF => Some(Signal::NotAvailable),
+        _ => None,
+    }
+}
+
+fn encode_u8_signal(signal: Signal<f64>, resolution: f64) -> u8 {
+    match signal {
+        Signal::Value(v) => scaled_u8_bounded(v, resolution),
+        Signal::Error => 0xFE,
+        Signal::NotAvailable => 0xFF,
+    }
+}
+
+fn scaled_u8_bounded(value: f64, resolution: f64) -> u8 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let raw = value / resolution;
+    if raw <= 0.0 {
+        0
+    } else if raw >= 250.0 {
+        250
+    } else {
+        raw as u8
+    }
+}
+
 fn u32_signal(raw: u32, resolution: f64) -> Option<Signal<f64>> {
     match raw {
         0..=VALID_MAX_U32_SIGNAL_RAW => Some(Signal::Value(raw as f64 * resolution)),
@@ -156,10 +194,6 @@ fn scaled_u32_bounded(value: f64, resolution: f64) -> u32 {
     } else {
         raw as u32
     }
-}
-
-fn percent_raw_is_available_or_not_available(raw: u8) -> bool {
-    raw <= 250 || raw == 0xFF
 }
 
 fn offset_scaled_u16_bounded(value: f64, offset: f64, resolution: f64) -> u16 {
@@ -537,13 +571,18 @@ impl ExitReasonCode {
 /// for `0..=100 %` (0.4 % per bit).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HitchStatus {
-    pub position_percent: u8,
+    /// SPN 1873/1876: 0.4 %/bit. This used to be the raw wire byte, so the
+    /// not-available sentinel 0xFF read back as a position of 255.
+    pub position_percent: Signal<f64>,
     /// 2 bits: 0 = not in work, 1 = in work, 2 = error, 3 = N/A.
     pub in_work_indication: u8,
     pub limit_status: LimitStatus,
     pub exit_code: ExitReasonCode,
     /// Draft force in N (Class 2 TECU; 10 N per bit, offset −320 000).
-    pub draft_force_n: f64,
+    ///
+    /// ISO 11783-9 §4.4.2.1 *requires* a tractor with no draft sensor to
+    /// broadcast this as not-available, so it cannot be a plain `f64`.
+    pub draft_force_n: Signal<f64>,
     /// `true` = `PGN_REAR_HITCH` (0xF005), `false` = `PGN_FRONT_HITCH`.
     pub is_rear: bool,
 }
@@ -551,11 +590,12 @@ pub struct HitchStatus {
 impl Default for HitchStatus {
     fn default() -> Self {
         Self {
-            position_percent: 0xFF,
+            position_percent: Signal::NotAvailable,
             in_work_indication: 0x03,
             limit_status: LimitStatus::NotAvailable,
             exit_code: ExitReasonCode::NotAvailable,
-            draft_force_n: 0.0,
+            // 0 N was a claim, not the absence of a draft sensor.
+            draft_force_n: Signal::NotAvailable,
             is_rear: true,
         }
     }
@@ -574,11 +614,15 @@ impl HitchStatus {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = self.position_percent;
+        data[0] = encode_u8_signal(self.position_percent, 0.4);
         data[1] = (self.in_work_indication & 0x03)
             | ((self.limit_status.as_u8() & 0x03) << 2)
             | ((self.exit_code.as_u8() & 0x07) << 4);
-        let force_raw = offset_scaled_u16_bounded(self.draft_force_n, 320_000.0, 10.0);
+        let force_raw = match self.draft_force_n {
+            Signal::Value(v) => offset_scaled_u16_bounded(v, 320_000.0, 10.0),
+            Signal::Error => 0xFE00,
+            Signal::NotAvailable => 0xFFFF,
+        };
         data[2] = (force_raw & 0xFF) as u8;
         data[3] = ((force_raw >> 8) & 0xFF) as u8;
         data
@@ -591,19 +635,18 @@ impl HitchStatus {
         if data.len() != 8 || data[1] & 0x80 != 0 || !has_ff_tail(data, 4) {
             return None;
         }
-        if !percent_raw_is_available_or_not_available(data[0]) {
-            return None;
-        }
         let force_raw = (data[2] as u16) | ((data[3] as u16) << 8);
-        if !u16_signal_raw_is_valid(force_raw) {
-            return None;
-        }
+        // G4: neither an unfitted draft sensor nor a failed position sensor may
+        // cost the limit status and exit code carried in the same frame.
         Some(Self {
-            position_percent: data[0],
+            position_percent: u8_signal(data[0], 0.4)?,
             in_work_indication: data[1] & 0x03,
             limit_status: LimitStatus::try_from_u8((data[1] >> 2) & 0x03)?,
             exit_code: ExitReasonCode::try_from_hitch_u8(data[1] >> 4)?,
-            draft_force_n: f64::from(force_raw) * 10.0 - 320_000.0,
+            draft_force_n: match u16_signal(force_raw, 10.0)? {
+                Signal::Value(v) => Signal::Value(v - 320_000.0),
+                other => other,
+            },
             is_rear,
         })
     }
@@ -757,21 +800,23 @@ mod tests {
 
     #[test]
     fn hitch_status_round_trip_and_pgn() {
+        // Raw 200 at the SPN 1873 resolution of 0.4 %/bit is 80 %.
         let m = HitchStatus {
-            position_percent: 200,
+            position_percent: Signal::Value(80.0),
             in_work_indication: 1,
             limit_status: LimitStatus::OperatorLimited,
             exit_code: ExitReasonCode::OperatorCmd,
-            draft_force_n: -100_000.0,
+            draft_force_n: Signal::Value(-100_000.0),
             is_rear: true,
         };
         let bytes = m.encode();
+        assert_eq!(bytes[0], 200);
         let decoded = HitchStatus::decode(&bytes, true).unwrap();
-        assert_eq!(decoded.position_percent, 200);
+        assert!((decoded.position_percent.value().unwrap() - 80.0).abs() < 0.4);
         assert_eq!(decoded.in_work_indication, 1);
         assert_eq!(decoded.limit_status, LimitStatus::OperatorLimited);
         assert_eq!(decoded.exit_code, ExitReasonCode::OperatorCmd);
-        assert!((decoded.draft_force_n - -100_000.0).abs() < 10.0);
+        assert!((decoded.draft_force_n.value().unwrap() - -100_000.0).abs() < 10.0);
         assert_eq!(decoded.pgn(), PGN_REAR_HITCH);
         let front = HitchStatus {
             is_rear: false,
@@ -875,14 +920,14 @@ mod tests {
         assert_eq!(&pto_high[..2], &[0xFF, 0xFA]);
 
         let hitch_high = HitchStatus {
-            draft_force_n: 1.0e12,
+            draft_force_n: Signal::Value(1.0e12),
             ..Default::default()
         }
         .encode();
         assert_eq!(&hitch_high[2..4], &[0xFF, 0xFA]);
 
         let hitch_low = HitchStatus {
-            draft_force_n: f64::NEG_INFINITY,
+            draft_force_n: Signal::Value(f64::NEG_INFINITY),
             ..Default::default()
         }
         .encode();

@@ -5,7 +5,8 @@ use machbus::isobus::implement::{
     HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState, LightingState, LimitStatus,
     MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg,
     MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus,
-    RequestResetCommandStatus, SpeedExitCode, SpeedSource, TractorControlModeMsg, TractorMode,
+    RequestResetCommandStatus, Signal, SpeedExitCode, SpeedSource, TractorControlModeMsg,
+    TractorMode,
     ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
     estimated_flow_pgn, measured_flow_pgn,
 };
@@ -306,11 +307,11 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let hitch = HitchStatus {
-        position_percent: 100,
+        position_percent: Signal::Value(40.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -10_000.0,
+        draft_force_n: Signal::Value(-10_000.0),
         is_rear: true,
     };
     assert_eq!(
@@ -948,11 +949,11 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
 #[test]
 fn implement_hitch_status_rejects_reserved_exit_codes_without_payload_slop() {
     let status = HitchStatus {
-        position_percent: 200,
+        position_percent: Signal::Value(80.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let encoded = status.encode();
@@ -1101,19 +1102,21 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
     assert_eq!(PtoStatus::decode(&bad_pto_speed, false), None);
 
     let hitch = HitchStatus {
-        position_percent: 250,
+        position_percent: Signal::Value(100.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let hitch_bytes = hitch.encode();
+    // Raw 250 is the top of the 0.4 %/bit range: 100 %.
+    assert_eq!(hitch_bytes[0], 250);
     assert_eq!(
         HitchStatus::decode(&hitch_bytes, true)
             .unwrap()
             .position_percent,
-        250
+        Signal::Value(100.0)
     );
     let mut not_available_hitch_position = hitch_bytes;
     not_available_hitch_position[0] = 0xFF;
@@ -1121,9 +1124,27 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         HitchStatus::decode(&not_available_hitch_position, true)
             .unwrap()
             .position_percent,
-        0xFF
+        Signal::NotAvailable
     );
-    for reserved_position in 251..=254 {
+    // B4 — 0xFE is the error indicator, not a decode failure: a hitch whose
+    // position sensor has failed still reports the limit status and exit code
+    // that say why (G4).
+    let mut faulted_hitch_position = hitch_bytes;
+    faulted_hitch_position[0] = 0xFE;
+    let faulted = HitchStatus::decode(&faulted_hitch_position, true)
+        .expect("a failed position sensor must not drop the PG");
+    assert_eq!(faulted.position_percent, Signal::Error);
+    assert_eq!(faulted.limit_status, LimitStatus::OperatorLimited);
+    assert_eq!(faulted.exit_code, ExitReasonCode::Fault);
+    // K1 — ISO 11783-9 §4.4.2.1 requires a tractor with no draft sensor to
+    // broadcast not-available here, so the frame must still decode.
+    let mut no_draft_sensor = hitch_bytes;
+    no_draft_sensor[2..4].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    let no_draft = HitchStatus::decode(&no_draft_sensor, true)
+        .expect("an unfitted draft sensor must not drop the PG");
+    assert_eq!(no_draft.draft_force_n, Signal::NotAvailable);
+    assert_eq!(no_draft.position_percent, Signal::Value(100.0));
+    for reserved_position in 251..=253 {
         let mut bad_hitch_position = hitch_bytes;
         bad_hitch_position[0] = reserved_position;
         assert_eq!(
@@ -1258,19 +1279,31 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     }
 
     let hitch = HitchStatus {
-        position_percent: 250,
+        position_percent: Signal::Value(100.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let hitch_bytes = hitch.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = hitch_bytes;
-        bad[2..4].copy_from_slice(&raw.to_le_bytes());
-        assert_eq!(HitchStatus::decode(&bad, true), None);
+    // K1/G4 — the indicator bands are reported, not fatal: only a reserved raw
+    // is a decode failure. A tractor with no draft sensor is *required* by
+    // ISO 11783-9 §4.4.2.1 to broadcast 0xFFFF here.
+    for (raw, expected) in [
+        (0xFE00_u16, Signal::Error),
+        (0xFFFF, Signal::NotAvailable),
+    ] {
+        let mut special = hitch_bytes;
+        special[2..4].copy_from_slice(&raw.to_le_bytes());
+        let decoded = HitchStatus::decode(&special, true)
+            .unwrap_or_else(|| panic!("draft raw {raw:#06X} must not drop the PG"));
+        assert_eq!(decoded.draft_force_n, expected);
+        assert_eq!(decoded.position_percent, Signal::Value(100.0));
     }
+    let mut reserved = hitch_bytes;
+    reserved[2..4].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(HitchStatus::decode(&reserved, true), None);
 
     let saturated = WheelBasedSpeedDist {
         speed_mps: 1.0e9.into(),

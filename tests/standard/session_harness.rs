@@ -133,7 +133,7 @@ impl TwoNode {
 // ─────────────────────────────────────────────────────────────────────
 
 use machbus::geo::Wgs;
-use machbus::isobus::implement::{HitchStatus, PtoStatus, WheelBasedSpeedDist};
+use machbus::isobus::implement::{HitchStatus, PtoStatus, Signal, WheelBasedSpeedDist};
 use machbus::isobus::tc::{
     DDOP, DeviceElement, DeviceElementType, DeviceObject, TCClientConfig, TCServerConfig,
     TCServerState, TCState,
@@ -210,7 +210,7 @@ fn implement_status_broadcast_reaches_peer() {
         imp.broadcast_hitch_status(
             Hitch::Front,
             HitchStatus {
-                position_percent: 50,
+                position_percent: Signal::Value(20.0),
                 ..HitchStatus::default()
             },
         );

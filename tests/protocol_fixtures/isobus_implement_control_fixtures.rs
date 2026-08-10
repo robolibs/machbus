@@ -192,11 +192,11 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let rear_hitch_status = HitchStatus {
-        position_percent: 200,
+        position_percent: sig(80.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::OperatorCmd,
-        draft_force_n: -100_000.0,
+        draft_force_n: sig(-100_000.0),
         is_rear: true,
     };
     let rear_hitch_status_bytes = parse_named_hex_frame(
@@ -952,11 +952,11 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "hitch_status_front_max",
     );
     let hitch_status_max_msg = HitchStatus {
-        position_percent: 250,
+        position_percent: sig(100.0),
         in_work_indication: 3,
         limit_status: LimitStatus::NotAvailable,
         exit_code: ExitReasonCode::NotAvailable,
-        draft_force_n: 1.0e12,
+        draft_force_n: sig(1.0e12),
         is_rear: false,
     };
     assert_eq!(hitch_status_max_msg.encode(), hitch_status_max);

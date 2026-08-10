@@ -627,7 +627,10 @@ mod tests {
             }
         }
 
-        assert!(saw_confinement, "bus-off must surface as a fail-safe action");
+        assert!(
+            saw_confinement,
+            "bus-off must surface as a fail-safe action"
+        );
         assert!(
             saw_safe_stop,
             "bus-off must reach the autonomy path as a safe stop, not just an event"

@@ -31,6 +31,7 @@ use machbus::net::{
     parse_iop_data, pgn_defs::PGN_REQUEST,
 };
 use machbus::nmea::{GNSSPosition, NMEAInterface};
+use machbus::safety::{SafeStopTrigger, StopLatch};
 use machbus::session::{Session, Transport};
 use machbus::time::Instant;
 use machbus::vt_storage::StoredPoolVersion;
@@ -90,6 +91,20 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         ..Default::default()
     };
     let _position_payload = NMEAInterface::build_position(&gnss);
+    // C34 — the autonomy safe state must exist on the target it protects. The
+    // whole round-1 safety layer sat behind the hosted `session` gate, so an
+    // embedded autosteer node had no stop latch at all.
+    let mut latch = StopLatch::new();
+    assert!(!latch.is_latched());
+    assert!(latch.trip(SafeStopTrigger::BusOff));
+    assert_eq!(latch.reason(), Some(SafeStopTrigger::BusOff));
+    // The first cause is kept, not the consequences that follow it.
+    assert!(!latch.trip(SafeStopTrigger::AddressClaimLost));
+    assert_eq!(latch.reason(), Some(SafeStopTrigger::BusOff));
+    assert_eq!(SafeStopTrigger::BusOff.as_str(), "bus_off");
+    latch.clear();
+    assert!(!latch.is_latched());
+
     let _dtc = Dtc {
         spn: 123,
         fmi: Fmi::AboveNormal,

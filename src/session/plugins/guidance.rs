@@ -240,10 +240,7 @@ impl Guidance {
     /// [`AutodriveRefusal::CurvatureOutOfRange`] when the value is non-finite
     /// or outside the SLOT, where the codec would otherwise clamp it to full
     /// lock.
-    pub fn try_command_curvature(
-        &mut self,
-        curvature_per_km: f64,
-    ) -> Result<(), AutodriveRefusal> {
+    pub fn try_command_curvature(&mut self, curvature_per_km: f64) -> Result<(), AutodriveRefusal> {
         if !curvature_within_range(curvature_per_km) {
             return Err(AutodriveRefusal::CurvatureOutOfRange);
         }

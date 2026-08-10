@@ -518,8 +518,8 @@ fn network_layer_router_translates_bidirectional_destination_frames_and_cannot_c
 
     // A bridge over a single shared address space opts in, and then the frame
     // crosses unchanged.
-    let mut bridge = Router::new(NiuConfig::default().loop_guard_capacity(8))
-        .forward_address_claims(true);
+    let mut bridge =
+        Router::new(NiuConfig::default().loop_guard_capacity(8)).forward_address_claims(true);
     bridge.niu_mut().start().unwrap();
     let cannot_claim = bridge
         .process_frame(

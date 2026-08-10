@@ -899,7 +899,8 @@ mod tests {
         r.process(0);
         let counter = Rc::new(RefCell::new(0u32));
         let c = counter.clone();
-        r.on_shutdown_received.subscribe(move |_| *c.borrow_mut() += 1);
+        r.on_shutdown_received
+            .subscribe(move |_| *c.borrow_mut() += 1);
 
         r.process(hb_seq::SHUTDOWN);
         assert_eq!(r.state(), HbReceiverState::GracefulShutdown);

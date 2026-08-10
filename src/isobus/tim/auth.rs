@@ -21,8 +21,8 @@ use alloc::vec::Vec;
 
 use aes::Aes128;
 use cmac::{Cmac, Mac};
-use sha2::{Digest, Sha256};
 use der::Decode;
+use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
 use x25519_dalek::{PublicKey, StaticSecret};
 

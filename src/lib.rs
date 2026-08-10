@@ -30,6 +30,8 @@ pub mod net;
 pub mod nmea;
 #[cfg(feature = "default")]
 pub mod python;
+/// The autonomy safe state — available in every profile, including `embedded`.
+pub mod safety;
 #[cfg(any(feature = "default", feature = "cli"))]
 pub mod session;
 #[cfg(feature = "embedded")]

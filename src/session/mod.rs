@@ -674,9 +674,9 @@ mod tests {
     #[test]
     fn an_unusable_gnss_fix_stops_the_autonomy_path() {
         use super::plugins::{AutoDrive, Gnss};
+        use crate::geo::Wgs;
         use crate::net::pgn_defs::PGN_GNSS_POSITION_RAPID;
         use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
-        use crate::geo::Wgs;
         use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
         use crate::session::sys::GnssEvent;
 
@@ -795,7 +795,10 @@ mod tests {
             .build()
             .unwrap();
         session.start().unwrap();
-        session.get_mut::<Guidance>().unwrap().command_curvature(5.0);
+        session
+            .get_mut::<Guidance>()
+            .unwrap()
+            .command_curvature(5.0);
 
         let mut now = Instant::ZERO;
         let mut claimed_at: Option<Instant> = None;
@@ -857,8 +860,8 @@ mod tests {
     #[test]
     fn plugin_watchdogs_survive_a_sub_millisecond_pump() {
         use super::plugins::Heartbeat;
-        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
         use crate::net::pgn_defs::PGN_HEARTBEAT;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
         use crate::session::sys::HeartbeatEvent;
 
         let mut session = Session::builder(test_name(28), 0x80)
@@ -895,12 +898,8 @@ mod tests {
             while session.poll_transmit().is_some() {}
         }
 
-        let saw_comm_error = core::iter::from_fn(|| session.poll_event()).any(|e| {
-            matches!(
-                e,
-                Event::Heartbeat(HeartbeatEvent::CommError { .. })
-            )
-        });
+        let saw_comm_error = core::iter::from_fn(|| session.poll_event())
+            .any(|e| matches!(e, Event::Heartbeat(HeartbeatEvent::CommError { .. })));
         assert!(
             saw_comm_error,
             "the §8.3.4 300 ms window must expire under a >1 kHz pump (1 s simulated)"

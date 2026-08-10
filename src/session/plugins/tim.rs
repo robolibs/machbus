@@ -404,9 +404,9 @@ mod tests {
             .with_function_code(0x80)
             .with_self_configurable(true);
         let mut s = Session::builder(name, 0x80)
-            .plug(Tim::new(TimAuthority::new(TimOptionSet::from_options(
-                &[TimOption::FrontPtoEngagementCwIsSupported],
-            ))))
+            .plug(Tim::new(TimAuthority::new(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+            ]))))
             .build()
             .unwrap();
         s.start().unwrap();
@@ -449,7 +449,9 @@ mod tests {
             .set_interlocks(TimInterlocks::all_clear());
         s.get_mut::<Tim>()
             .unwrap()
-            .request_authority(TimOptionSet::from_options(&[TimOption::FrontPtoEngagementCwIsSupported]))
+            .request_authority(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+            ]))
             .unwrap();
         s.get_mut::<Tim>().unwrap().grant_authority().unwrap();
         assert_eq!(

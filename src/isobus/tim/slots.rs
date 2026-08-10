@@ -144,9 +144,7 @@ impl TimSlot {
     pub fn decode(self, raw: u16) -> Option<TimValue> {
         if self.shape == SlotShape::HitchPosition {
             return match raw {
-                0..=Self::HITCH_MAX_RAW => {
-                    Some(TimValue::Value(f64::from(raw) * self.resolution))
-                }
+                0..=Self::HITCH_MAX_RAW => Some(TimValue::Value(f64::from(raw) * self.resolution)),
                 0xFB00 => Some(TimValue::Float),
                 0xFB01 => Some(TimValue::Stop),
                 0xFB02 => Some(TimValue::LowerUntilStop),

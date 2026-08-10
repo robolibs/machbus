@@ -745,7 +745,12 @@ mod tests {
 
     fn feed_isb(s: &mut Session, state: ShortcutButtonState, at: Instant) {
         let frame = Frame::new(
-            Identifier::encode(Priority::Default, PGN_SHORTCUT_BUTTON, 0x26, BROADCAST_ADDRESS),
+            Identifier::encode(
+                Priority::Default,
+                PGN_SHORTCUT_BUTTON,
+                0x26,
+                BROADCAST_ADDRESS,
+            ),
             // Bytes 1-6 reserved (FF), byte 7 transition count, byte 8 state in
             // bits 1-2 with the rest reserved.
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFC | state as u8],

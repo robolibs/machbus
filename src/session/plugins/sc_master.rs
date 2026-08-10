@@ -125,7 +125,8 @@ impl Plugin for ScMaster {
                 PGN_SC_MASTER_STATUS,
                 payload.to_vec(),
                 BROADCAST_ADDRESS,
-                Priority::Default,
+                // ISO 11783-14 B.1: SC messages default to priority 4.
+                Priority::BelowNormal,
             );
         }
         self.drain_events(ctx);

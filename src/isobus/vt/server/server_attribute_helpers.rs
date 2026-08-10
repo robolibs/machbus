@@ -85,6 +85,17 @@ fn value_attribute_id_for_type(object_type: ObjectType) -> Option<u8> {
 fn numeric_value_is_valid(pool: &ObjectPool, object: &VTObject, value: u32) -> bool {
     match object.r#type {
         ObjectType::InputBoolean => value <= 1,
+        ObjectType::InputList => object
+            .get_input_list_body()
+            .is_ok_and(|body| (value as usize) < body.items.len()),
+        ObjectType::OutputList => object
+            .get_output_list_body()
+            .is_ok_and(|body| (value as usize) < body.items.len()),
+        ObjectType::InputNumber => object.get_input_number_body().is_ok_and(|body| {
+            let val = value as i32;
+            val >= body.min_value && val <= body.max_value
+        }),
+        ObjectType::OutputNumber => true,
         ObjectType::Animation => animation_numeric_value_is_valid(object, value),
         ObjectType::ObjectPointer => object_pointer_numeric_value_is_valid_for_context(
             pool,
@@ -281,8 +292,8 @@ fn select_input_container_visible(object: &VTObject, state: &ServerObjectState) 
 
 fn numeric_value_payload_width_is_canonical(data: &[u8], value_width: usize) -> bool {
     match value_width {
-        1 => data.len() == 8 && data[5..8].iter().all(|&byte| byte == 0),
-        2 => data.len() == 8 && data[6..8].iter().all(|&byte| byte == 0),
+        1 => data.len() == 8 && data[5..8].iter().all(|&byte| byte == 0 || byte == 0xFF),
+        2 => data.len() == 8 && data[6..8].iter().all(|&byte| byte == 0 || byte == 0xFF),
         4 => data.len() == 8,
         _ => false,
     }

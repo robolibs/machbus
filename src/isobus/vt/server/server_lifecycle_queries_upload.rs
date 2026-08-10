@@ -859,7 +859,12 @@ impl VTServer {
         if !numeric_value_payload_width_is_canonical(&msg.data, value_width) {
             return;
         }
-        let value = u32_le(&msg.data[4..]);
+        let raw_val = u32_le(&msg.data[4..]);
+        let value = match value_width {
+            1 => raw_val & 0xFF,
+            2 => raw_val & 0xFFFF,
+            _ => raw_val,
+        };
         if !numeric_value_is_valid(&client.pool, object, value) {
             return;
         }
@@ -927,6 +932,13 @@ impl VTServer {
                     return None;
                 }
                 body.value.len()
+            }
+            ObjectType::InputString => {
+                let body = obj.get_input_string_body().ok()?;
+                if body.variable_reference != ObjectID::NULL {
+                    return None;
+                }
+                body.max_length as usize
             }
             ObjectType::InputAttributes => obj
                 .get_input_attributes_body()

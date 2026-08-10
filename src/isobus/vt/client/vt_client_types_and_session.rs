@@ -167,6 +167,10 @@ pub struct VTMacro {
 
 // ─── VTClient ─────────────────────────────────────────────────────────
 
+/// ISO 11783-6 §4.6.9: the VT transmits its Status message once per second,
+/// and 3 s without one is treated as a VT shutdown.
+pub const VT_STATUS_TIMEOUT_MS: u32 = 3_000;
+
 /// VT client. See module-level doc for the pump-style API contract.
 pub struct VTClient {
     config: VTClientConfig,
@@ -174,6 +178,12 @@ pub struct VTClient {
     pool: ObjectPool,
     working_set: WorkingSet,
     timer_ms: u32,
+    /// Milliseconds since the last VT Status message. ISO 11783-6 §4.6.9: the
+    /// VT sends it once per second and 3 s of silence is a VT shutdown, at
+    /// which point the working set must enter a safe state. This was never
+    /// tracked — the `Connected` arm of the tick was empty, so a working set
+    /// stayed "connected" indefinitely to a terminal that had gone away.
+    since_vt_status_ms: u32,
     pending_end_of_pool_delay_ms: u32,
     vt_address: Address,
     vt_version: u16,
@@ -230,6 +240,9 @@ pub struct VTClient {
     pub on_extended_load_response: Event<(bool, u8)>,
     pub on_unsupported_function: Event<u8>,
     pub on_active_ws_status: Event<bool>,
+    /// The VT stopped sending its Status message for longer than
+    /// [`VT_STATUS_TIMEOUT_MS`]; the working set has entered the safe state.
+    pub on_vt_status_lost: Event<()>,
     /// `(old_lang, new_lang)`.
     pub on_language_change: Event<(LanguageCode, LanguageCode)>,
 }
@@ -243,6 +256,7 @@ impl VTClient {
             pool: ObjectPool::default(),
             working_set: WorkingSet::default(),
             timer_ms: 0,
+            since_vt_status_ms: 0,
             pending_end_of_pool_delay_ms: 0,
             vt_address: NULL_ADDRESS,
             vt_version: 0,
@@ -278,6 +292,7 @@ impl VTClient {
             on_extended_load_response: Event::new(),
             on_unsupported_function: Event::new(),
             on_active_ws_status: Event::new(),
+            on_vt_status_lost: Event::new(),
             on_language_change: Event::new(),
         }
     }
@@ -1267,6 +1282,7 @@ impl VTClient {
     /// emission order) the caller should ship.
     pub fn update(&mut self, elapsed_ms: u32) -> Vec<ClientOutbound> {
         self.timer_ms = self.timer_ms.saturating_add(elapsed_ms);
+        self.since_vt_status_ms = self.since_vt_status_ms.saturating_add(elapsed_ms);
         let mut out = Vec::new();
         match self.state() {
             VTState::WaitForVTStatus => {
@@ -1343,7 +1359,16 @@ impl VTClient {
                 self.transition(VTState::SendGetMemory);
                 self.timer_ms = 0;
             }
-            VTState::Disconnected | VTState::Connected => {}
+            VTState::Connected => {
+                // §4.6.9: 3 s without a VT Status is a VT shutdown. The working
+                // set enters a safe state and may restart initialisation.
+                if self.since_vt_status_ms >= VT_STATUS_TIMEOUT_MS {
+                    self.transition(VTState::Disconnected);
+                    self.is_active_ws = false;
+                    self.on_vt_status_lost.emit(&());
+                }
+            }
+            VTState::Disconnected => {}
         }
         out
     }
@@ -1408,6 +1433,7 @@ impl VTClient {
             return;
         }
         self.vt_address = msg.source;
+        self.since_vt_status_ms = 0;
         let reported = msg.data[6];
         if reported > 0 {
             self.vt_version = reported as u16;

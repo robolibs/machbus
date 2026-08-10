@@ -8,6 +8,7 @@ mod tests {
             spn: 0x1_2345,
             fmi: Fmi::AbnormalRateChange,
             occurrence_count: 7,
+            conversion_method: false,
         };
         let bytes = d.encode();
         let decoded = Dtc::decode(&bytes).unwrap();
@@ -21,6 +22,7 @@ mod tests {
             spn: 0x7_FFFF,
             fmi: Fmi::ConditionExists,
             occurrence_count: 0x7F,
+            conversion_method: false,
         };
         let decoded = Dtc::decode(&d.encode()).unwrap();
         assert_eq!(decoded.spn, 0x7_FFFF);
@@ -35,6 +37,7 @@ mod tests {
                 spn: 0x8_0000,
                 fmi: Fmi::Erratic,
                 occurrence_count: 0xFF,
+                conversion_method: false,
             }
             .encode(),
             [0xFF, 0xFF, 0xE2, 0x7F]
@@ -108,6 +111,7 @@ mod tests {
             spn: 0x1_2345,
             fmi: Fmi::Erratic,
             occurrence_count: 7,
+            conversion_method: false,
         }
         .encode();
         assert!(Dtc::decode(&dtc[..3]).is_none());
@@ -147,11 +151,13 @@ mod tests {
                     spn: 100,
                     fmi: Fmi::AboveNormal,
                     occurrence_count: 1,
+                    conversion_method: false,
                 },
                 Dtc {
                     spn: 200,
                     fmi: Fmi::VoltageHigh,
                     occurrence_count: 5,
+                    conversion_method: false,
                 },
             ],
         };
@@ -177,6 +183,7 @@ mod tests {
                 spn: 100,
                 fmi: Fmi::AboveNormal,
                 occurrence_count: 0,
+                conversion_method: false,
             }],
         }
         .encode();
@@ -190,11 +197,13 @@ mod tests {
                     spn: 100,
                     fmi: Fmi::AboveNormal,
                     occurrence_count: 0,
+                    conversion_method: false,
                 },
                 Dtc {
                     spn: 200,
                     fmi: Fmi::VoltageHigh,
                     occurrence_count: 0,
+                    conversion_method: false,
                 },
             ],
         }
@@ -242,6 +251,7 @@ mod tests {
                 spn: 42,
                 fmi: Fmi::CurrentLow,
                 occurrence_count: 3,
+                conversion_method: false,
             }],
         };
         let bytes = m.encode();
@@ -527,16 +537,42 @@ mod tests {
 
     #[test]
     fn software_id_rejects_missing_final_delimiter_and_invalid_text_fields() {
+        // Byte 1 is the mandatory field count (ISO 11783-12 A.3); these
+        // payloads carry it, which the encoder previously omitted entirely.
         assert!(SoftwareIdentification::decode(b"").is_none());
-        assert!(SoftwareIdentification::decode(b"1.0.0*1.0.1").is_none());
+        assert!(SoftwareIdentification::decode(b"\x02" as &[u8]).is_none());
+        assert!(SoftwareIdentification::decode(b"\x021.0.0*1.0.1").is_none());
         assert_eq!(
-            SoftwareIdentification::decode(b"1.0.\xFF*"),
+            SoftwareIdentification::decode(b"\x011.0.\xFF*"),
             Some(SoftwareIdentification {
                 versions: vec!["1.0.ÿ".into()],
             })
         );
-        assert!(SoftwareIdentification::decode(b"1.0.\x80*").is_none());
-        assert!(SoftwareIdentification::decode(b"\x00extra*").is_none());
+        assert!(SoftwareIdentification::decode(b"\x011.0.\x80*").is_none());
+        assert!(SoftwareIdentification::decode(b"\x01\x00extra*").is_none());
+
+        // A count that disagrees with the payload is a malformed message, not
+        // a message with a different number of fields.
+        assert!(SoftwareIdentification::decode(b"\x031.0.0*").is_none());
+    }
+
+    /// 6F — the encoder omitted the mandatory count, so a conformant receiver
+    /// read the first character of the first version as the field count.
+    #[test]
+    fn software_id_round_trips_with_the_mandatory_field_count() {
+        let ids = SoftwareIdentification {
+            versions: vec!["1.0.0".into(), "2.3".into()],
+        };
+        let encoded = ids.encode().unwrap();
+        assert_eq!(encoded[0], 2, "byte 1 is the number of fields (A.3)");
+        assert_eq!(&encoded[1..], b"1.0.0*2.3*");
+        assert_eq!(SoftwareIdentification::decode(&encoded), Some(ids));
+
+        // A.3 allows 0..=250 fields.
+        let too_many = SoftwareIdentification {
+            versions: (0..251).map(|i| alloc::format!("v{i}")).collect(),
+        };
+        assert!(too_many.encode().is_err());
     }
 
     #[test]
@@ -611,6 +647,7 @@ mod tests {
                 spn: 0x123,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 2,
+                conversion_method: false,
             },
             timestamp_ms: 0xCAFE_F00D,
             snapshots: vec![
@@ -635,6 +672,7 @@ mod tests {
                 spn: 0x123,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 2,
+                conversion_method: false,
             },
             timestamp_ms: 999, // not part of the DM25 wire entry
             snapshots: vec![
@@ -677,6 +715,7 @@ mod tests {
                 spn: 0x123,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 2,
+                conversion_method: false,
             },
             timestamp_ms: 0xCAFE_F00D,
             snapshots: vec![SpnSnapshot {
@@ -726,9 +765,7 @@ mod tests {
         assert_eq!(Fmi::from_u8(21), Fmi::DataDriftedLow);
         assert_eq!(Fmi::from_u8(31), Fmi::ConditionExists);
         assert_eq!(Fmi::try_from_u8(22), None);
-        // Unknown reserved values still map to the conservative default for
-        // lossy caller-provided values, but wire decoders use try_from_u8.
-        assert_eq!(Fmi::from_u8(22), Fmi::RootCauseUnknown);
+        assert_eq!(Fmi::from_u8(22), Fmi::Reserved22);
     }
 
     use proptest::prelude::*;
@@ -772,5 +809,37 @@ mod tests {
             }
             let _ = Dm25Request::decode(&data).map(|m| m.encode());
         }
+    }
+
+    /// 6F — ISO 11783-12 defines PGN 65226 bytes 1 and 2 as "Reserved, set to
+    /// FF16". J1939-73 puts lamp status there, and this stack used the J1939
+    /// form on an ISO 11783 network, so every DM1 it broadcast carried data in
+    /// two reserved bytes.
+    #[test]
+    fn dm1_iso_form_reserves_the_lamp_bytes() {
+        let list = DmDtcList {
+            lamps: DiagnosticLamps {
+                malfunction: LampStatus::On,
+                ..Default::default()
+            },
+            dtcs: vec![Dtc {
+                spn: 523_312,
+                fmi: Fmi::ConditionExists,
+                occurrence_count: 1,
+                conversion_method: false,
+            }],
+        };
+
+        let j1939 = list.encode();
+        let iso = list.encode_iso();
+
+        assert_ne!(
+            &j1939[..2],
+            &[0xFF, 0xFF],
+            "the J1939-73 form still carries lamp status"
+        );
+        assert_eq!(&iso[..2], &[0xFF, 0xFF], "the ISO 11783-12 form reserves them");
+        // Everything after the reserved bytes is identical: only bytes 1-2 differ.
+        assert_eq!(&iso[2..], &j1939[2..]);
     }
 }

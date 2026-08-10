@@ -62,14 +62,14 @@ impl Rect {
     #[inline]
     #[must_use]
     pub const fn right(self) -> i32 {
-        self.x + self.w as i32
+        self.x.saturating_add(self.w as i32)
     }
 
     /// Bottom edge (exclusive).
     #[inline]
     #[must_use]
     pub const fn bottom(self) -> i32 {
-        self.y + self.h as i32
+        self.y.saturating_add(self.h as i32)
     }
 
     /// Test whether a point is inside this rectangle.

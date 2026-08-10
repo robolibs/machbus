@@ -121,6 +121,15 @@ pub enum Fmi {
     ReceivedNetworkData = 19,
     DataDriftedHigh = 20,
     DataDriftedLow = 21,
+    Reserved22 = 22,
+    Reserved23 = 23,
+    Reserved24 = 24,
+    Reserved25 = 25,
+    Reserved26 = 26,
+    Reserved27 = 27,
+    Reserved28 = 28,
+    Reserved29 = 29,
+    Reserved30 = 30,
     ConditionExists = 31,
 }
 
@@ -149,6 +158,15 @@ impl Fmi {
             19 => Self::ReceivedNetworkData,
             20 => Self::DataDriftedHigh,
             21 => Self::DataDriftedLow,
+            22 => Self::Reserved22,
+            23 => Self::Reserved23,
+            24 => Self::Reserved24,
+            25 => Self::Reserved25,
+            26 => Self::Reserved26,
+            27 => Self::Reserved27,
+            28 => Self::Reserved28,
+            29 => Self::Reserved29,
+            30 => Self::Reserved30,
             31 => Self::ConditionExists,
             _ => Self::RootCauseUnknown,
         }
@@ -200,6 +218,7 @@ pub struct Dtc {
     pub spn: u32,
     pub fmi: Fmi,
     pub occurrence_count: u8,
+    pub conversion_method: bool,
 }
 
 /// SPN base for an ISO 11783-5 address-violation diagnostic: the reported SPN
@@ -216,6 +235,7 @@ impl Dtc {
             spn: ADDRESS_VIOLATION_SPN_BASE + source_address as u32,
             fmi: Fmi::ConditionExists,
             occurrence_count: 1,
+            conversion_method: false,
         }
     }
 
@@ -226,7 +246,8 @@ impl Dtc {
         bytes[0] = (spn & 0xFF) as u8;
         bytes[1] = ((spn >> 8) & 0xFF) as u8;
         bytes[2] = (((spn >> 16) & 0x07) << 5) as u8 | (self.fmi.as_u8() & 0x1F);
-        bytes[3] = self.occurrence_count & 0x7F;
+        let cm_bit = if self.conversion_method { 0x80 } else { 0x00 };
+        bytes[3] = (self.occurrence_count & 0x7F) | cm_bit;
         bytes
     }
 
@@ -235,12 +256,14 @@ impl Dtc {
         if data.len() != 4 {
             return None;
         }
+        let cm = (data[3] & 0x80) != 0;
         Some(Self {
             spn: (data[0] as u32)
                 | ((data[1] as u32) << 8)
                 | (((data[2] >> 5) & 0x07) as u32) << 16,
             fmi: Fmi::try_from_u8(data[2] & 0x1F)?,
             occurrence_count: data[3] & 0x7F,
+            conversion_method: cm,
         })
     }
 
@@ -348,6 +371,22 @@ impl DmDtcList {
         while data.len() < 8 {
             data.push(0xFF);
         }
+        data
+    }
+
+    /// Encode in the **ISO 11783-12** form, where bytes 1 and 2 are reserved
+    /// and set to `FF16` rather than carrying lamp status.
+    ///
+    /// PGN 65226 is shared with J1939-73, which does put lamp status in those
+    /// bytes — so this is a second encoding rather than a correction to
+    /// [`Self::encode`]. The ISOBUS diagnostics plugin broadcasts on an ISO
+    /// 11783 network and used the J1939 form, so every DM1 it sent had two
+    /// reserved bytes carrying data.
+    #[must_use]
+    pub fn encode_iso(&self) -> Vec<u8> {
+        let mut data = self.encode();
+        data[0] = 0xFF;
+        data[1] = 0xFF;
         data
     }
 
@@ -1197,9 +1236,22 @@ pub struct SoftwareIdentification {
 }
 
 impl SoftwareIdentification {
-    /// Encode as `v0*v1*...vN*`.
+    /// Encode as `count, v0*v1*...vN*`.
+    ///
+    /// Byte 1 is the mandatory "number of software identification fields"
+    /// (ISO 11783-12 A.3, 0..=250). It was omitted entirely, so a conformant
+    /// receiver read the first version character as the count.
+    ///
+    /// # Errors
+    /// Fails when a version contains the `*` delimiter, is not encodable, or
+    /// there are more than 250 fields.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        let mut data = Vec::new();
+        if self.versions.len() > 250 {
+            return Err(Error::invalid_data(
+                "SoftwareIdentification supports at most 250 fields (A.3)",
+            ));
+        }
+        let mut data = alloc::vec![self.versions.len() as u8];
         for v in &self.versions {
             validate_star_field("SoftwareIdentification.version", v)?;
             data.extend_from_slice(&encode_iso11783_text_field(
@@ -1214,9 +1266,14 @@ impl SoftwareIdentification {
 
     #[must_use]
     pub fn decode(raw: &[u8]) -> Option<Self> {
-        Some(Self {
-            versions: decode_star_fields(raw)?,
-        })
+        let (&count, rest) = raw.split_first()?;
+        let versions = decode_star_fields(rest)?;
+        // The count is authoritative: a mismatch means the payload was
+        // truncated or is not a software-identification message at all.
+        if usize::from(count) != versions.len() {
+            return None;
+        }
+        Some(Self { versions })
     }
 }
 

@@ -849,7 +849,11 @@ fn leaf_has_macro_tail(r#type: ObjectType) -> bool {
 }
 
 /// Length of a leaf object's body **excluding** any trailing macro list.
-fn leaf_body_only_len(r#type: ObjectType, data: &[u8], off: usize) -> Result<usize> {
+pub(crate) fn leaf_body_only_len(
+    r#type: ObjectType,
+    data: &[u8],
+    off: usize,
+) -> Result<usize> {
     use ObjectType as T;
     let len = match r#type {
         // Fixed-length leaves (length == `encode()` output).

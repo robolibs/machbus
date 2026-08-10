@@ -1287,9 +1287,10 @@ impl StringVariableBody {
     /// struct's `length` field is kept in step on decode.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let wire_len = self.value.len().min(u16::MAX as usize) as u16;
+        let max_len = (self.length as usize).min(self.value.len());
+        let wire_len = max_len as u16;
         let mut data = Vec::with_capacity(2 + wire_len as usize);
-        data.extend_from_slice(&wire_len.to_le_bytes());
+        data.extend_from_slice(&self.length.to_le_bytes());
         data.extend_from_slice(&self.value[..wire_len as usize]);
         data
     }
@@ -1307,9 +1308,10 @@ impl StringVariableBody {
             };
         }
         let length = u16_le(&body[0..]);
+        let val_len = (body.len() - 2).min(length as usize);
         Self {
             length,
-            value: body[2..].to_vec(),
+            value: body[2..2 + val_len].to_vec(),
         }
     }
 }

@@ -1005,6 +1005,14 @@ impl FramebufferGraphicsContextState {
             right = right.max(x);
             bottom = bottom.max(y);
         }
+        let clip = self.viewport;
+        left = left.max(clip.x);
+        top = top.max(clip.y);
+        right = right.min(clip.right().saturating_sub(1));
+        bottom = bottom.min(clip.bottom().saturating_sub(1));
+        if left > right || top > bottom {
+            return;
+        }
         for y in top..=bottom {
             for x in left..=right {
                 if point_in_polygon(x, y, points) {

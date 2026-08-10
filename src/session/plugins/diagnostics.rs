@@ -63,11 +63,13 @@ impl Diagnostics {
     }
 
     fn dm1_payload(&self) -> Vec<u8> {
+        // ISO 11783-12 form: bytes 1-2 are reserved and set to 0xFF. This
+        // plugin speaks on an ISO 11783 network, not a bare J1939 one.
         DmDtcList {
             lamps: self.lamps,
             dtcs: self.active.clone(),
         }
-        .encode()
+        .encode_iso()
     }
 }
 

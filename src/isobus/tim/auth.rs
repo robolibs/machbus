@@ -291,6 +291,46 @@ impl CertificateChain {
     }
 }
 
+/// DER object identifier for X25519 (RFC 8410 `id-X25519`), the curve AEF
+/// Annex F.2.2 mandates: "25519 shall be used as elliptic curve with 256 bit
+/// key length as defined in [19] RFC 7748".
+const OID_X25519: &[u8] = &[0x2B, 0x65, 0x6E];
+
+impl CertificateChain {
+    /// The device certificate's X25519 public key.
+    ///
+    /// AEF §4.4.5.4 phase 3 step 1: "The client and server use the 'public key'
+    /// (i.e., an elliptic curve point d*G) from their certificate with
+    /// corresponding private key (i.e., the scalar d)." Step 2 then says the
+    /// key exchange "is implicitly carried out during the certificate
+    /// validation step in phase 2" — which is only true if the key used *is*
+    /// the certified one.
+    ///
+    /// # Errors
+    /// [`AuthError::EccPublicKeyValidationFailed`] if the device certificate
+    /// carries no X25519 key of the right length.
+    pub fn device_x25519_public_key(&self) -> Result<[u8; 32], AuthError> {
+        let device = self
+            .certificates
+            .last()
+            .ok_or(AuthError::DeviceCertificateDataCorrupt)?;
+        let spki = &device.tbs_certificate.subject_public_key_info;
+        let algorithm = spki
+            .algorithm
+            .oid
+            .as_bytes();
+        if algorithm != OID_X25519 {
+            return Err(AuthError::EccPublicKeyValidationFailed);
+        }
+        let key = spki
+            .subject_public_key
+            .as_bytes()
+            .ok_or(AuthError::EccPublicKeyValidationFailed)?;
+        key.try_into()
+            .map_err(|_| AuthError::EccPublicKeyValidationFailed)
+    }
+}
+
 /// Verify `child`'s signature using `parent`'s public key.
 ///
 /// AEF Annex F.2.1 names RSASSA-PSS (RFC 3447) with SHA-256. Anything else —
@@ -393,6 +433,16 @@ pub struct TimAuthentication {
     /// authenticate A to B also authenticate B to A.
     own_challenge: Vec<u8>,
     peer_challenge: Vec<u8>,
+    /// The peer's ECDH public key, taken from its **device certificate** when
+    /// the chain was accepted.
+    ///
+    /// This used to be an argument to `complete_key_agreement`, so the chain
+    /// and the key exchange were two unrelated facts: a peer could present any
+    /// valid chain — including one captured off the bus — and then supply its
+    /// own freshly generated key. The resulting CMAC proved possession of
+    /// *some* key, not the certified peer's key, which is the entire point of
+    /// phase 4 (§4.4.5.5).
+    peer_ecdh_public: Option<[u8; 32]>,
 }
 
 impl Default for TimAuthentication {
@@ -410,6 +460,7 @@ impl TimAuthentication {
             shared: None,
             own_challenge: Vec::new(),
             peer_challenge: Vec::new(),
+            peer_ecdh_public: None,
         }
     }
 
@@ -457,6 +508,11 @@ impl TimAuthentication {
         if let Some(role) = chain.revoked_role(revoked) {
             return self.fail(role.revoked_error());
         }
+        // Bind the key exchange to the identity we just verified.
+        match chain.device_x25519_public_key() {
+            Ok(key) => self.peer_ecdh_public = Some(key),
+            Err(e) => return self.fail(e),
+        }
         self.state = AuthState::CertificatesExchanged;
         Ok(())
     }
@@ -476,7 +532,7 @@ impl TimAuthentication {
     ///
     /// # Errors
     /// [`AuthError::InternalError`] if no key agreement was started.
-    pub fn complete_key_agreement(&mut self, peer_public: [u8; 32]) -> Result<(), AuthError> {
+    pub fn complete_key_agreement(&mut self) -> Result<(), AuthError> {
         // §4.3 makes certificate validation the precondition for the rest of
         // the handshake; reaching key agreement without it authorises anyone.
         if !matches!(
@@ -487,6 +543,11 @@ impl TimAuthentication {
         }
         let Some(secret) = self.secret.as_ref() else {
             return self.fail(AuthError::InternalError);
+        };
+        // The key comes from the certificate that was verified in phase 2, not
+        // from the caller — see `peer_ecdh_public`.
+        let Some(peer_public) = self.peer_ecdh_public else {
+            return self.fail(AuthError::EccPublicKeyValidationFailed);
         };
         let shared = secret.diffie_hellman(&PublicKey::from(peer_public));
         // B.4.1.1 code 0x14. A small-order or all-zero point drives the shared
@@ -676,8 +737,12 @@ mod tests {
         b.state = AuthState::CertificatesExchanged;
         let a_public = a.begin_key_agreement([7u8; 32]);
         let b_public = b.begin_key_agreement([11u8; 32]);
-        a.complete_key_agreement(b_public).unwrap();
-        b.complete_key_agreement(a_public).unwrap();
+        // `accept_chain` is what normally supplies these; short-circuited here
+        // for the same reason the certificate step is.
+        a.peer_ecdh_public = Some(b_public);
+        b.peer_ecdh_public = Some(a_public);
+        a.complete_key_agreement().unwrap();
+        b.complete_key_agreement().unwrap();
         (a, b)
     }
 
@@ -748,8 +813,9 @@ mod tests {
         let mut a = TimAuthentication::new();
         a.state = AuthState::CertificatesExchanged;
         let _ = a.begin_key_agreement([7u8; 32]);
+        a.peer_ecdh_public = Some([0u8; 32]);
         assert_eq!(
-            a.complete_key_agreement([0u8; 32]),
+            a.complete_key_agreement(),
             Err(AuthError::EccPublicKeyValidationFailed)
         );
         assert!(!a.is_authenticated());
@@ -772,8 +838,9 @@ mod tests {
             b.begin_key_agreement([11u8; 32])
         };
         let _ = a.begin_key_agreement([7u8; 32]);
+        a.peer_ecdh_public = Some(peer);
         assert_eq!(
-            a.complete_key_agreement(peer),
+            a.complete_key_agreement(),
             Err(AuthError::InternalError),
             "no certificate validation, no key agreement"
         );
@@ -809,7 +876,8 @@ mod tests {
         let mut impostor = TimAuthentication::new();
         impostor.state = AuthState::CertificatesExchanged;
         let eve_public = impostor.begin_key_agreement([99u8; 32]);
-        impostor.complete_key_agreement(eve_public).unwrap();
+        impostor.peer_ecdh_public = Some(eve_public);
+        impostor.complete_key_agreement().unwrap();
         impostor.issue_challenge(&b_challenge).unwrap();
         impostor.accept_peer_challenge(&a_challenge).unwrap();
 
@@ -957,6 +1025,65 @@ mod tests {
         assert_eq!(
             auth.accept_chain(&good, &vector("evil_root"), &crl),
             Err(AuthError::RootCertificateSignatureInvalid)
+        );
+    }
+
+    /// D2 — the other half of the compound with D1.
+    ///
+    /// The certificate chain and the ECDH exchange used to be two unrelated
+    /// facts: `complete_key_agreement` took the peer's public key as an
+    /// *argument*, so a peer could present a chain captured off a real bus and
+    /// then supply a freshly generated key of its own. The CMAC then proved
+    /// possession of some key, not the certified peer's key — which is exactly
+    /// what AEF §4.4.5.5 says phase 4 exists to establish.
+    ///
+    /// AEF §4.4.5.4 phase 3: the public key used *is* the one from the
+    /// certificate, so "this step is implicitly carried out during the
+    /// certificate validation step in phase 2".
+    #[test]
+    fn the_ecdh_key_comes_from_the_device_certificate() {
+        const VECTORS: &str = include_str!("../../../tests/fixtures/tim/certificate_chain.hex");
+
+        fn vector(name: &str) -> Vec<u8> {
+            let line = VECTORS
+                .lines()
+                .find(|l| l.starts_with(&alloc::format!("{name}=")))
+                .unwrap_or_else(|| panic!("vector {name} is missing"));
+            let hex = &line[name.len() + 1..];
+            (0..hex.len() / 2)
+                .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+                .collect()
+        }
+
+        let root = vector("root");
+        let device = vector("x25519_device");
+        let chain = CertificateChain::parse_der(&[&root, &device]).expect("chain parses");
+
+        // The key is read out of the certificate, and it is the one openssl
+        // embedded — not anything a peer could choose at handshake time.
+        let from_cert = chain
+            .device_x25519_public_key()
+            .expect("the device certificate carries an X25519 key");
+        assert_eq!(
+            from_cert.as_slice(),
+            vector("x25519_device_key").as_slice(),
+            "the ECDH key must be the certified one"
+        );
+
+        // Accepting the chain is what binds it, so key agreement has no
+        // argument left for a peer to substitute.
+        let mut auth = TimAuthentication::new();
+        auth.accept_chain(&chain, &vector("root_spki"), &CertificateRevocationList::new())
+            .expect("a genuine chain is accepted");
+        assert_eq!(auth.peer_ecdh_public, Some(from_cert));
+
+        // A device certificate carrying an RSA key has no curve point to agree
+        // on: F.2.2 mandates Curve25519, so this is not a usable TIM peer.
+        let rsa_device = vector("device");
+        let rsa_chain = CertificateChain::parse_der(&[&root, &rsa_device]).expect("parses");
+        assert_eq!(
+            rsa_chain.device_x25519_public_key(),
+            Err(AuthError::EccPublicKeyValidationFailed)
         );
     }
 

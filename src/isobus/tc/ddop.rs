@@ -777,17 +777,19 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
+/// Tables A.1-A.5 size every DDOP text field "0 to 128" bytes.
+pub const DDOP_TEXT_MAX_BYTES: usize = 128;
+
+/// Validate a DDOP text field's *byte* length.
+///
+/// Annex A.1 codes these as BOM-less UTF-8, so non-ASCII is not merely allowed
+/// but expected — a localized designator or an "m³" unit is ordinary content.
+/// Rejecting it made those pools unserializable.
 fn validate_wire_text(field: &'static str, value: &str) -> Result<()> {
-    if value.len() > u8::MAX as usize {
+    if value.len() > DDOP_TEXT_MAX_BYTES {
         return Err(Error::with_message(
             ErrorCode::PoolValidation,
-            format!("{field} exceeds the DDOP one-byte text length limit"),
-        ));
-    }
-    if !value.is_ascii() {
-        return Err(Error::with_message(
-            ErrorCode::PoolValidation,
-            format!("{field} contains unsupported non-ASCII text"),
+            format!("{field} exceeds the {DDOP_TEXT_MAX_BYTES}-byte DDOP text limit"),
         ));
     }
     Ok(())

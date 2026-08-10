@@ -4,6 +4,7 @@
 //! kinds (Device, DeviceElement, DeviceProcessData, DeviceProperty,
 //! DeviceValuePresentation) and their wire-format serializers.
 
+use super::ddop::DDOP_TEXT_MAX_BYTES;
 use alloc::{format, string::String, vec::Vec};
 
 use crate::net::error::{Error, ErrorCode, Result};
@@ -867,17 +868,22 @@ fn push_u16_le<T: Into<u16>>(out: &mut Vec<u8>, v: T) {
 }
 
 #[inline]
+/// Append a length-prefixed DDOP text field.
+///
+/// Annex A.1: "several attributes in this representation are coded as UTF-8
+/// strings. These strings do not have a preceding byte-order mark (BOM)." The
+/// bytes are already BOM-less UTF-8 and the prefix is already a byte count, so
+/// nothing about the wire format required ASCII — the restriction was purely
+/// self-imposed, and it made ordinary pools impossible to serialize at all: a
+/// DeviceValuePresentation unit of "m³", or any localized designator, was
+/// rejected outright.
 fn push_str_with_len(out: &mut Vec<u8>, field: &'static str, s: &str) -> Result<()> {
-    if !s.is_ascii() {
+    // Tables A.1-A.5 give these fields a Size of "0 to 128" *bytes*, not the
+    // full range of the one-byte prefix.
+    if s.len() > DDOP_TEXT_MAX_BYTES {
         return Err(Error::with_message(
             ErrorCode::PoolValidation,
-            format!("{field} must be ASCII"),
-        ));
-    }
-    if s.len() > u8::MAX as usize {
-        return Err(Error::with_message(
-            ErrorCode::PoolValidation,
-            format!("{field} exceeds one-byte length field"),
+            format!("{field} exceeds the {DDOP_TEXT_MAX_BYTES}-byte DDOP text limit"),
         ));
     }
     out.push(s.len() as u8);
@@ -997,7 +1003,8 @@ mod tests {
 
     #[test]
     fn direct_serializers_reject_unencodable_strings_counts_and_scales() {
-        let overlong = "A".repeat(u8::MAX as usize + 1);
+        // Tables A.1-A.5 size every text field "0 to 128" bytes.
+        let overlong = "A".repeat(DDOP_TEXT_MAX_BYTES + 1);
         assert!(
             DeviceObject::default()
                 .with_id(1)
@@ -1005,12 +1012,15 @@ mod tests {
                 .serialize()
                 .is_err()
         );
+        // F4 — Annex A.1 codes these as BOM-less UTF-8, so non-ASCII is
+        // ordinary content, not an error. This used to assert the opposite,
+        // which made a "m³" unit or any localized designator unserializable.
         assert!(
             DeviceProcessData::default()
                 .with_id(2)
                 .with_designator("µ")
                 .serialize()
-                .is_err()
+                .is_ok()
         );
         assert!(
             DeviceProperty::default()
@@ -1038,6 +1048,26 @@ mod tests {
             .with_id(6)
             .with_children((0..=u16::MAX).map(ObjectID).collect::<Vec<_>>());
         assert!(too_many_children.serialize().is_err());
+
+        // F4 — a designator that is 128 *bytes* of multi-byte UTF-8 fits; the
+        // limit is on bytes, which is what the one-byte prefix counts.
+        let multibyte = "é".repeat(DDOP_TEXT_MAX_BYTES / 2);
+        assert_eq!(multibyte.len(), DDOP_TEXT_MAX_BYTES);
+        assert!(
+            DeviceObject::default()
+                .with_id(7)
+                .with_designator(multibyte.clone())
+                .serialize()
+                .is_ok()
+        );
+        assert!(
+            DeviceObject::default()
+                .with_id(8)
+                .with_designator(multibyte + "é")
+                .serialize()
+                .is_err(),
+            "one character over the byte limit is still rejected"
+        );
     }
 
     /// 6E — ISO 11783-10 Tables A.1-A.5 define the first field of every DDOP

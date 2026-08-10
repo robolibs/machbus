@@ -249,7 +249,11 @@ fn tc_ddop_rejects_process_data_reserved_trigger_bits() {
 
 #[test]
 fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
-    let non_ascii = minimal_ddop().with_property(
+    // F4 — Annex A.1: "several attributes in this representation are coded as
+    // UTF-8 strings. These strings do not have a preceding byte-order mark
+    // (BOM)." A localized designator is ordinary content. These two assertions
+    // used to require an error, which made such a pool unserializable at all.
+    let localized = minimal_ddop().with_property(
         DeviceProperty::default()
             .with_id(4)
             .with_ddi(DDI(ddi::SECTION_CONTROL_STATE))
@@ -257,15 +261,13 @@ fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
             .with_designator("räte"),
     );
     assert!(
-        non_ascii.serialize().is_err(),
-        "wire text is validated before serialization"
+        localized.serialize().is_ok(),
+        "BOM-less UTF-8 is what A.1 specifies"
     );
-    assert!(
-        non_ascii.validate().is_err(),
-        "pool validation must catch the same text before activation"
-    );
+    assert!(localized.validate().is_ok());
 
-    let overlong_designator = "A".repeat(u8::MAX as usize + 1);
+    // Tables A.1-A.5 size these fields "0 to 128" bytes.
+    let overlong_designator = "A".repeat(129);
     let overlong = minimal_ddop().with_process_data(
         DeviceProcessData::default()
             .with_id(4)
@@ -274,7 +276,7 @@ fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
     );
     assert!(
         overlong.validate().is_err(),
-        "one-byte wire text lengths must be enforced at validation time"
+        "the 128-byte Table A.1-A.5 text limit is enforced at validation time"
     );
 
     let non_finite_scale = minimal_ddop().with_value_presentation(

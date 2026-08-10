@@ -317,7 +317,7 @@ impl Guidance {
     /// The steering system's last estimated curvature (1/km), if known.
     #[must_use]
     pub fn estimated_curvature(&self) -> Option<f64> {
-        self.latest.map(|m| m.estimated_curvature)
+        self.latest.and_then(|m| m.estimated_curvature)
     }
 
     /// Whether the steering system last reported it is ready/engaged to steer.

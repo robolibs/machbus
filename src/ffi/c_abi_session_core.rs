@@ -1407,9 +1407,10 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
             } => {
                 out.kind = MachbusEventKind::GuidanceMachineInfo;
                 out.source = source;
-                // d0 = estimated curvature (1/km); fmi_or_sub = steering-ready
+                // d0 = estimated curvature (1/km), NaN when the steering
+                // system reports it as not-available; fmi_or_sub = steering-ready
                 // flag (1 = ready); u0 = raw guidance limit status byte.
-                out.d0 = estimated_curvature;
+                out.d0 = estimated_curvature.unwrap_or(f64::NAN);
                 out.fmi_or_sub = u8::from(steering_ready);
                 out.u0 = u32::from(limit_status);
             }

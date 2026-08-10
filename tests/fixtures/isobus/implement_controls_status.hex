@@ -30,7 +30,10 @@ machine_selected_speed_status_not_available=FFFFFFFFF3FFFFFF
 machine_speed_cmd_not_available=FFFFFFFFFFFFFFFF
 lighting_all_not_available=FFFFFFFFFFFFFFFF
 guidance_curvature_cmd_zero_default=807DFFFFFFFFFFFF
-guidance_machine_info_default=807DFFE0FFFFFFFF
+# A default-constructed report has no curvature estimate, so bytes 1-2 are the
+# not-available raw (FFFF). This previously read 807D — the raw for a precise
+# 0.00/km — which claimed a measurement the ECU had not made.
+guidance_machine_info_default=FFFFFFE0FFFFFFFF
 guidance_system_status_default=807D07FFFFFFFFFF
 drive_strategy_no_action_na=00FFFFFFFFFFFFFF
 guidance_system_cmd_default=807DFFFFFFFFFFFF

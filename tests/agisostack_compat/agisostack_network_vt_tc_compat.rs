@@ -1417,7 +1417,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
     );
 
     let machine = GuidanceMachineInfo {
-        estimated_curvature: 10.0,
+        estimated_curvature: Some(10.0),
         lockout: MechanicalLockout::NotActive,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -1432,7 +1432,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
         [0xA8, 0x7D, 0x04, 0x60, 0x5B, 0xFF, 0xFF, 0xFF]
     );
     let decoded_machine = GuidanceMachineInfo::decode(&machine_bytes).unwrap();
-    assert!((decoded_machine.estimated_curvature - 10.0).abs() < 0.25);
+    assert!(decoded_machine.estimated_curvature.is_some_and(|k| (k - 10.0).abs() < 0.25));
     assert_eq!(
         decoded_machine.guidance_limit_status,
         GuidanceLimitStatus::LimitedLow
@@ -1481,7 +1481,7 @@ fn agricultural_guidance_listen_only_examples_decode_agisostack_payloads() {
 
     let machine_payload = [0xC1, 0x7C, 0x55, 0xE0, 0x64, 0xFF, 0xFF, 0xFF];
     let machine = GuidanceMachineInfo::decode(&machine_payload).unwrap();
-    assert!((machine.estimated_curvature - -47.75).abs() < 0.25);
+    assert!(machine.estimated_curvature.is_some_and(|k| (k + 47.75).abs() < 0.25));
     assert_eq!(
         machine.guidance_limit_status,
         GuidanceLimitStatus::NotAvailable

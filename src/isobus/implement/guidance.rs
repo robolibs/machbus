@@ -217,7 +217,14 @@ fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuidanceMachineInfo {
     /// 1/km, 0.25/km per bit offset −8032.
-    pub estimated_curvature: f64,
+    /// SPN 1817 estimated curvature, or `None` when the steering system
+    /// reports it as not-available.
+    ///
+    /// This used to be a plain `f64` and a not-available reading dropped the
+    /// **whole** PG — so the lockout, readiness, limit status and exit reason
+    /// went with it, and a steering ECU that simply was not steering read as a
+    /// dead link (G4).
+    pub estimated_curvature: Option<f64>,
     /// SPN 5243, bits 0..1 of byte 2.
     pub lockout: MechanicalLockout,
     /// SPN 5242, bits 2..3 of byte 2.
@@ -237,7 +244,7 @@ pub struct GuidanceMachineInfo {
 impl Default for GuidanceMachineInfo {
     fn default() -> Self {
         Self {
-            estimated_curvature: 0.0,
+            estimated_curvature: None,
             lockout: MechanicalLockout::NotAvailable,
             steering_system_readiness_state: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
             steering_input_position_status: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
@@ -253,7 +260,9 @@ impl GuidanceMachineInfo {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.estimated_curvature);
+        let raw = self
+            .estimated_curvature
+            .map_or(CURVATURE_NOT_AVAILABLE_RAW, encode_curvature);
         data[0] = (raw & 0xFF) as u8;
         data[1] = ((raw >> 8) & 0xFF) as u8;
         data[2] = (self.lockout.as_u8() & 0x03)
@@ -277,7 +286,7 @@ impl GuidanceMachineInfo {
         // limit status) carry meaning here.
         let raw = (data[0] as u16) | ((data[1] as u16) << 8);
         Some(Self {
-            estimated_curvature: decode_curvature(raw)?,
+            estimated_curvature: decode_curvature(raw),
             lockout: MechanicalLockout::try_from_u8(data[2] & 0x03)?,
             steering_system_readiness_state: GenericSaeBs02SlotValue::try_from_u8(
                 (data[2] >> 2) & 0x03,
@@ -319,7 +328,7 @@ mod tests {
         let frame = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
         let info =
             GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
-        assert!((info.estimated_curvature - -7.0).abs() < 0.25);
+        assert!(info.estimated_curvature.is_some_and(|k| (k + 7.0).abs() < 0.25));
         assert_eq!(info.lockout, MechanicalLockout::NotActive);
         assert_eq!(
             info.guidance_limit_status,
@@ -330,7 +339,7 @@ mod tests {
     #[test]
     fn machine_info_round_trip() {
         let m = GuidanceMachineInfo {
-            estimated_curvature: -2.5,
+            estimated_curvature: Some(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -340,7 +349,7 @@ mod tests {
             remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
         };
         let decoded = GuidanceMachineInfo::decode(&m.encode()).unwrap();
-        assert!((decoded.estimated_curvature - -2.5).abs() < 0.25);
+        assert!(decoded.estimated_curvature.is_some_and(|k| (k + 2.5).abs() < 0.25));
         assert_eq!(decoded.lockout, MechanicalLockout::Active);
         assert_eq!(
             decoded.steering_system_readiness_state,
@@ -370,7 +379,7 @@ mod tests {
     #[test]
     fn fixed_size_decoders_reject_bad_padding_and_reserved_controls() {
         let mut machine_bad_tail = GuidanceMachineInfo {
-            estimated_curvature: -2.5,
+            estimated_curvature: Some(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -399,7 +408,7 @@ mod tests {
     #[test]
     fn curvature_encoding_clamps_and_rejects_not_available_sentinel() {
         let high = GuidanceMachineInfo {
-            estimated_curvature: 1.0e9,
+            estimated_curvature: Some(1.0e9),
             lockout: MechanicalLockout::NotActive,
             steering_system_readiness_state: GenericSaeBs02SlotValue::DisabledOffPassive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -413,7 +422,7 @@ mod tests {
             GuidanceMachineInfo::decode(&high)
                 .unwrap()
                 .estimated_curvature,
-            CURVATURE_MAX_PER_KM
+            Some(CURVATURE_MAX_PER_KM)
         );
     }
 
@@ -461,5 +470,35 @@ mod tests {
             assert_eq!(GuidanceLimitStatus::from_u8(reserved.as_u8()), reserved);
             assert_eq!(GuidanceLimitStatus::try_from_u8(reserved.as_u8()), None);
         }
+    }
+
+    /// H16/H63 — a steering system reporting its estimated curvature as
+    /// not-available is a normal state when it is not steering. Propagating
+    /// that with `?` dropped the **whole** PG, taking the mechanical lockout,
+    /// readiness, limit status and exit reason with it — so a steering fault
+    /// read as silence and the plugin saw a dead link instead of a report (G4).
+    #[test]
+    fn a_not_available_curvature_does_not_cost_the_rest_of_the_report() {
+        let mut data = [0xFFu8; 8];
+        data[0] = 0xFF;
+        data[1] = 0xFF; // curvature = not available
+        data[2] = 0b01_01_01_01;
+        data[3] = 0xFF; // limit status in bits 5..7 = 7
+        data[4] = 0x0A;
+
+        let info = GuidanceMachineInfo::decode(&data)
+            .expect("a not-available curvature must not drop the whole PG");
+        assert_eq!(info.estimated_curvature, None, "reported as absent");
+        assert_eq!(info.lockout, MechanicalLockout::try_from_u8(0x01).unwrap());
+        assert_eq!(info.guidance_system_command_exit_reason_code, 0x0A);
+
+        // And it survives a round trip as absent rather than becoming a value.
+        let reencoded = info.encode();
+        assert_eq!(
+            GuidanceMachineInfo::decode(&reencoded)
+                .unwrap()
+                .estimated_curvature,
+            None
+        );
     }
 }

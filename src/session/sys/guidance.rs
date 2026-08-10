@@ -15,9 +15,11 @@ pub enum GuidanceEvent {
     MachineInfo {
         /// Source address of the steering ECU that sent it.
         source: Address,
-        /// The steering system's estimated path curvature, in 1/km
-        /// (positive and negative follow the wire convention).
-        estimated_curvature: f64,
+        /// The steering system's estimated path curvature, in 1/km (positive
+        /// and negative follow the wire convention), or `None` when the ECU
+        /// reports it as not-available — which is a normal state when it is not
+        /// steering, and must not cost the rest of the report.
+        estimated_curvature: Option<f64>,
         /// `true` when the steering system reports it is engaged / in a state
         /// that allows an external guidance command to steer.
         steering_ready: bool,

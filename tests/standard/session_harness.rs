@@ -514,7 +514,7 @@ fn guidance_machine_info_reaches_the_controller() {
 
     // B acts as the steering ECU and broadcasts machine info (PGN 0xAC00).
     let info = GuidanceMachineInfo {
-        estimated_curvature: 1.25,
+        estimated_curvature: Some(1.25),
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         ..Default::default()
     };

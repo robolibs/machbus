@@ -120,8 +120,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }) = event
             {
                 println!(
-                    "  t={t:4.1}s  cmd κ={kappa:7.2}/km  est κ={estimated_curvature:7.2}/km  \
-                     ready={steering_ready}  limit={limit_status}"
+                    "  t={t:4.1}s  cmd κ={kappa:7.2}/km  est κ={est:>9}  \
+                     ready={steering_ready}  limit={limit_status}",
+                    est = estimated_curvature
+                        .map_or_else(|| "n/a".to_owned(), |k| format!("{k:7.2}/km"))
                 );
             }
         }

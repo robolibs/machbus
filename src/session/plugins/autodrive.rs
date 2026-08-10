@@ -1,0 +1,568 @@
+//! Combined autonomous driving — steering and speed behind one lifecycle.
+//!
+//! ISOBUS splits autonomy across two unrelated message families: the steering
+//! curvature (ISO 11783-7 Guidance System Command, PGN 0xAD00) and the machine
+//! speed command (PGN 0xFD43). Driving them as two independent plugins means
+//! there is no shared engage lifecycle, no shared safety state, and no single
+//! place that can refuse a command — so an application could be steering while
+//! its speed authority had been revoked, or keep commanding after the machine
+//! had told it to stop.
+//!
+//! [`AutoDrive`] is that single place. It owns:
+//!
+//! - **one setpoint** for both axes ([`DriveCommand`]), last-value-wins;
+//! - **one cadence**, so commands are a heartbeat (min 100 ms, max 2000 ms) and
+//!   never a flood;
+//! - **one stop latch** fed by every failure the session can observe — link
+//!   timeout, ISB, heartbeat error, bus-off, address-claim loss;
+//! - **one set of preconditions**, checked before anything reaches the bus.
+//!
+//! Turning a path and a GNSS pose into a curvature is still the application's
+//! job; [`crate::geo::guidance`] has the geometry for it.
+
+use crate::isobus::implement::guidance::{
+    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout,
+};
+use crate::isobus::implement::{
+    CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
+};
+use crate::j1939::shortcut_button::{ShortcutButtonState, decode_message};
+use crate::net::pgn_defs::{
+    PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
+    PGN_SHORTCUT_BUTTON,
+};
+use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
+use crate::session::plugin::{Plugin, PluginCtx};
+use crate::session::sys::{
+    AutodriveEvent, AutodriveRefusal, AutomationStatus, DriveCommand, Event, SafeStopTrigger,
+    StopLatch,
+};
+use crate::time::Instant;
+use core::any::Any;
+
+const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO, PGN_SHORTCUT_BUTTON];
+
+/// Three missed 100 ms Machine Info broadcasts (AEF 023 loss of communication).
+pub const LINK_TIMEOUT_MS: u32 = 300;
+/// ISO 11783-7 §5.2.7.2 minimum update period for the guidance group.
+pub const MIN_TX_INTERVAL_MS: u32 = 100;
+/// The command is a heartbeat, so it keeps going out even when unchanged.
+pub const MAX_TX_INTERVAL_MS: u32 = 2000;
+/// Below this, a yaw rate does not define a forward path curvature.
+pub const DEFAULT_MIN_SPEED_MPS: f64 = 0.05;
+
+/// Unified autonomous-driving controller. See the [module docs](self).
+pub struct AutoDrive {
+    status: AutomationStatus,
+    setpoint: DriveCommand,
+    latest: Option<GuidanceMachineInfo>,
+    last_info_at: Option<Instant>,
+    link_alive: bool,
+    last_tx_at: Option<Instant>,
+    dirty: bool,
+    stop: StopLatch,
+    min_speed_mps: f64,
+    min_tx_ms: u32,
+    max_tx_ms: u32,
+}
+
+impl Default for AutoDrive {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AutoDrive {
+    /// A controller that starts disarmed, disengaged and commanding nothing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            status: AutomationStatus::NotReady,
+            setpoint: DriveCommand::default(),
+            latest: None,
+            last_info_at: None,
+            link_alive: false,
+            last_tx_at: None,
+            dirty: false,
+            stop: StopLatch::new(),
+            min_speed_mps: DEFAULT_MIN_SPEED_MPS,
+            min_tx_ms: MIN_TX_INTERVAL_MS,
+            max_tx_ms: MAX_TX_INTERVAL_MS,
+        }
+    }
+
+    /// Override the transmit cadence. The minimum is a conformance limit, so
+    /// raising it is safe and lowering it is not — values below
+    /// [`MIN_TX_INTERVAL_MS`] are clamped.
+    #[must_use]
+    pub fn with_cadence(mut self, min_ms: u32, max_ms: u32) -> Self {
+        self.min_tx_ms = min_ms.max(MIN_TX_INTERVAL_MS);
+        self.max_tx_ms = max_ms.max(self.min_tx_ms);
+        self
+    }
+
+    /// Override the speed below which curvature is not commanded.
+    #[must_use]
+    pub fn with_min_speed(mut self, mps: f64) -> Self {
+        self.min_speed_mps = mps.abs();
+        self
+    }
+
+    /// Current automation status.
+    #[must_use]
+    pub const fn status(&self) -> AutomationStatus {
+        self.status
+    }
+
+    /// `true` when actively commanding the machine.
+    #[must_use]
+    pub const fn is_engaged(&self) -> bool {
+        self.status.is_active()
+    }
+
+    /// `true` when a steering ECU is broadcasting within the link timeout.
+    #[must_use]
+    pub const fn is_link_alive(&self) -> bool {
+        self.link_alive
+    }
+
+    /// Why the controller stopped, if it did.
+    #[must_use]
+    pub const fn stop_reason(&self) -> Option<SafeStopTrigger> {
+        self.stop.reason()
+    }
+
+    /// The steering ECU's last report and its age, or `None` if none arrived.
+    #[must_use]
+    pub fn machine_info(&self, now: Instant) -> Option<(GuidanceMachineInfo, u32)> {
+        let info = self.latest?;
+        let age = self.last_info_at.map_or(u32::MAX, |t| now.millis_since(t));
+        Some((info, age))
+    }
+
+    /// Move to *ready to enable*: the machine is answering and nothing is
+    /// blocking, but no setpoint is being commanded yet.
+    ///
+    /// # Errors
+    /// The first unmet precondition.
+    pub fn arm(&mut self) -> Result<(), AutodriveRefusal> {
+        self.check_preconditions()?;
+        self.set_status(AutomationStatus::ReadyToEnable);
+        Ok(())
+    }
+
+    /// Begin commanding. The setpoint reaches the bus on the next tick.
+    ///
+    /// # Errors
+    /// The first unmet precondition — a latched stop, a dead link, a mechanical
+    /// lockout, or an inactive operator engage switch.
+    pub fn engage(&mut self) -> Result<(), AutodriveRefusal> {
+        self.check_preconditions()?;
+        self.set_status(AutomationStatus::ActiveNotLimited);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Stop commanding and fall back to the safe state. Idempotent and
+    /// infallible: a disengage must never be refused.
+    pub fn disengage(&mut self, reason: SafeStopTrigger) {
+        self.stop.trip(reason);
+        self.enter_safe_state();
+    }
+
+    /// Replace the setpoint. Last value wins — commanding faster than the
+    /// cadence updates the target rather than queueing another frame.
+    ///
+    /// # Errors
+    /// Refuses while stopped, disengaged, or below the minimum speed for a
+    /// curvature command.
+    pub fn command(&mut self, cmd: DriveCommand) -> Result<(), AutodriveRefusal> {
+        if self.stop.is_latched() {
+            return Err(AutodriveRefusal::StopLatched);
+        }
+        if !self.status.is_active() {
+            return Err(AutodriveRefusal::StatusNotActive);
+        }
+        if let (Some(speed), Some(curvature)) = (cmd.speed_mps, cmd.curvature_km_inv)
+            && curvature != 0.0
+            && speed.abs() <= self.min_speed_mps
+        {
+            return Err(AutodriveRefusal::SpeedBelowMinimum);
+        }
+
+        if self.setpoint != cmd {
+            self.dirty = true;
+        }
+        self.setpoint = cmd;
+        Ok(())
+    }
+
+    /// Release a latched stop. Deliberately explicit — the fault clearing is
+    /// not by itself consent to move.
+    pub fn clear_stop(&mut self) {
+        self.stop.clear();
+        if self.status == AutomationStatus::Fault {
+            self.status = AutomationStatus::NotReady;
+        }
+    }
+
+    fn check_preconditions(&self) -> Result<(), AutodriveRefusal> {
+        if self.stop.is_latched() {
+            return Err(AutodriveRefusal::StopLatched);
+        }
+        if !self.link_alive {
+            return Err(AutodriveRefusal::LinkDown);
+        }
+        let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
+        if info.lockout == MechanicalLockout::Active {
+            return Err(AutodriveRefusal::MechanicalLockout);
+        }
+        if info.remote_engage_switch_status == GenericSaeBs02SlotValue::DisabledOffPassive {
+            return Err(AutodriveRefusal::OperatorNotEngaged);
+        }
+        Ok(())
+    }
+
+    fn set_status(&mut self, status: AutomationStatus) {
+        if self.status != status {
+            self.status = status;
+            self.dirty = true;
+        }
+    }
+
+    fn enter_safe_state(&mut self) {
+        self.status = AutomationStatus::Fault;
+        self.setpoint = DriveCommand::halt();
+        self.dirty = true;
+    }
+
+    fn system_command(&self) -> GuidanceSystemCmd {
+        GuidanceSystemCmd {
+            commanded_curvature: self.setpoint.curvature_km_inv.unwrap_or(0.0),
+            status: if self.status.is_active() {
+                CurvatureCommandStatus::IntendedToSteer
+            } else {
+                CurvatureCommandStatus::NotIntendedToSteer
+            },
+        }
+    }
+}
+
+impl Plugin for AutoDrive {
+    fn name(&self) -> &'static str {
+        "autodrive"
+    }
+
+    fn interests(&self) -> &'static [Pgn] {
+        INTERESTS
+    }
+
+    fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
+        if msg.pgn == PGN_SHORTCUT_BUTTON
+            && let Some(decoded) = decode_message(msg)
+            && decoded.state == ShortcutButtonState::StopImplementOperations
+        {
+            if self.stop.trip(SafeStopTrigger::IsbStop) {
+                self.enter_safe_state();
+                ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                    trigger: SafeStopTrigger::IsbStop,
+                }));
+            }
+            return;
+        }
+
+        if msg.pgn == PGN_GUIDANCE_MACHINE_INFO
+            && let Some(info) = GuidanceMachineInfo::decode(&msg.data)
+        {
+            self.latest = Some(info);
+            self.last_info_at = Some(ctx.now());
+            self.link_alive = true;
+
+            // The machine's own limit status is the anti-windup signal an outer
+            // loop needs, so mirror it into the automation status rather than
+            // discarding it as the guidance plugin used to.
+            if self.status.is_active() {
+                let next = match info.guidance_limit_status.as_u8() {
+                    2 => AutomationStatus::ActiveLimitedHigh,
+                    3 => AutomationStatus::ActiveLimitedLow,
+                    6 => AutomationStatus::Fault,
+                    _ => AutomationStatus::ActiveNotLimited,
+                };
+                if next == AutomationStatus::Fault {
+                    self.disengage(SafeStopTrigger::OperatorOverride);
+                    ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                        trigger: SafeStopTrigger::OperatorOverride,
+                    }));
+                } else if next != self.status {
+                    self.status = next;
+                    ctx.emit(Event::Autodrive(AutodriveEvent::StateChanged {
+                        status: next,
+                    }));
+                }
+            }
+        }
+    }
+
+    fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+        let now = ctx.now();
+
+        let alive = self
+            .last_info_at
+            .is_some_and(|t| now.millis_since(t) < LINK_TIMEOUT_MS);
+        if self.link_alive && !alive {
+            self.stop.trip(SafeStopTrigger::GuidanceLinkTimeout);
+            self.enter_safe_state();
+            ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                trigger: SafeStopTrigger::GuidanceLinkTimeout,
+            }));
+        }
+        self.link_alive = alive;
+
+        let due = match self.last_tx_at {
+            None => true,
+            Some(last) => {
+                let since = now.millis_since(last);
+                since >= self.max_tx_ms || (self.dirty && since >= self.min_tx_ms)
+            }
+        };
+
+        if due {
+            ctx.send(
+                PGN_GUIDANCE_SYSTEM_CMD,
+                self.system_command().encode().to_vec(),
+                BROADCAST_ADDRESS,
+                Priority::Normal,
+            );
+            if let Some(speed_mps) = self.setpoint.speed_mps {
+                let direction = if speed_mps < 0.0 {
+                    MachineDirection::Reverse
+                } else {
+                    MachineDirection::Forward
+                };
+                let speed = MachineSpeedCommandMsg::default()
+                    .with_speed_mps(speed_mps.abs())
+                    .with_direction(direction);
+                ctx.send(
+                    PGN_MACHINE_SELECTED_SPEED_CMD,
+                    speed.encode().to_vec(),
+                    BROADCAST_ADDRESS,
+                    Priority::Normal,
+                );
+            }
+            self.last_tx_at = Some(now);
+            self.dirty = false;
+        }
+
+        Some(
+            self.last_tx_at
+                .map_or(now, |last| last.add_millis(u64::from(self.min_tx_ms))),
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{Frame, Identifier, Name};
+    use crate::session::Session;
+
+    /// Real captured Machine Info: lockout not active, engage switch not
+    /// actively disabled, limit status not-available.
+    const MACHINE_INFO: [u8; 8] = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
+
+    fn node() -> Session {
+        let name = Name::default()
+            .with_identity_number(0x99)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let mut s = Session::builder(name, 0x80)
+            .plug(AutoDrive::new())
+            .build()
+            .unwrap();
+        s.start().unwrap();
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            s.tick(now);
+            while s.poll_transmit().is_some() {}
+            if s.is_claimed() {
+                break;
+            }
+        }
+        s
+    }
+
+    fn feed_info(s: &mut Session, limit_status: u8, at: Instant) {
+        let mut data = MACHINE_INFO;
+        data[3] = (data[3] & 0x1F) | (limit_status << 5);
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GUIDANCE_MACHINE_INFO,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            data,
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
+
+    fn last_command(s: &mut Session) -> Option<GuidanceSystemCmd> {
+        let mut cmd = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                cmd = GuidanceSystemCmd::decode(&frame.data);
+            }
+        }
+        cmd
+    }
+
+    /// A3.6 — the full lifecycle in one place. No test previously exercised
+    /// guidance and speed together, or the engage → steer → drop-out sequence
+    /// end to end.
+    #[test]
+    fn arm_engage_steer_then_lose_the_link() {
+        let mut s = node();
+        let base = 20_000u64;
+
+        // Nothing known about the machine yet: arming is refused.
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().arm(),
+            Err(AutodriveRefusal::LinkDown)
+        );
+
+        feed_info(&mut s, 7, Instant::from_millis(base));
+        s.get_mut::<AutoDrive>().unwrap().arm().unwrap();
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().status(),
+            AutomationStatus::ReadyToEnable
+        );
+
+        // Commanding before engaging is refused, not silently accepted.
+        assert_eq!(
+            s.get_mut::<AutoDrive>()
+                .unwrap()
+                .command(DriveCommand::steer(20.0)),
+            Err(AutodriveRefusal::StatusNotActive)
+        );
+
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        s.get_mut::<AutoDrive>()
+            .unwrap()
+            .command(DriveCommand {
+                speed_mps: Some(2.0),
+                curvature_km_inv: Some(20.0),
+            })
+            .unwrap();
+        assert!(s.get::<AutoDrive>().unwrap().is_engaged());
+
+        s.tick(Instant::from_millis(base + 100));
+        let mut saw_speed = false;
+        let mut steer = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            match frame.id.pgn() {
+                PGN_GUIDANCE_SYSTEM_CMD => steer = GuidanceSystemCmd::decode(&frame.data),
+                PGN_MACHINE_SELECTED_SPEED_CMD => saw_speed = true,
+                _ => {}
+            }
+        }
+        let steer = steer.expect("a steering command reaches the bus");
+        assert_eq!(steer.status, CurvatureCommandStatus::IntendedToSteer);
+        assert!((steer.commanded_curvature - 20.0).abs() < 0.25);
+        assert!(saw_speed, "both axes travel together");
+
+        // The steering ECU goes silent: one safe state, both axes zeroed.
+        while s.poll_event().is_some() {}
+        s.tick(Instant::from_millis(
+            base + 100 + u64::from(LINK_TIMEOUT_MS) + 10,
+        ));
+
+        assert!(!s.get::<AutoDrive>().unwrap().is_engaged());
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::GuidanceLinkTimeout)
+        );
+        let stopped = std::iter::from_fn(|| s.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Autodrive(AutodriveEvent::SafeStop {
+                    trigger: SafeStopTrigger::GuidanceLinkTimeout
+                })
+            )
+        });
+        assert!(stopped, "the safe stop is reported");
+
+        let cmd = last_command(&mut s).expect("the safe state reaches the bus");
+        assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
+        assert_eq!(cmd.commanded_curvature, 0.0);
+
+        // Recovery is explicit: a returning link does not re-engage by itself.
+        feed_info(&mut s, 7, Instant::from_millis(base + 600));
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().engage(),
+            Err(AutodriveRefusal::StopLatched)
+        );
+        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        assert!(s.get::<AutoDrive>().unwrap().is_engaged());
+    }
+
+    /// The machine's limit status is the anti-windup signal an outer loop
+    /// needs. It must reach the application as a distinct state, and a
+    /// non-recoverable fault must stop the machine rather than read as a limit.
+    #[test]
+    fn limit_status_surfaces_and_a_fault_stops() {
+        let mut s = node();
+        let base = 20_000u64;
+        feed_info(&mut s, 7, Instant::from_millis(base));
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        while s.poll_event().is_some() {}
+
+        // Limited high while still actively steering.
+        feed_info(&mut s, 2, Instant::from_millis(base + 50));
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().status(),
+            AutomationStatus::ActiveLimitedHigh
+        );
+        assert!(s.get::<AutoDrive>().unwrap().status().is_active());
+        assert!(s.get::<AutoDrive>().unwrap().status().is_limited());
+
+        // Non-recoverable fault is not a limit: it stops.
+        feed_info(&mut s, 6, Instant::from_millis(base + 100));
+        assert!(!s.get::<AutoDrive>().unwrap().is_engaged());
+        assert!(s.get::<AutoDrive>().unwrap().stop_reason().is_some());
+    }
+
+    /// A curvature at a standstill is meaningless, and dividing anyway is how
+    /// odometry noise became a full-lock command.
+    #[test]
+    fn curvature_below_the_speed_floor_is_refused() {
+        let mut s = node();
+        let base = 20_000u64;
+        feed_info(&mut s, 7, Instant::from_millis(base));
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().command(DriveCommand {
+                speed_mps: Some(1e-6),
+                curvature_km_inv: Some(8000.0),
+            }),
+            Err(AutodriveRefusal::SpeedBelowMinimum)
+        );
+
+        // Straight ahead at a standstill is fine — it commands nothing.
+        s.get_mut::<AutoDrive>()
+            .unwrap()
+            .command(DriveCommand::halt())
+            .unwrap();
+    }
+}

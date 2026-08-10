@@ -3,6 +3,7 @@
 //! Each subsystem is ported here as a self-registering plugin. Phase 2 ships
 //! [`Diagnostics`] as the proof-of-concept; later phases add the rest.
 
+pub mod autodrive;
 pub mod auxiliary;
 pub mod diagnostics;
 pub mod dm_memory;
@@ -28,6 +29,7 @@ pub mod tim;
 pub mod vt_client;
 pub mod vt_server;
 
+pub use autodrive::AutoDrive;
 pub use auxiliary::Auxiliary;
 pub use diagnostics::Diagnostics;
 pub use dm_memory::DmMemory;

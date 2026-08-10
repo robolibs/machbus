@@ -381,3 +381,163 @@ pub fn batch_to_wgs_from_ned(ned_coords: &[frame::Ned]) -> Vec<Wgs> {
         .collect();
     batch_to_wgs_from_enu(&enu)
 }
+
+/// Path geometry for curvature-based guidance.
+///
+/// ISOBUS autosteer is commanded as a path **curvature**, so an autonomy client
+/// has to turn a pose error into κ every cycle. These helpers were missing
+/// entirely — `geo` offered frame conversions only, with no bearing, no
+/// cross-track and no curvature — leaving every caller to derive them.
+///
+/// Everything here is deliberately free of trigonometry and square roots, so it
+/// compiles and runs identically on `no_std` targets without libm.
+pub mod guidance {
+    /// Metres per kilometre — the ISO 11783-7 curvature SLOT is in km⁻¹ while
+    /// vehicle geometry is naturally in m⁻¹.
+    const M_PER_KM: f64 = 1000.0;
+
+    /// Pure-pursuit curvature to a goal point given in the **vehicle frame**:
+    /// `forward_m` ahead of the axle, `left_m` to the left (both metres).
+    ///
+    /// Uses the exact form `κ = 2·y / L²` with `L² = x² + y²`, so no square root
+    /// or trigonometry is needed and the result is exact rather than a
+    /// small-angle approximation.
+    ///
+    /// Returns `None` when the goal is at the vehicle (no path is defined) or
+    /// either coordinate is non-finite.
+    #[must_use]
+    pub fn curvature_to_goal_per_m(forward_m: f64, left_m: f64) -> Option<f64> {
+        if !forward_m.is_finite() || !left_m.is_finite() {
+            return None;
+        }
+        let squared_distance = forward_m * forward_m + left_m * left_m;
+        if squared_distance <= 0.0 {
+            return None;
+        }
+        Some(2.0 * left_m / squared_distance)
+    }
+
+    /// [`curvature_to_goal_per_m`] in the km⁻¹ unit the wire uses.
+    #[must_use]
+    pub fn curvature_to_goal_per_km(forward_m: f64, left_m: f64) -> Option<f64> {
+        curvature_to_goal_per_m(forward_m, left_m).map(|k| k * M_PER_KM)
+    }
+
+    /// Curvature (km⁻¹) of a turn of `radius_m`. A zero or non-finite radius is
+    /// straight ahead, not an infinite curvature.
+    #[must_use]
+    pub fn curvature_per_km_from_radius(radius_m: f64) -> f64 {
+        if radius_m.is_finite() && radius_m != 0.0 {
+            M_PER_KM / radius_m
+        } else {
+            0.0
+        }
+    }
+
+    /// Turn radius in metres for a curvature in km⁻¹, or `None` for straight.
+    #[must_use]
+    pub fn radius_m_from_curvature_per_km(curvature_per_km: f64) -> Option<f64> {
+        if curvature_per_km.is_finite() && curvature_per_km != 0.0 {
+            Some(M_PER_KM / curvature_per_km)
+        } else {
+            None
+        }
+    }
+
+    /// Curvature (km⁻¹) from a robotics-style twist: `κ = ω / v`.
+    ///
+    /// `min_speed_mps` is a **physical** floor, not an epsilon: below it a yaw
+    /// rate does not define a forward path, and dividing anyway turns odometry
+    /// noise into a full-lock command.
+    #[must_use]
+    pub fn curvature_per_km_from_twist(
+        linear_mps: f64,
+        yaw_rate_rad_s: f64,
+        min_speed_mps: f64,
+    ) -> f64 {
+        if !linear_mps.is_finite()
+            || !yaw_rate_rad_s.is_finite()
+            || linear_mps.abs() <= min_speed_mps.abs()
+        {
+            return 0.0;
+        }
+        (yaw_rate_rad_s / linear_mps) * M_PER_KM
+    }
+
+    /// Signed lateral offset of point `p` from the infinite line through `a`
+    /// heading along the **unit** vector `dir`, in the same units as the inputs.
+    /// Positive is left of the heading.
+    ///
+    /// Takes a unit direction so no square root is required; build it from a
+    /// heading with `(cos, sin)` on hosted targets, or from two path points
+    /// normalised by the caller.
+    #[must_use]
+    pub fn cross_track_error(p: (f64, f64), a: (f64, f64), dir: (f64, f64)) -> f64 {
+        let (dx, dy) = (p.0 - a.0, p.1 - a.1);
+        // 2D cross product of the unit heading with the offset.
+        dir.0 * dy - dir.1 * dx
+    }
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::guidance::*;
+
+    #[test]
+    fn pure_pursuit_matches_the_geometric_circle() {
+        // A goal 10 m ahead and 0 m across is straight.
+        assert_eq!(curvature_to_goal_per_m(10.0, 0.0), Some(0.0));
+
+        // A goal directly abeam at 5 m left sits on a circle of radius 2.5 m,
+        // i.e. curvature 0.4 m^-1: kappa = 2y/L^2 = 10/25.
+        let k = curvature_to_goal_per_m(0.0, 5.0).unwrap();
+        assert!((k - 0.4).abs() < 1e-12);
+
+        // Left is positive, right is negative, and magnitudes match.
+        let left = curvature_to_goal_per_m(10.0, 2.0).unwrap();
+        let right = curvature_to_goal_per_m(10.0, -2.0).unwrap();
+        assert!((left + right).abs() < 1e-12);
+        assert!(left > 0.0);
+
+        // Degenerate goal yields no path rather than an infinity.
+        assert_eq!(curvature_to_goal_per_m(0.0, 0.0), None);
+        assert_eq!(curvature_to_goal_per_m(f64::NAN, 1.0), None);
+    }
+
+    #[test]
+    fn radius_and_curvature_round_trip_in_wire_units() {
+        // 50 m radius is 20 km^-1, the worked example in the autosteer guide.
+        assert!((curvature_per_km_from_radius(50.0) - 20.0).abs() < 1e-9);
+        assert!((radius_m_from_curvature_per_km(20.0).unwrap() - 50.0).abs() < 1e-9);
+
+        // Straight is a zero curvature, not an infinite radius.
+        assert_eq!(curvature_per_km_from_radius(0.0), 0.0);
+        assert_eq!(radius_m_from_curvature_per_km(0.0), None);
+    }
+
+    #[test]
+    fn twist_respects_the_physical_speed_floor() {
+        // 2 m/s with 0.04 rad/s is 0.02 m^-1 = 20 km^-1 = a 50 m radius.
+        assert!((curvature_per_km_from_twist(2.0, 0.04, 0.05) - 20.0).abs() < 1e-9);
+
+        // Below the floor, odometry noise must not become a full-lock command.
+        assert_eq!(curvature_per_km_from_twist(1e-6, 0.04, 0.05), 0.0);
+        assert_eq!(curvature_per_km_from_twist(0.0, 1.0, 0.05), 0.0);
+    }
+
+    #[test]
+    fn cross_track_is_signed_left_positive() {
+        // Heading due north (+y); a point 3 m east is 3 m to the right.
+        let xte = cross_track_error((3.0, 10.0), (0.0, 0.0), (0.0, 1.0));
+        assert!(
+            (xte + 3.0).abs() < 1e-12,
+            "east of a northward line is right"
+        );
+
+        let xte_left = cross_track_error((-3.0, 10.0), (0.0, 0.0), (0.0, 1.0));
+        assert!((xte_left - 3.0).abs() < 1e-12);
+
+        // On the line is zero regardless of how far along.
+        assert!(cross_track_error((0.0, 99.0), (0.0, 0.0), (0.0, 1.0)).abs() < 1e-12);
+    }
+}

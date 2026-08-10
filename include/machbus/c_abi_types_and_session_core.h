@@ -437,6 +437,15 @@ typedef struct {
    * Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
    */
   bool enable_guidance;
+  /**
+   * Plug an [`AutoDrive`] subsystem: steering and speed behind one engage
+   * lifecycle, one stop latch and one set of preconditions.
+   *
+   * Mutually exclusive with `enable_guidance` — both author PGN 0xAD00 from
+   * this address, and `machbus_session_new` refuses the combination rather
+   * than let one silently overwrite the other's safe stop.
+   */
+  bool enable_autodrive;
 } MachbusConfig;
 
 /**
@@ -1199,6 +1208,55 @@ bool machbus_session_guidance_engage(MachbusSession *h);
  * subsystem.
  */
 bool machbus_session_guidance_disengage(MachbusSession *h);
+
+/**
+ * Move AutoDrive to *ready to enable*: the machine is answering and nothing
+ * is blocking, but no setpoint is being commanded yet. Returns `false` and
+ * sets the last error to the first unmet precondition.
+ */
+bool machbus_session_autodrive_arm(MachbusSession *h);
+
+/**
+ * Begin commanding. The setpoint reaches the bus on the next tick.
+ */
+bool machbus_session_autodrive_engage(MachbusSession *h);
+
+/**
+ * Stop commanding and fall back to the safe state. Never refused.
+ */
+bool machbus_session_autodrive_disengage(MachbusSession *h);
+
+/**
+ * Replace the setpoint: `curvature_km_inv` (right-positive, AEF D.7.2.1) and
+ * `speed_mps`. Pass a non-finite value for either to leave that axis
+ * uncommanded. Returns `false` with the refusal in the last error.
+ */
+bool machbus_session_autodrive_command(MachbusSession *h,
+                                       double curvature_km_inv,
+                                       double speed_mps);
+
+/**
+ * Release a latched safe stop. Refused while the operator is still holding the
+ * Auxiliary Shortcut Button.
+ */
+bool machbus_session_autodrive_clear_stop(MachbusSession *h);
+
+/**
+ * Why AutoDrive stopped, as a [`MachbusSafeStopTrigger`] code, or `0` when no
+ * stop is latched.
+ */
+uint32_t machbus_session_autodrive_stop_reason(const MachbusSession *h);
+
+/**
+ * Whether AutoDrive is actively commanding the machine.
+ */
+bool machbus_session_autodrive_is_engaged(const MachbusSession *h);
+
+/**
+ * The AutoDrive automation status as its raw ISO 11783-7 Table 45 value, or
+ * `0xFF` when the subsystem is not plugged.
+ */
+uint8_t machbus_session_autodrive_status(const MachbusSession *h);
 
 /**
  * The reason the guidance controller latched a safe stop, as a

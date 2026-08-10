@@ -18,7 +18,7 @@ use crate::net::{
 use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
 use crate::session::Session;
 use crate::session::plugins::{
-    Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
+    AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
     GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
@@ -141,6 +141,13 @@ pub struct MachbusConfig {
     pub enable_tim: bool,
     /// Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
     pub enable_guidance: bool,
+    /// Plug an [`AutoDrive`] subsystem: steering and speed behind one engage
+    /// lifecycle, one stop latch and one set of preconditions.
+    ///
+    /// Mutually exclusive with `enable_guidance` — both author PGN 0xAD00 from
+    /// this address, and `machbus_session_new` refuses the combination rather
+    /// than let one silently overwrite the other's safe stop.
+    pub enable_autodrive: bool,
 }
 
 impl Default for MachbusConfig {
@@ -175,6 +182,7 @@ impl Default for MachbusConfig {
             enable_vt_server: false,
             enable_tim: false,
             enable_guidance: false,
+            enable_autodrive: false,
         }
     }
 }
@@ -597,6 +605,9 @@ fn build_session_with_content(
     }
     if cfg.enable_guidance {
         builder = builder.plug(Guidance::new());
+    }
+    if cfg.enable_autodrive {
+        builder = builder.plug(AutoDrive::new());
     }
 
     let session = builder.build()?;
@@ -1838,6 +1849,143 @@ pub extern "C" fn machbus_session_guidance_disengage(h: *mut MachbusSession) -> 
     g.disengage();
     clear_last_error();
     true
+}
+
+/// Move AutoDrive to *ready to enable*: the machine is answering and nothing
+/// is blocking, but no setpoint is being commanded yet. Returns `false` and
+/// sets the last error to the first unmet precondition.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_arm(h: *mut MachbusSession) -> bool {
+    autodrive_action(h, AutoDrive::arm)
+}
+
+/// Begin commanding. The setpoint reaches the bus on the next tick.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_engage(h: *mut MachbusSession) -> bool {
+    autodrive_action(h, AutoDrive::engage)
+}
+
+/// Stop commanding and fall back to the safe state. Never refused.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_disengage(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    d.disengage(crate::safety::SafeStopTrigger::OperatorOverride);
+    clear_last_error();
+    true
+}
+
+/// Replace the setpoint: `curvature_km_inv` (right-positive, AEF D.7.2.1) and
+/// `speed_mps`. Pass a non-finite value for either to leave that axis
+/// uncommanded. Returns `false` with the refusal in the last error.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_command(
+    h: *mut MachbusSession,
+    curvature_km_inv: f64,
+    speed_mps: f64,
+) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let cmd = crate::session::DriveCommand {
+        curvature_km_inv: curvature_km_inv.is_finite().then_some(curvature_km_inv),
+        speed_mps: speed_mps.is_finite().then_some(speed_mps),
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    match d.command(cmd) {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(alloc::format!(
+                "autodrive command refused: {}",
+                refusal.as_str()
+            ));
+            false
+        }
+    }
+}
+
+/// Release a latched safe stop. Refused while the operator is still holding the
+/// Auxiliary Shortcut Button.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_clear_stop(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    d.clear_stop();
+    clear_last_error();
+    true
+}
+
+/// Why AutoDrive stopped, as a [`MachbusSafeStopTrigger`] code, or `0` when no
+/// stop is latched.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_stop_reason(h: *const MachbusSession) -> u32 {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<AutoDrive>())
+        .and_then(AutoDrive::stop_reason)
+        .map_or(0, |trigger| trigger.as_code())
+}
+
+/// Whether AutoDrive is actively commanding the machine.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_is_engaged(h: *const MachbusSession) -> bool {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<AutoDrive>())
+        .is_some_and(AutoDrive::is_engaged)
+}
+
+/// The AutoDrive automation status as its raw ISO 11783-7 Table 45 value, or
+/// `0xFF` when the subsystem is not plugged.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_status(h: *const MachbusSession) -> u8 {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<AutoDrive>())
+        .map_or(0xFF, |d| d.status().as_u8())
+}
+
+fn autodrive_action(
+    h: *mut MachbusSession,
+    action: fn(&mut AutoDrive) -> Result<(), crate::session::AutodriveRefusal>,
+) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    match action(d) {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(alloc::format!("autodrive refused: {}", refusal.as_str()));
+            false
+        }
+    }
 }
 
 /// The reason the guidance controller latched a safe stop, as a

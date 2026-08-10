@@ -563,7 +563,7 @@ impl NiuFilterDbResponse {
             return None;
         }
         let entries_region = &data[3..];
-        if entries_region.len() % 3 != 0 {
+        if !entries_region.len().is_multiple_of(3) {
             return None;
         }
         let mut entries = Vec::with_capacity(entries_region.len() / 3);

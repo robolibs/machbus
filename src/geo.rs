@@ -399,6 +399,11 @@ pub mod guidance {
     /// Pure-pursuit curvature to a goal point given in the **vehicle frame**:
     /// `forward_m` ahead of the axle, `left_m` to the left (both metres).
     ///
+    /// **Sign: left-positive**, matching the usual robotics body frame (x
+    /// forward, y left). This is the *geometry* convention, and it is the
+    /// opposite of the wire's — see [`curvature_to_goal_per_km`], which is the
+    /// one to feed to a guidance command.
+    ///
     /// Uses the exact form `κ = 2·y / L²` with `L² = x² + y²`, so no square root
     /// or trigonometry is needed and the result is exact rather than a
     /// small-angle approximation.
@@ -417,10 +422,17 @@ pub mod guidance {
         Some(2.0 * left_m / squared_distance)
     }
 
-    /// [`curvature_to_goal_per_m`] in the km⁻¹ unit the wire uses.
+    /// [`curvature_to_goal_per_m`] in the km⁻¹ unit **and sign** the wire uses.
+    ///
+    /// AEF 023 RIG 2 D.7.2.1: "Curvature is positive when the vehicle is moving
+    /// forward and turning to the driver's **right**." The body-frame helper is
+    /// left-positive, so the sign is flipped here — at the one boundary where
+    /// geometry becomes a wire value. Getting this backwards steers the machine
+    /// the opposite way to the commanded path and the guidance loop diverges
+    /// instead of converging.
     #[must_use]
     pub fn curvature_to_goal_per_km(forward_m: f64, left_m: f64) -> Option<f64> {
-        curvature_to_goal_per_m(forward_m, left_m).map(|k| k * M_PER_KM)
+        curvature_to_goal_per_m(forward_m, left_m).map(|k| -k * M_PER_KM)
     }
 
     /// Curvature (km⁻¹) of a turn of `radius_m`. A zero or non-finite radius is
@@ -446,6 +458,10 @@ pub mod guidance {
 
     /// Curvature (km⁻¹) from a robotics-style twist: `κ = ω / v`.
     ///
+    /// `yaw_rate_rad_s` is **left-positive** (counter-clockwise), the usual
+    /// robotics convention; the result is in the wire's **right-positive** sign
+    /// per AEF 023 D.7.2.1, so it is negated here.
+    ///
     /// `min_speed_mps` is a **physical** floor, not an epsilon: below it a yaw
     /// rate does not define a forward path, and dividing anyway turns odometry
     /// noise into a full-lock command.
@@ -461,7 +477,7 @@ pub mod guidance {
         {
             return 0.0;
         }
-        (yaw_rate_rad_s / linear_mps) * M_PER_KM
+        -(yaw_rate_rad_s / linear_mps) * M_PER_KM
     }
 
     /// Signed lateral offset of point `p` from the infinite line through `a`
@@ -493,7 +509,7 @@ mod guidance_tests {
         let k = curvature_to_goal_per_m(0.0, 5.0).unwrap();
         assert!((k - 0.4).abs() < 1e-12);
 
-        // Left is positive, right is negative, and magnitudes match.
+        // Body frame is left-positive (x forward, y left); magnitudes match.
         let left = curvature_to_goal_per_m(10.0, 2.0).unwrap();
         let right = curvature_to_goal_per_m(10.0, -2.0).unwrap();
         assert!((left + right).abs() < 1e-12);
@@ -502,6 +518,32 @@ mod guidance_tests {
         // Degenerate goal yields no path rather than an infinity.
         assert_eq!(curvature_to_goal_per_m(0.0, 0.0), None);
         assert_eq!(curvature_to_goal_per_m(f64::NAN, 1.0), None);
+    }
+
+    /// AEF 023 RIG 2 D.7.2.1: "Curvature is positive when the vehicle is moving
+    /// forward and turning to the driver's right." The helpers that produce a
+    /// wire value must carry that sign, not the body frame's.
+    #[test]
+    fn wire_curvature_is_positive_turning_right() {
+        // Goal 10 m ahead, 2 m to the driver's right.
+        let right = curvature_to_goal_per_km(10.0, -2.0).unwrap();
+        assert!(
+            right > 0.0,
+            "a goal to the right must encode as positive curvature, got {right}"
+        );
+        let left = curvature_to_goal_per_km(10.0, 2.0).unwrap();
+        assert!(left < 0.0, "a goal to the left must be negative");
+        assert!((left + right).abs() < 1e-12);
+
+        // The km helper is the metre helper mirrored, not merely rescaled.
+        let per_m = curvature_to_goal_per_m(10.0, -2.0).unwrap();
+        assert!((right + per_m * 1000.0).abs() < 1e-9);
+
+        // A left-positive yaw rate turning left is negative on the wire.
+        let turning_left = curvature_per_km_from_twist(2.0, 0.04, 0.05);
+        assert!(turning_left < 0.0, "got {turning_left}");
+        let turning_right = curvature_per_km_from_twist(2.0, -0.04, 0.05);
+        assert!((turning_right - 20.0).abs() < 1e-9, "got {turning_right}");
     }
 
     #[test]
@@ -517,8 +559,10 @@ mod guidance_tests {
 
     #[test]
     fn twist_respects_the_physical_speed_floor() {
-        // 2 m/s with 0.04 rad/s is 0.02 m^-1 = 20 km^-1 = a 50 m radius.
-        assert!((curvature_per_km_from_twist(2.0, 0.04, 0.05) - 20.0).abs() < 1e-9);
+        // 2 m/s with 0.04 rad/s is 0.02 m^-1 = 20 km^-1 = a 50 m radius. The
+        // yaw rate is left-positive and the result is wire sign, so a left turn
+        // reads negative (AEF 023 D.7.2.1).
+        assert!((curvature_per_km_from_twist(2.0, 0.04, 0.05) + 20.0).abs() < 1e-9);
 
         // Below the floor, odometry noise must not become a full-lock command.
         assert_eq!(curvature_per_km_from_twist(1e-6, 0.04, 0.05), 0.0);

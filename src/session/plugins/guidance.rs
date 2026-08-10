@@ -261,9 +261,11 @@ impl Guidance {
     /// billions, which the codec clamps to ±8031.75 km⁻¹ — a 12 cm turn radius
     /// — and transmits as a perfectly valid maximum-curvature command.
     pub fn command_velocity(&mut self, linear_mps: f64, angular_rad_s: f64) {
-        // Steering: curvature κ = ω / v, in 1/m → 1/km for the wire.
+        // Steering: curvature κ = ω / v, in 1/m → 1/km for the wire. The twist
+        // is left-positive (robotics); AEF 023 D.7.2.1 makes the wire SLOT
+        // right-positive, so the sign is flipped at this boundary.
         let curvature_per_km = if linear_mps.abs() > MIN_CURVATURE_SPEED_MPS {
-            (angular_rad_s / linear_mps) * 1000.0
+            -(angular_rad_s / linear_mps) * 1000.0
         } else {
             0.0
         };
@@ -612,8 +614,9 @@ mod tests {
     #[test]
     fn command_velocity_emits_curvature_and_speed() {
         let mut s = claimed_session();
-        // v = 2 m/s, ω = 0.04 rad/s → κ = 0.02/m = 20/km = 50 m radius.
-        // raw = (20 + 8032) / 0.25 = 32208 = 0x7DD0 → little-endian [D0, 7D].
+        // v = 2 m/s, ω = +0.04 rad/s is a **left** turn of 50 m radius. AEF 023
+        // D.7.2.1 makes the wire right-positive, so κ = -20/km and
+        // raw = (-20 + 8032) / 0.25 = 32048 = 0x7D30 → little-endian [30, 7D].
         s.get_mut::<Guidance>().unwrap().command_velocity(2.0, 0.04);
         s.tick(Instant::ZERO.add_millis(2050));
 
@@ -622,7 +625,11 @@ mod tests {
             match frame.id.pgn() {
                 PGN_GUIDANCE_SYSTEM_CMD => {
                     saw_curv = true;
-                    assert_eq!(&frame.data[0..2], &[0xD0, 0x7D], "curvature κ=20/km");
+                    assert_eq!(
+                        &frame.data[0..2],
+                        &[0x30, 0x7D],
+                        "a left turn is negative curvature on the wire"
+                    );
                 }
                 PGN_MACHINE_SELECTED_SPEED_CMD => saw_speed = true,
                 _ => {}
@@ -630,6 +637,32 @@ mod tests {
         }
         assert!(saw_curv, "twist must emit a curvature command (PGN 0xAD00)");
         assert!(saw_speed, "twist must emit a speed command (PGN 0xFD43)");
+    }
+
+    /// The mirror image of the above, so the sign is pinned from both sides:
+    /// turning to the driver's right must encode above the straight-ahead raw.
+    #[test]
+    fn turning_right_encodes_positive_curvature() {
+        let mut s = claimed_session();
+        // ω = -0.04 rad/s (clockwise) is a right turn → κ = +20/km,
+        // raw = (20 + 8032) / 0.25 = 32208 = 0x7DD0 → little-endian [D0, 7D].
+        s.get_mut::<Guidance>()
+            .unwrap()
+            .command_velocity(2.0, -0.04);
+        s.tick(Instant::ZERO.add_millis(2050));
+
+        let mut raw = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                raw = Some(u16::from_le_bytes([frame.data[0], frame.data[1]]));
+            }
+        }
+        let raw = raw.expect("a curvature command reaches the bus");
+        assert_eq!(raw, 0x7DD0);
+        assert!(
+            raw > 0x7D80,
+            "right of straight-ahead (0x7D80) must be the larger raw"
+        );
     }
 
     /// The Guidance System Command (PGN 0xAD00) must carry the Curvature Command

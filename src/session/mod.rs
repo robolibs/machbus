@@ -60,7 +60,8 @@ use plugin::{CtxAction, SendCmd};
 
 use crate::net::can_adapter;
 use crate::net::{
-    Address, ClaimState, Error, Frame, IsoNet, Message, NULL_ADDRESS, Name, NetworkConfig, Result,
+    Address, ClaimState, Error, Frame, IsoNet, Message, NULL_ADDRESS, Name, NetworkConfig, Pgn,
+    Result,
 };
 use crate::time::Instant;
 use alloc::{boxed::Box, collections::VecDeque, rc::Rc, vec::Vec};
@@ -534,6 +535,25 @@ impl SessionBuilder {
             seen.push(tid);
         }
 
+        // Two authors of one command PGN from a single source address means a
+        // safe stop commanded by one is overwritten by the other. Rejecting the
+        // combination is the only way to make that unassemblable; checking only
+        // for duplicate types let `Guidance` and `AutoDrive` both drive 0xAD00.
+        let mut claimed: Vec<(Pgn, &'static str)> = Vec::new();
+        for plugin in &self.plugins {
+            for &pgn in plugin.transmits() {
+                if let Some((_, other)) = claimed.iter().find(|(p, _)| *p == pgn) {
+                    return Err(Error::invalid_state(alloc::format!(
+                        "plugins '{}' and '{}' both transmit PGN 0x{pgn:04X}: \
+                         one command PGN may have only one author",
+                        other,
+                        plugin.name(),
+                    )));
+                }
+                claimed.push((pgn, plugin.name()));
+            }
+        }
+
         let mut net = IsoNet::<NullLink>::new(self.config);
         net.set_capture_outbound(true);
         let cf = net.create_internal(self.name, 0, self.preferred)?;
@@ -644,6 +664,43 @@ mod tests {
                 )
                 .is_err(),
             "a raw send without an address must report the refusal to its caller"
+        );
+    }
+
+    /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
+    /// caller plugging both controllers. Both author PGN 0xAD00 from the same
+    /// source address, so a safe stop commanded by one is overwritten by the
+    /// other on the next tick and the steering ECU sees intent-to-steer
+    /// chatter that makes autosteer engage and drop repeatedly.
+    #[test]
+    fn two_authors_of_one_command_pgn_cannot_be_assembled() {
+        use super::plugins::{AutoDrive, Guidance};
+
+        let outcome = Session::builder(test_name(25), 0x80)
+            .plug(Guidance::new())
+            .plug(AutoDrive::new())
+            .build();
+        let Err(err) = outcome else {
+            panic!("two authors of 0xAD00 must be refused");
+        };
+        let text = alloc::format!("{err}");
+        assert!(
+            text.contains("AD00") && text.contains("one author"),
+            "the error must name the conflicting PGN, got: {text}"
+        );
+
+        // Either alone is fine.
+        assert!(
+            Session::builder(test_name(26), 0x80)
+                .plug(Guidance::new())
+                .build()
+                .is_ok()
+        );
+        assert!(
+            Session::builder(test_name(27), 0x80)
+                .plug(AutoDrive::new())
+                .build()
+                .is_ok()
         );
     }
 

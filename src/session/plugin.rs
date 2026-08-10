@@ -36,6 +36,23 @@ pub trait Plugin: Any {
         &[]
     }
 
+    /// Command PGNs this plugin is the sole author of, from this control
+    /// function's address.
+    ///
+    /// [`SessionBuilder::build`](super::SessionBuilder::build) refuses to
+    /// assemble two plugins that claim the same one. Two controllers writing
+    /// the same command PGN from one source address means a stop commanded by
+    /// one is overwritten by the other on the next tick, and the steering ECU
+    /// sees intent-to-steer chatter that makes autosteer engage and drop
+    /// repeatedly. Declaring it here makes the conflict impossible to
+    /// assemble rather than something a preset has to document.
+    ///
+    /// Only declare PGNs where a second author is genuinely a conflict; status
+    /// or response PGNs that several subsystems legitimately emit stay out.
+    fn transmits(&self) -> &'static [Pgn] {
+        &[]
+    }
+
     /// A received [`Message`] whose PGN is in [`Self::interests`].
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         let _ = (msg, ctx);

@@ -339,6 +339,10 @@ impl Plugin for AutoDrive {
         INTERESTS
     }
 
+    fn transmits(&self) -> &'static [Pgn] {
+        COMMAND_PGNS
+    }
+
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         if msg.pgn == PGN_SHORTCUT_BUTTON
             && let Some(decoded) = decode_message(msg)

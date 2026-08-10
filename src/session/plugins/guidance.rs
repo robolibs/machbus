@@ -377,6 +377,10 @@ impl Plugin for Guidance {
         INTERESTS
     }
 
+    fn transmits(&self) -> &'static [Pgn] {
+        COMMAND_PGNS
+    }
+
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         // Auxiliary Shortcut Button: the operator's stop-all command. This was
         // decoded elsewhere in the crate and acted on nowhere, so pressing it

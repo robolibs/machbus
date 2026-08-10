@@ -79,6 +79,31 @@ impl Instant {
     }
 }
 
+/// Whole milliseconds elapsed since `last`, carrying the sub-millisecond
+/// remainder forward into `last` instead of discarding it.
+///
+/// A watchdog that does `elapsed = now - last; last = now` freezes under a pump
+/// faster than 1 kHz: every call sees a 0 ms delta and the remainder is thrown
+/// away, so the accumulated time never reaches the timeout. A dead ECU then
+/// reads as alive and a revoked-by-timeout authority is never revoked. Advance
+/// `last` only by the milliseconds actually reported, so the remainder survives
+/// to the next call.
+///
+/// `last` is left untouched when the clock has not advanced a full millisecond,
+/// and when it moves backwards (`millis_since` saturates to 0) — the session
+/// surfaces that separately as a fault.
+pub fn advance_millis(last: &mut Option<Instant>, now: Instant) -> u32 {
+    let Some(previous) = *last else {
+        *last = Some(now);
+        return 0;
+    };
+    let elapsed = now.millis_since(previous);
+    if elapsed > 0 {
+        *last = Some(previous.add_millis(u64::from(elapsed)));
+    }
+    elapsed
+}
+
 impl From<u64> for Instant {
     /// Interpret the value as microseconds since the origin.
     fn from(micros: u64) -> Self {

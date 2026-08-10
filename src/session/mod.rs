@@ -772,6 +772,63 @@ mod tests {
         );
     }
 
+    /// P3.1 — the round-1 residue fix landed only in `Session::advance_time`;
+    /// every plugin watchdog still did `elapsed = now - last; last = now` and
+    /// froze under a fast pump. A frozen heartbeat watchdog reports a dead
+    /// safety-critical ECU as alive.
+    #[test]
+    fn plugin_watchdogs_survive_a_sub_millisecond_pump() {
+        use super::plugins::Heartbeat;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::net::pgn_defs::PGN_HEARTBEAT;
+        use crate::session::sys::HeartbeatEvent;
+
+        let mut session = Session::builder(test_name(28), 0x80)
+            .plug(Heartbeat::every(100))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+
+        // Claim, then let one peer heartbeat arrive so it is tracked.
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_transmit().is_some() {}
+            if session.is_claimed() {
+                break;
+            }
+        }
+        assert!(session.is_claimed());
+
+        let hb = Frame::new(
+            Identifier::encode(Priority::Default, PGN_HEARTBEAT, 0x26, BROADCAST_ADDRESS),
+            [0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            8,
+        );
+        session.feed(0, &hb, now);
+        while session.poll_event().is_some() {}
+
+        // The peer goes silent while the host pumps at 10 kHz. Every individual
+        // step is a 0 ms delta, so a truncating watchdog never times out.
+        for _ in 0..10_000 {
+            now = now.add_micros(100);
+            session.tick(now);
+            while session.poll_transmit().is_some() {}
+        }
+
+        let saw_comm_error = core::iter::from_fn(|| session.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Heartbeat(HeartbeatEvent::CommError { .. })
+            )
+        });
+        assert!(
+            saw_comm_error,
+            "the §8.3.4 300 ms window must expire under a >1 kHz pump (1 s simulated)"
+        );
+    }
+
     /// F0.1 — the residue must survive across calls, not be rounded away.
     #[test]
     fn sub_millisecond_residue_accumulates_into_whole_milliseconds() {

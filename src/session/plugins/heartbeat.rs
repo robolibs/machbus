@@ -184,8 +184,7 @@ impl Plugin for Heartbeat {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last.map_or(0, |last| now.millis_since(last));
-        self.last = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last, now);
 
         // The comm-error window is fixed by ISO 11783-7 §8.3.4 at 300 ms; it is
         // not the transmit interval.

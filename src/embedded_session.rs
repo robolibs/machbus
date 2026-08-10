@@ -184,12 +184,17 @@ impl Session {
         &mut self.net
     }
 
+    /// Advance protocol timers to `now`, carrying the sub-millisecond
+    /// remainder. The hosted session was fixed for this; the embedded facade —
+    /// the one running on the ECU it matters for — was not, so a fast control
+    /// loop saw a 0 ms delta every pass, never accumulated a whole
+    /// millisecond, and never claimed an address or fired a timeout.
     fn advance_time(&mut self, now: Instant) {
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        if self.last_tick.is_none() || elapsed > 0 {
+        let first = self.last_tick.is_none();
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
+        if first || elapsed > 0 {
             self.net.update(elapsed);
         }
-        self.last_tick = Some(now);
     }
 
     fn route_inbox(&mut self) {

@@ -345,8 +345,7 @@ impl Plugin for Tim {
         // had one, with a documented AEF safe-stop revoke — but nothing called
         // `tick`, so a granted authority survived indefinitely after the peer
         // stopped sending keepalives.
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
         if elapsed > 0 && self.authority.tick(elapsed) {
             self.pending_events
                 .push(TimEvent::AuthorityStateChanged(self.authority.state()));

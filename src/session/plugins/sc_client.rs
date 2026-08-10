@@ -113,8 +113,7 @@ impl Plugin for ScClient {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
 
         // Until an SCM has been seen there is nobody to address, so fall back
         // to broadcast rather than dropping the status.

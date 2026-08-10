@@ -1,57 +1,9 @@
 //! ISO 11783-7 G-addendum guidance commands and status.
 //!
-//! Mirrors the C++ `machbus::isobus::implement::guidance.hpp`. Three
-//! 100 ms messages share the curvature scaling rule (0.25 km⁻¹/bit,
-//! offset −8032):
-//!
-//! - `PGN_GUIDANCE_CURVATURE_CMD` (0xFE46) — controller → steering system
-//! - `PGN_GUIDANCE_MACHINE_INFO` (0xAC00) — agricultural guidance machine info
-//! - `PGN_GUIDANCE_SYSTEM` (0xFE45) — controller status (readiness)
-//!
-//! The C++ `GuidanceCurvatureInterface` (IsoNet-coupled) is not
-//! ported.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u8)]
-pub enum SteeringReadiness {
-    NotReady = 0,
-    MechanicalReady = 1,
-    FullyReady = 2,
-    Error = 3,
-    #[default]
-    NotAvailable = 7,
-}
-
-impl SteeringReadiness {
-    #[must_use]
-    pub const fn from_u8(v: u8) -> Self {
-        match v & 0x07 {
-            0 => Self::NotReady,
-            1 => Self::MechanicalReady,
-            2 => Self::FullyReady,
-            3 => Self::Error,
-            _ => Self::NotAvailable,
-        }
-    }
-
-    #[must_use]
-    pub const fn try_from_u8(v: u8) -> Option<Self> {
-        match v {
-            0 => Some(Self::NotReady),
-            1 => Some(Self::MechanicalReady),
-            2 => Some(Self::FullyReady),
-            3 => Some(Self::Error),
-            7 => Some(Self::NotAvailable),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    pub const fn as_u8(self) -> u8 {
-        self as u8
-    }
-}
+//! `PGN_GUIDANCE_MACHINE_INFO` (0xAC00) is the steering ECU's 100 ms
+//! broadcast. The commanded direction travels on `GuidanceSystemCmd`
+//! (PGN 0xAD00, in `drive_strategy.rs`); both share the curvature scaling
+//! rule (0.25 km⁻¹/bit, offset −8032).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -230,9 +182,9 @@ const CURVATURE_RESOLUTION_PER_KM: f64 = 0.25;
 const CURVATURE_NOT_AVAILABLE_RAW: u16 = 0xFFFF;
 const CURVATURE_MAX_RAW: u16 = 0xFAFF;
 
-/// `true` if `curvature_per_km` lies within the encodable range, i.e. building a
-/// [`CurvatureCommand`] with it will not silently clamp the value. A non-finite
-/// value is out of range (it encodes as not-available).
+/// `true` if `curvature_per_km` lies within the encodable range, i.e. encoding
+/// it will not silently clamp the value. A non-finite value is out of range
+/// (it encodes as not-available).
 #[must_use]
 pub fn curvature_within_range(curvature_per_km: f64) -> bool {
     curvature_per_km.is_finite()
@@ -259,38 +211,6 @@ fn decode_curvature(raw: u16) -> Option<f64> {
 
 fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
     data.len() == 8 && data[used..].iter().all(|&byte| byte == 0xFF)
-}
-
-/// Curvature command (PGN 0xFE46) — guidance controller → steering
-/// system. Curvature in 1/km.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct CurvatureCommand {
-    pub curvature: f64,
-    /// Reserved for implementation use. Not standardized on the wire.
-    pub curvature_rate: f64,
-}
-
-impl CurvatureCommand {
-    #[must_use]
-    pub fn encode(&self) -> [u8; 8] {
-        let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.curvature);
-        data[0] = (raw & 0xFF) as u8;
-        data[1] = ((raw >> 8) & 0xFF) as u8;
-        data
-    }
-
-    #[must_use]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_tail(data, 2) {
-            return None;
-        }
-        let raw = (data[0] as u16) | ((data[1] as u16) << 8);
-        Some(Self {
-            curvature: decode_curvature(raw)?,
-            curvature_rate: 0.0,
-        })
-    }
 }
 
 /// Agricultural guidance machine info (PGN 0xAC00) — steering ECU broadcast.
@@ -373,56 +293,9 @@ impl GuidanceMachineInfo {
     }
 }
 
-/// System status (PGN 0xFE45) — guidance controller broadcast.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct GuidanceSystemStatus {
-    pub estimated_curvature: f64,
-    pub readiness: SteeringReadiness,
-    /// 2 bits: steering integrity (0 = lowest, 3 = N/A).
-    pub integrity_level: u8,
-}
-
-impl GuidanceSystemStatus {
-    #[must_use]
-    pub fn encode(&self) -> [u8; 8] {
-        let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.estimated_curvature);
-        data[0] = (raw & 0xFF) as u8;
-        data[1] = ((raw >> 8) & 0xFF) as u8;
-        data[2] = (self.readiness.as_u8() & 0x07) | ((self.integrity_level & 0x03) << 4);
-        data
-    }
-
-    #[must_use]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_tail(data, 3) {
-            return None;
-        }
-        // Byte 2 bit 3 and bits 6..7 are reserved; conformant transmitters set
-        // them to 1. Ignore them instead of rejecting — only the readiness
-        // (bits 0..2) and integrity level (bits 4..5) fields carry meaning.
-        let raw = (data[0] as u16) | ((data[1] as u16) << 8);
-        Some(Self {
-            estimated_curvature: decode_curvature(raw)?,
-            readiness: SteeringReadiness::try_from_u8(data[2] & 0x07)?,
-            integrity_level: (data[2] >> 4) & 0x03,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn curvature_command_round_trip() {
-        let m = CurvatureCommand {
-            curvature: 0.5, // 1/km
-            curvature_rate: 0.0,
-        };
-        let decoded = CurvatureCommand::decode(&m.encode()).unwrap();
-        assert!((decoded.curvature - 0.5).abs() < 0.25);
-    }
 
     #[test]
     fn curvature_range_check_flags_out_of_range_and_nonfinite() {
@@ -448,7 +321,10 @@ mod tests {
             GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
         assert!((info.estimated_curvature - -7.0).abs() < 0.25);
         assert_eq!(info.lockout, MechanicalLockout::NotActive);
-        assert_eq!(info.guidance_limit_status, GuidanceLimitStatus::NotAvailable);
+        assert_eq!(
+            info.guidance_limit_status,
+            GuidanceLimitStatus::NotAvailable
+        );
     }
 
     #[test]
@@ -482,41 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn system_status_round_trip() {
-        let m = GuidanceSystemStatus {
-            estimated_curvature: 1.0,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 2,
-        };
-        let decoded = GuidanceSystemStatus::decode(&m.encode()).unwrap();
-        assert_eq!(decoded.readiness, SteeringReadiness::FullyReady);
-        assert_eq!(decoded.integrity_level, 2);
-    }
-
-    #[test]
     fn short_payload_returns_none() {
-        assert!(CurvatureCommand::decode(&[0u8; 7]).is_none());
         assert!(GuidanceMachineInfo::decode(&[0u8; 7]).is_none());
-        assert!(GuidanceSystemStatus::decode(&[0u8; 7]).is_none());
     }
 
     #[test]
     fn overlong_payload_returns_none() {
-        assert!(CurvatureCommand::decode(&[0u8; 9]).is_none());
         assert!(GuidanceMachineInfo::decode(&[0u8; 9]).is_none());
-        assert!(GuidanceSystemStatus::decode(&[0u8; 9]).is_none());
     }
 
     #[test]
     fn fixed_size_decoders_reject_bad_padding_and_reserved_controls() {
-        let mut curvature_bad_tail = CurvatureCommand {
-            curvature: 0.5,
-            curvature_rate: 0.0,
-        }
-        .encode();
-        curvature_bad_tail[2] = 0x00;
-        assert!(CurvatureCommand::decode(&curvature_bad_tail).is_none());
-
         let mut machine_bad_tail = GuidanceMachineInfo {
             estimated_curvature: -2.5,
             lockout: MechanicalLockout::Active,
@@ -538,42 +390,14 @@ mod tests {
         machine_reserved_set[3] |= 0x01;
         let decoded = GuidanceMachineInfo::decode(&machine_reserved_set)
             .expect("reserved bits set to 1 must not reject the frame");
-        assert_eq!(decoded.guidance_limit_status, GuidanceLimitStatus::LimitedLow);
-
-        let mut status_bad_tail = GuidanceSystemStatus {
-            estimated_curvature: 1.0,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 2,
-        }
-        .encode();
-        status_bad_tail[3] = 0x00;
-        assert!(GuidanceSystemStatus::decode(&status_bad_tail).is_none());
-
-        let mut status_reserved_readiness = status_bad_tail;
-        status_reserved_readiness[3] = 0xFF;
-        status_reserved_readiness[2] = (2 << 4) | 4;
-        assert!(GuidanceSystemStatus::decode(&status_reserved_readiness).is_none());
-
-        // Reserved bit 3 set to 1 with a valid readiness slot must be ignored,
-        // not rejected — the frame still decodes.
-        let mut status_reserved_bits = status_reserved_readiness;
-        status_reserved_bits[2] = (2 << 4) | 2 | 0x08;
-        let decoded = GuidanceSystemStatus::decode(&status_reserved_bits)
-            .expect("reserved bits set to 1 must not reject the frame");
-        assert_eq!(decoded.readiness, SteeringReadiness::FullyReady);
-        assert_eq!(decoded.integrity_level, 2);
+        assert_eq!(
+            decoded.guidance_limit_status,
+            GuidanceLimitStatus::LimitedLow
+        );
     }
 
     #[test]
     fn curvature_encoding_clamps_and_rejects_not_available_sentinel() {
-        let low = CurvatureCommand {
-            curvature: f64::NEG_INFINITY,
-            curvature_rate: 0.0,
-        }
-        .encode();
-        assert_eq!(&low[..2], &CURVATURE_NOT_AVAILABLE_RAW.to_le_bytes());
-        assert!(CurvatureCommand::decode(&low).is_none());
-
         let high = GuidanceMachineInfo {
             estimated_curvature: 1.0e9,
             lockout: MechanicalLockout::NotActive,
@@ -591,32 +415,10 @@ mod tests {
                 .estimated_curvature,
             CURVATURE_MAX_PER_KM
         );
-
-        let low = GuidanceSystemStatus {
-            estimated_curvature: -1.0e9,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 0,
-        }
-        .encode();
-        assert_eq!(
-            GuidanceSystemStatus::decode(&low)
-                .unwrap()
-                .estimated_curvature,
-            CURVATURE_MIN_PER_KM
-        );
     }
 
     #[test]
     fn enums_round_trip() {
-        for r in [
-            SteeringReadiness::NotReady,
-            SteeringReadiness::MechanicalReady,
-            SteeringReadiness::FullyReady,
-            SteeringReadiness::Error,
-            SteeringReadiness::NotAvailable,
-        ] {
-            assert_eq!(SteeringReadiness::from_u8(r.as_u8()), r);
-        }
         for m in [
             MechanicalLockout::NotActive,
             MechanicalLockout::Active,

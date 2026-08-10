@@ -25,9 +25,8 @@ pub use drive_strategy::{
     HitchPtoCombinedCmd, HitchRollPitchCmd,
 };
 pub use guidance::{
-    CURVATURE_MAX_PER_KM, CURVATURE_MIN_PER_KM, CurvatureCommand, GenericSaeBs02SlotValue,
-    GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemStatus, MechanicalLockout,
-    RequestResetCommandStatus, SteeringReadiness, curvature_within_range,
+    CURVATURE_MAX_PER_KM, CURVATURE_MIN_PER_KM, GenericSaeBs02SlotValue, GuidanceLimitStatus,
+    GuidanceMachineInfo, MechanicalLockout, RequestResetCommandStatus, curvature_within_range,
 };
 pub use inventory::{
     FamilyLevel, IMPLEMENT_FAMILIES, ImplementFamilyInfo, ImplementMessageFamily, family_info,
@@ -38,7 +37,7 @@ pub use machine_speed_cmd::{
 };
 pub use speed_distance::{
     ExitReasonCode, GroundBasedSpeedDist, HitchStatus, LimitStatus, MachineSelectedSpeedFull,
-    PtoStatus, WheelBasedSpeedDist, wheel_slip_percent,
+    PtoStatus, Signal, WheelBasedSpeedDist, wheel_slip_percent,
 };
 pub use tractor_commands::{
     AuxValveCommandMsg, HitchCommand, HitchCommandMsg, PtoCommand, PtoCommandMsg,

@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 
 use aes::Aes128;
 use cmac::{Cmac, Mac};
+use sha2::{Digest, Sha256};
 use der::Decode;
 use x509_cert::Certificate;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -64,6 +65,11 @@ pub enum AuthError {
     AuthenticationStatusLost = 0x10,
     /// The received authentication status is invalid (0x12).
     AuthenticationStatusInvalid = 0x12,
+    /// The public ECC key is not valid for curve 25519 (0x14). A peer that
+    /// sends an all-zero (or other small-order) point drives the shared secret
+    /// to zero, which would key the CMAC with zeros and let anyone on the bus
+    /// complete the handshake.
+    EccPublicKeyValidationFailed = 0x14,
     /// Challenge length was neither 32 nor 16 bytes (0x23).
     ChallengeLengthInvalid = 0x23,
     /// The peer's certificate appears on the revocation list.
@@ -261,7 +267,15 @@ pub struct TimAuthentication {
     state: AuthState,
     secret: Option<StaticSecret>,
     shared: Option<[u8; 32]>,
-    challenge: Vec<u8>,
+    /// The challenge this side issued, and the one the peer issued.
+    ///
+    /// §4.4.5.4 splits the derived key so that "one key is used for
+    /// server-to-client authentication [and] the other client-to-server", and
+    /// each side MACs the *peer's* challenge. A single key and a single
+    /// challenge slot made a response reflectable: the same bytes that
+    /// authenticate A to B also authenticate B to A.
+    own_challenge: Vec<u8>,
+    peer_challenge: Vec<u8>,
 }
 
 impl Default for TimAuthentication {
@@ -277,7 +291,8 @@ impl TimAuthentication {
             state: AuthState::Unauthenticated,
             secret: None,
             shared: None,
-            challenge: Vec::new(),
+            own_challenge: Vec::new(),
+            peer_challenge: Vec::new(),
         }
     }
 
@@ -329,13 +344,86 @@ impl TimAuthentication {
     /// # Errors
     /// [`AuthError::InternalError`] if no key agreement was started.
     pub fn complete_key_agreement(&mut self, peer_public: [u8; 32]) -> Result<(), AuthError> {
+        // §4.3 makes certificate validation the precondition for the rest of
+        // the handshake; reaching key agreement without it authorises anyone.
+        if !matches!(
+            self.state,
+            AuthState::CertificatesExchanged | AuthState::KeyAgreed
+        ) {
+            return self.fail(AuthError::InternalError);
+        }
         let Some(secret) = self.secret.as_ref() else {
             return self.fail(AuthError::InternalError);
         };
         let shared = secret.diffie_hellman(&PublicKey::from(peer_public));
+        // B.4.1.1 code 0x14. A small-order or all-zero point drives the shared
+        // secret to zero for *every* peer, so the CMAC key would be known to
+        // anyone: a complete authentication bypass.
+        if !shared.was_contributory() {
+            return self.fail(AuthError::EccPublicKeyValidationFailed);
+        }
         self.shared = Some(shared.to_bytes());
         self.state = AuthState::KeyAgreed;
         Ok(())
+    }
+
+    /// Derive one directional key per §4.4.5.4: "a Key Derivation Function
+    /// (KDF) is performed on the generated common secret … the derived key …
+    /// is split into two parts", with both challenges mixed in so "the
+    /// generated common secret would [not] always be the same".
+    ///
+    /// SP800-56A one-step KDF with SHA-256, which is the defensible
+    /// instantiation available here — `sha2` is already a dependency.
+    fn directional_keys(&self) -> Result<([u8; 16], [u8; 16]), AuthError> {
+        let shared = self.shared.ok_or(AuthError::InternalError)?;
+        if self.own_challenge.is_empty() || self.peer_challenge.is_empty() {
+            return Err(AuthError::InternalError);
+        }
+        // Two random challenges that are byte-identical mean either a replay
+        // or a peer reflecting ours; there is then no way to tell the two
+        // directions apart, which is exactly the property C28 was about.
+        if self.own_challenge == self.peer_challenge {
+            return Err(AuthError::ChallengesDoNotMatch);
+        }
+        // Both sides must derive the same pair, so the challenges are mixed in
+        // a canonical order rather than "mine then theirs".
+        let own_first = self.own_challenge < self.peer_challenge;
+        let (first, second) = if own_first {
+            (&self.own_challenge, &self.peer_challenge)
+        } else {
+            (&self.peer_challenge, &self.own_challenge)
+        };
+        let mut hash = Sha256::new();
+        hash.update([0, 0, 0, 1]);
+        hash.update(shared);
+        hash.update(b"machbus-tim-lwa");
+        hash.update((first.len() as u16).to_be_bytes());
+        hash.update(first);
+        hash.update((second.len() as u16).to_be_bytes());
+        hash.update(second);
+        let derived = hash.finalize();
+        let mut low = [0u8; 16];
+        let mut high = [0u8; 16];
+        low.copy_from_slice(&derived[..16]);
+        high.copy_from_slice(&derived[16..]);
+        // The halves are assigned to opposite directions on the two peers, so
+        // the key that authenticates A to B is never the one that
+        // authenticates B to A.
+        if own_first {
+            Ok((low, high))
+        } else {
+            Ok((high, low))
+        }
+    }
+
+    fn mac_with(key: &[u8; 16], data: &[u8]) -> Result<[u8; CMAC_LEN], AuthError> {
+        let mut mac =
+            <Cmac<Aes128> as Mac>::new_from_slice(key).map_err(|_| AuthError::InternalError)?;
+        mac.update(data);
+        let tag = mac.finalize().into_bytes();
+        let mut out = [0u8; CMAC_LEN];
+        out.copy_from_slice(&tag);
+        Ok(out)
     }
 
     /// Issue a challenge. It must be 32 bytes (random) or 16 (signed).
@@ -350,8 +438,25 @@ impl TimAuthentication {
         if self.shared.is_none() {
             return self.fail(AuthError::InternalError);
         }
-        self.challenge = challenge.to_vec();
+        self.own_challenge = challenge.to_vec();
         self.state = AuthState::ChallengeIssued;
+        Ok(())
+    }
+
+    /// Record the challenge the peer issued. Annex F.4 has each side compute a
+    /// CMAC "over the challenge received by the [peer]", so both are needed
+    /// before either response can be produced.
+    ///
+    /// # Errors
+    /// [`AuthError::ChallengeLengthInvalid`] for a length other than 32 or 16.
+    pub fn accept_peer_challenge(&mut self, challenge: &[u8]) -> Result<(), AuthError> {
+        if challenge.len() != RANDOM_CHALLENGE_LEN && challenge.len() != SIGNED_CHALLENGE_LEN {
+            return self.fail(AuthError::ChallengeLengthInvalid);
+        }
+        if self.shared.is_none() {
+            return self.fail(AuthError::InternalError);
+        }
+        self.peer_challenge = challenge.to_vec();
         Ok(())
     }
 
@@ -362,18 +467,17 @@ impl TimAuthentication {
     /// [`AuthError::InternalError`] when there is no shared secret or no
     /// outstanding challenge.
     pub fn compute_response(&self) -> Result<[u8; CMAC_LEN], AuthError> {
-        let shared = self.shared.ok_or(AuthError::InternalError)?;
-        if self.challenge.is_empty() {
-            return Err(AuthError::InternalError);
-        }
-        // AES-128-CMAC keyed on the first half of the ECDH output.
-        let mut mac = <Cmac<Aes128> as Mac>::new_from_slice(&shared[..16])
-            .map_err(|_| AuthError::InternalError)?;
-        mac.update(&self.challenge);
-        let tag = mac.finalize().into_bytes();
-        let mut out = [0u8; CMAC_LEN];
-        out.copy_from_slice(&tag);
-        Ok(out)
+        // F.4 step 4.1/4.2: MAC the challenge *received from the peer*, with
+        // this direction's key.
+        let (outbound, _) = self.directional_keys()?;
+        Self::mac_with(&outbound, &self.peer_challenge)
+    }
+
+    /// The CMAC this side expects back from the peer: the other direction's
+    /// key over the challenge this side issued (F.4 steps 4.5/4.6).
+    fn expected_peer_response(&self) -> Result<[u8; CMAC_LEN], AuthError> {
+        let (_, inbound) = self.directional_keys()?;
+        Self::mac_with(&inbound, &self.own_challenge)
     }
 
     /// Verify a peer's response against the CMAC computed here.
@@ -382,7 +486,10 @@ impl TimAuthentication {
     /// [`AuthError::ChallengesDoNotMatch`] (code 0x09) when the peer's answer
     /// does not match, which also moves the handshake to `Failed`.
     pub fn verify_response(&mut self, peer_response: &[u8]) -> Result<(), AuthError> {
-        let expected = match self.compute_response() {
+        if !matches!(self.state, AuthState::ChallengeIssued) {
+            return self.fail(AuthError::InternalError);
+        }
+        let expected = match self.expected_peer_response() {
             Ok(tag) => tag,
             Err(e) => return self.fail(e),
         };
@@ -399,7 +506,8 @@ impl TimAuthentication {
         self.state = AuthState::Unauthenticated;
         self.secret = None;
         self.shared = None;
-        self.challenge.clear();
+        self.own_challenge.clear();
+        self.peer_challenge.clear();
     }
 
     fn fail(&mut self, error: AuthError) -> Result<(), AuthError> {
@@ -424,14 +532,34 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Two peers that have validated each other's certificates and completed
+    /// ECDH. The certificate step is short-circuited here because building a
+    /// signed DER chain is not what these tests are about; that the gate exists
+    /// at all is covered by `key_agreement_requires_certificate_validation`.
     fn agreed_pair() -> (TimAuthentication, TimAuthentication) {
         let mut a = TimAuthentication::new();
         let mut b = TimAuthentication::new();
+        a.state = AuthState::CertificatesExchanged;
+        b.state = AuthState::CertificatesExchanged;
         let a_public = a.begin_key_agreement([7u8; 32]);
         let b_public = b.begin_key_agreement([11u8; 32]);
         a.complete_key_agreement(b_public).unwrap();
         b.complete_key_agreement(a_public).unwrap();
         (a, b)
+    }
+
+    /// Each side issues its own challenge and learns the peer's, as F.4
+    /// requires before either response can be computed.
+    fn exchange_challenges(
+        a: &mut TimAuthentication,
+        b: &mut TimAuthentication,
+        a_challenge: &[u8],
+        b_challenge: &[u8],
+    ) {
+        a.issue_challenge(a_challenge).unwrap();
+        b.issue_challenge(b_challenge).unwrap();
+        a.accept_peer_challenge(b_challenge).unwrap();
+        b.accept_peer_challenge(a_challenge).unwrap();
     }
 
     #[test]
@@ -445,10 +573,9 @@ mod tests {
     #[test]
     fn challenge_response_authenticates_a_genuine_peer() {
         let (mut a, mut b) = agreed_pair();
-        let challenge = [0x5Au8; RANDOM_CHALLENGE_LEN];
-
-        a.issue_challenge(&challenge).unwrap();
-        b.issue_challenge(&challenge).unwrap();
+        let a_challenge = [0x5Au8; RANDOM_CHALLENGE_LEN];
+        let b_challenge = [0xA5u8; RANDOM_CHALLENGE_LEN];
+        exchange_challenges(&mut a, &mut b, &a_challenge, &b_challenge);
 
         // B answers A's challenge with a CMAC only the shared secret produces.
         let response = b.compute_response().unwrap();
@@ -456,18 +583,102 @@ mod tests {
         assert!(a.is_authenticated());
     }
 
+    /// C28 — one key and one challenge slot for both directions made the
+    /// response reflectable: the bytes that authenticate B to A were exactly
+    /// the bytes A would send back, so an attacker could echo A's own answer.
+    #[test]
+    fn a_reflected_response_does_not_authenticate() {
+        let (mut a, mut b) = agreed_pair();
+        let a_challenge = [0x5Au8; RANDOM_CHALLENGE_LEN];
+        let b_challenge = [0xA5u8; RANDOM_CHALLENGE_LEN];
+        exchange_challenges(&mut a, &mut b, &a_challenge, &b_challenge);
+
+        // Echo A's own outbound response straight back at it.
+        let a_own = a.compute_response().unwrap();
+        assert_ne!(
+            a_own,
+            b.compute_response().unwrap(),
+            "the two directions must not produce the same tag"
+        );
+        assert_eq!(
+            a.verify_response(&a_own),
+            Err(AuthError::ChallengesDoNotMatch)
+        );
+        assert!(!a.is_authenticated());
+    }
+
+    /// C26 — an all-zero (small-order) peer key drives the shared secret to
+    /// zero for every peer, so the CMAC key becomes public knowledge and any
+    /// device on the bus completes the handshake.
+    #[test]
+    fn a_non_contributory_public_key_is_refused() {
+        let mut a = TimAuthentication::new();
+        a.state = AuthState::CertificatesExchanged;
+        let _ = a.begin_key_agreement([7u8; 32]);
+        assert_eq!(
+            a.complete_key_agreement([0u8; 32]),
+            Err(AuthError::EccPublicKeyValidationFailed)
+        );
+        assert!(!a.is_authenticated());
+        assert_eq!(
+            a.state(),
+            AuthState::Failed(AuthError::EccPublicKeyValidationFailed)
+        );
+        assert_eq!(AuthError::EccPublicKeyValidationFailed.as_u8(), 0x14);
+    }
+
+    /// C27 — §4.3 makes certificate validation the precondition for TIM
+    /// automation. Key agreement used to proceed from a fresh, unvalidated
+    /// state, so the PKI gate authorised anyone.
+    #[test]
+    fn key_agreement_requires_certificate_validation() {
+        let mut a = TimAuthentication::new();
+        let peer = {
+            let mut b = TimAuthentication::new();
+            b.state = AuthState::CertificatesExchanged;
+            b.begin_key_agreement([11u8; 32])
+        };
+        let _ = a.begin_key_agreement([7u8; 32]);
+        assert_eq!(
+            a.complete_key_agreement(peer),
+            Err(AuthError::InternalError),
+            "no certificate validation, no key agreement"
+        );
+    }
+
+    /// Different challenges must key different sessions — otherwise a recorded
+    /// handshake replays.
+    #[test]
+    fn the_derived_key_depends_on_both_challenges() {
+        let (mut a1, mut b1) = agreed_pair();
+        exchange_challenges(&mut a1, &mut b1, &[1u8; 32], &[2u8; 32]);
+        let first = a1.compute_response().unwrap();
+
+        let (mut a2, mut b2) = agreed_pair();
+        exchange_challenges(&mut a2, &mut b2, &[1u8; 32], &[3u8; 32]);
+        let second = a2.compute_response().unwrap();
+
+        assert_ne!(
+            first, second,
+            "changing the peer's challenge must change the response"
+        );
+    }
+
     /// The stub took the expected signature from its caller, so it authenticated
     /// anything. A peer without the shared secret must now fail.
     #[test]
     fn a_peer_without_the_shared_secret_cannot_authenticate() {
-        let (mut a, _b) = agreed_pair();
-        let challenge = [0x5Au8; RANDOM_CHALLENGE_LEN];
-        a.issue_challenge(&challenge).unwrap();
+        let (mut a, mut b) = agreed_pair();
+        let a_challenge = [0x5Au8; RANDOM_CHALLENGE_LEN];
+        let b_challenge = [0xA5u8; RANDOM_CHALLENGE_LEN];
+        exchange_challenges(&mut a, &mut b, &a_challenge, &b_challenge);
 
         let mut impostor = TimAuthentication::new();
+        impostor.state = AuthState::CertificatesExchanged;
         let eve_public = impostor.begin_key_agreement([99u8; 32]);
         impostor.complete_key_agreement(eve_public).unwrap();
-        impostor.issue_challenge(&challenge).unwrap();
+        impostor.issue_challenge(&b_challenge).unwrap();
+        impostor.accept_peer_challenge(&a_challenge).unwrap();
 
         let forged = impostor.compute_response().unwrap();
         assert_eq!(
@@ -502,9 +713,7 @@ mod tests {
     #[test]
     fn a_truncated_response_is_rejected() {
         let (mut a, mut b) = agreed_pair();
-        let challenge = [1u8; RANDOM_CHALLENGE_LEN];
-        a.issue_challenge(&challenge).unwrap();
-        b.issue_challenge(&challenge).unwrap();
+        exchange_challenges(&mut a, &mut b, &[1u8; 32], &[2u8; 32]);
         let response = b.compute_response().unwrap();
 
         assert_eq!(
@@ -515,12 +724,13 @@ mod tests {
 
     #[test]
     fn cmac_is_deterministic_and_challenge_dependent() {
-        let (mut a, _) = agreed_pair();
-        a.issue_challenge(&[0xAAu8; RANDOM_CHALLENGE_LEN]).unwrap();
+        let (mut a, mut b) = agreed_pair();
+        exchange_challenges(&mut a, &mut b, &[0xAAu8; 32], &[0xBBu8; 32]);
         let first = a.compute_response().unwrap();
-        assert_eq!(first, a.compute_response().unwrap());
+        assert_eq!(first, a.compute_response().unwrap(), "deterministic");
 
-        a.issue_challenge(&[0xBBu8; RANDOM_CHALLENGE_LEN]).unwrap();
+        // A different peer challenge yields a different response.
+        a.accept_peer_challenge(&[0xCCu8; 32]).unwrap();
         assert_ne!(first, a.compute_response().unwrap());
     }
 

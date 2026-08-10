@@ -531,6 +531,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp1`].
+ *
+ * A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double coolant_temp_c;
@@ -542,6 +544,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp2`].
+ *
+ * A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double engine_oil_temp_c;

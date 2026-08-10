@@ -80,6 +80,14 @@ fn encode_u16_signal(signal: Signal<f64>, scale: f64) -> u16 {
     }
 }
 
+/// [`encode_u16_signal`] for a SLOT that carries an offset.
+fn encode_u16_signal_offset(signal: Signal<f64>, offset: f64, scale: f64) -> u16 {
+    match signal {
+        Signal::Value(v) => offset_scaled_u16_non_na(v, offset, scale),
+        Signal::Error | Signal::NotAvailable => 0xFFFF,
+    }
+}
+
 fn scaled_u16_non_na(value: f64, scale: f64) -> u16 {
     if !value.is_finite() {
         return 0;
@@ -380,40 +388,28 @@ impl Eec3 {
 
 // ─── EngineTemp1 (ET1, PGN 0x0FEEE) ───────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EngineTemp1 {
-    pub coolant_temp_c: f64,     // SPN 110: 1 °C/bit, offset −40
-    pub fuel_temp_c: f64,        // SPN 174: 1 °C/bit, offset −40
-    pub oil_temp_c: f64,         // SPN 175: 0.03125 °C/bit, offset −273, 2 bytes
-    pub turbo_oil_temp_c: f64,   // SPN 176: 0.03125 °C/bit, offset −273, 2 bytes
-    pub intercooler_temp_c: f64, // SPN 52: 1 °C/bit, offset −40
-}
-
-impl Default for EngineTemp1 {
-    fn default() -> Self {
-        Self {
-            coolant_temp_c: -40.0,
-            fuel_temp_c: -40.0,
-            oil_temp_c: -40.0,
-            turbo_oil_temp_c: -40.0,
-            intercooler_temp_c: -40.0,
-        }
-    }
+    pub coolant_temp_c: Signal<f64>,     // SPN 110: 1 °C/bit, offset −40
+    pub fuel_temp_c: Signal<f64>,        // SPN 174: 1 °C/bit, offset −40
+    pub oil_temp_c: Signal<f64>,         // SPN 175: 0.03125 °C/bit, offset −273, 2 bytes
+    pub turbo_oil_temp_c: Signal<f64>,   // SPN 176: 0.03125 °C/bit, offset −273, 2 bytes
+    pub intercooler_temp_c: Signal<f64>, // SPN 52: 1 °C/bit, offset −40
 }
 
 impl EngineTemp1 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = offset_scaled_u8_non_na(self.coolant_temp_c, 40.0, 1.0);
-        data[1] = offset_scaled_u8_non_na(self.fuel_temp_c, 40.0, 1.0);
-        let oil = offset_scaled_u16_non_na(self.oil_temp_c, 273.0, 0.03125);
+        data[0] = encode_u8_signal(self.coolant_temp_c, 40.0);
+        data[1] = encode_u8_signal(self.fuel_temp_c, 40.0);
+        let oil = encode_u16_signal_offset(self.oil_temp_c, 273.0, 0.03125);
         data[2] = (oil & 0xFF) as u8;
         data[3] = ((oil >> 8) & 0xFF) as u8;
-        let turbo = offset_scaled_u16_non_na(self.turbo_oil_temp_c, 273.0, 0.03125);
+        let turbo = encode_u16_signal_offset(self.turbo_oil_temp_c, 273.0, 0.03125);
         data[4] = (turbo & 0xFF) as u8;
         data[5] = ((turbo >> 8) & 0xFF) as u8;
-        data[6] = offset_scaled_u8_non_na(self.intercooler_temp_c, 40.0, 1.0);
+        data[6] = encode_u8_signal(self.intercooler_temp_c, 40.0);
         data
     }
 
@@ -424,20 +420,14 @@ impl EngineTemp1 {
         }
         let oil = (data[2] as u16) | ((data[3] as u16) << 8);
         let turbo = (data[4] as u16) | ((data[5] as u16) << 8);
-        if !u8_scaled_raw_is_defined(data[0])
-            || !u8_scaled_raw_is_defined(data[1])
-            || !u16_data_is_available(oil)
-            || !u16_data_is_available(turbo)
-            || !u8_scaled_raw_is_defined(data[6])
-        {
-            return None;
-        }
+        // G4: an engine that does not instrument, say, turbo oil temperature
+        // still reports a perfectly good coolant temperature in the same frame.
         Some(Self {
-            coolant_temp_c: data[0] as f64 - 40.0,
-            fuel_temp_c: data[1] as f64 - 40.0,
-            oil_temp_c: oil as f64 * 0.03125 - 273.0,
-            turbo_oil_temp_c: turbo as f64 * 0.03125 - 273.0,
-            intercooler_temp_c: data[6] as f64 - 40.0,
+            coolant_temp_c: u8_signal(data[0], 1.0, -40.0),
+            fuel_temp_c: u8_signal(data[1], 1.0, -40.0),
+            oil_temp_c: u16_signal(oil, 0.03125, -273.0),
+            turbo_oil_temp_c: u16_signal(turbo, 0.03125, -273.0),
+            intercooler_temp_c: u8_signal(data[6], 1.0, -40.0),
         })
     }
 
@@ -452,37 +442,26 @@ impl EngineTemp1 {
 
 // ─── EngineTemp2 (ET2, PGN 0x0FEED) ───────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EngineTemp2 {
-    pub engine_oil_temp_c: f64,
-    pub turbo_oil_temp_c: f64,
-    pub engine_intercooler_temp_c: f64,
-    pub turbo_1_temp_c: f64,
-}
-
-impl Default for EngineTemp2 {
-    fn default() -> Self {
-        Self {
-            engine_oil_temp_c: -40.0,
-            turbo_oil_temp_c: -40.0,
-            engine_intercooler_temp_c: -40.0,
-            turbo_1_temp_c: -40.0,
-        }
-    }
+    pub engine_oil_temp_c: Signal<f64>,
+    pub turbo_oil_temp_c: Signal<f64>,
+    pub engine_intercooler_temp_c: Signal<f64>,
+    pub turbo_1_temp_c: Signal<f64>,
 }
 
 impl EngineTemp2 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let oil = offset_scaled_u16_non_na(self.engine_oil_temp_c, 273.0, 0.03125);
+        let oil = encode_u16_signal_offset(self.engine_oil_temp_c, 273.0, 0.03125);
         data[0] = (oil & 0xFF) as u8;
         data[1] = ((oil >> 8) & 0xFF) as u8;
-        let turbo_oil = offset_scaled_u16_non_na(self.turbo_oil_temp_c, 273.0, 0.03125);
+        let turbo_oil = encode_u16_signal_offset(self.turbo_oil_temp_c, 273.0, 0.03125);
         data[2] = (turbo_oil & 0xFF) as u8;
         data[3] = ((turbo_oil >> 8) & 0xFF) as u8;
-        data[4] = offset_scaled_u8_non_na(self.engine_intercooler_temp_c, 40.0, 1.0);
-        let turbo1 = offset_scaled_u16_non_na(self.turbo_1_temp_c, 273.0, 0.03125);
+        data[4] = encode_u8_signal(self.engine_intercooler_temp_c, 40.0);
+        let turbo1 = encode_u16_signal_offset(self.turbo_1_temp_c, 273.0, 0.03125);
         data[5] = (turbo1 & 0xFF) as u8;
         data[6] = ((turbo1 >> 8) & 0xFF) as u8;
         data
@@ -496,18 +475,11 @@ impl EngineTemp2 {
         let oil = (data[0] as u16) | ((data[1] as u16) << 8);
         let turbo_oil = (data[2] as u16) | ((data[3] as u16) << 8);
         let turbo1 = (data[5] as u16) | ((data[6] as u16) << 8);
-        if !u16_data_is_available(oil)
-            || !u16_data_is_available(turbo_oil)
-            || !u8_scaled_raw_is_defined(data[4])
-            || !u16_data_is_available(turbo1)
-        {
-            return None;
-        }
         Some(Self {
-            engine_oil_temp_c: oil as f64 * 0.03125 - 273.0,
-            turbo_oil_temp_c: turbo_oil as f64 * 0.03125 - 273.0,
-            engine_intercooler_temp_c: data[4] as f64 - 40.0,
-            turbo_1_temp_c: turbo1 as f64 * 0.03125 - 273.0,
+            engine_oil_temp_c: u16_signal(oil, 0.03125, -273.0),
+            turbo_oil_temp_c: u16_signal(turbo_oil, 0.03125, -273.0),
+            engine_intercooler_temp_c: u8_signal(data[4], 1.0, -40.0),
+            turbo_1_temp_c: u16_signal(turbo1, 0.03125, -273.0),
         })
     }
 
@@ -1365,29 +1337,41 @@ mod tests {
     #[test]
     fn engine_temp1_round_trip() {
         let m = EngineTemp1 {
-            coolant_temp_c: 90.0,
-            fuel_temp_c: 50.0,
-            oil_temp_c: 100.0,
-            turbo_oil_temp_c: 110.0,
-            intercooler_temp_c: 60.0,
+            coolant_temp_c: Signal::Value(90.0),
+            fuel_temp_c: Signal::Value(50.0),
+            oil_temp_c: Signal::Value(100.0),
+            turbo_oil_temp_c: Signal::Value(110.0),
+            intercooler_temp_c: Signal::Value(60.0),
         };
         assert_eq!(m.encode(), [0x82, 0x5A, 0xA0, 0x2E, 0xE0, 0x2F, 0x64, 0xFF]);
         let decoded = EngineTemp1::decode(&m.encode()).unwrap();
-        assert!((decoded.coolant_temp_c - 90.0).abs() < 1.0);
-        assert!((decoded.oil_temp_c - 100.0).abs() < 0.1);
+        assert!((decoded.coolant_temp_c.value().unwrap() - 90.0).abs() < 1.0);
+        assert!((decoded.oil_temp_c.value().unwrap() - 100.0).abs() < 0.1);
+
+        // An uninstrumented turbo oil sensor must not cost the coolant reading.
+        let mut absent = m.encode();
+        absent[4] = 0xFF;
+        absent[5] = 0xFF;
+        let decoded = EngineTemp1::decode(&absent).unwrap();
+        assert_eq!(decoded.turbo_oil_temp_c, Signal::NotAvailable);
+        assert!((decoded.coolant_temp_c.value().unwrap() - 90.0).abs() < 1.0);
     }
 
     #[test]
     fn engine_temp2_round_trip() {
         let m = EngineTemp2 {
-            engine_oil_temp_c: 95.0,
-            turbo_oil_temp_c: 105.0,
-            engine_intercooler_temp_c: 55.0,
-            turbo_1_temp_c: 200.0,
+            engine_oil_temp_c: Signal::Value(95.0),
+            turbo_oil_temp_c: Signal::Value(105.0),
+            engine_intercooler_temp_c: Signal::Value(55.0),
+            turbo_1_temp_c: Signal::Value(200.0),
         };
         let d = EngineTemp2::decode(&m.encode()).unwrap();
-        assert!((d.engine_oil_temp_c - 95.0).abs() < 0.1);
-        assert!((d.turbo_1_temp_c - 200.0).abs() < 0.1);
+        assert!((d.engine_oil_temp_c.value().unwrap() - 95.0).abs() < 0.1);
+        assert!((d.turbo_1_temp_c.value().unwrap() - 200.0).abs() < 0.1);
+
+        // A default ET2 is "nothing reported", and it survives a round trip.
+        let empty = EngineTemp2::decode(&EngineTemp2::default().encode()).unwrap();
+        assert_eq!(empty, EngineTemp2::default());
     }
 
     #[test]

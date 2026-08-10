@@ -92,8 +92,11 @@ aftertreatment2_clamped_inputs=FDFFFAFAFEFEFFFF
 eec1_default=FFFFFFFFFF0000FF
 eec2_default=0FFF00FFFFFFFFFF
 eec3_default=7D0000FFFFFFFFFF
-engine_temp1_default=0000201D201D00FF
-engine_temp2_default=201D201D00201DFF
+# Same for the temperature PGs: the defaults used to encode −40 °C / −273 °C
+# on every channel, asserting the coldest readable temperature on sensors an
+# engine may not even have fitted. A default now reports nothing.
+engine_temp1_default=FFFFFFFFFFFFFFFF
+engine_temp2_default=FFFFFFFFFFFFFFFF
 engine_fluid_lp_default=000000FFFF8813FF
 engine_hours_default=0000000000000000
 fuel_economy_default=0000000000FFFFFF

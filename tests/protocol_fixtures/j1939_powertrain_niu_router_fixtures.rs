@@ -397,21 +397,21 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "engine_temp1_clamped_inputs",
             EngineTemp1 {
-                coolant_temp_c: 99_999.0,
-                fuel_temp_c: 99_999.0,
-                oil_temp_c: 99_999.0,
-                turbo_oil_temp_c: 99_999.0,
-                intercooler_temp_c: 99_999.0,
+                coolant_temp_c: sig(99_999.0),
+                fuel_temp_c: sig(99_999.0),
+                oil_temp_c: sig(99_999.0),
+                turbo_oil_temp_c: sig(99_999.0),
+                intercooler_temp_c: sig(99_999.0),
             }
             .encode(),
         ),
         (
             "engine_temp2_clamped_inputs",
             EngineTemp2 {
-                engine_oil_temp_c: 99_999.0,
-                turbo_oil_temp_c: 99_999.0,
-                engine_intercooler_temp_c: 99_999.0,
-                turbo_1_temp_c: 99_999.0,
+                engine_oil_temp_c: sig(99_999.0),
+                turbo_oil_temp_c: sig(99_999.0),
+                engine_intercooler_temp_c: sig(99_999.0),
+                turbo_1_temp_c: sig(99_999.0),
             }
             .encode(),
         ),
@@ -639,16 +639,16 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "engine_temp1_raw_min");
     assert_eq!(
         EngineTemp1 {
-            coolant_temp_c: -40.0,
-            fuel_temp_c: -40.0,
-            oil_temp_c: -273.0,
-            turbo_oil_temp_c: -273.0,
-            intercooler_temp_c: -40.0,
+            coolant_temp_c: sig(-40.0),
+            fuel_temp_c: sig(-40.0),
+            oil_temp_c: sig(-273.0),
+            turbo_oil_temp_c: sig(-273.0),
+            intercooler_temp_c: sig(-40.0),
         }
         .encode(),
         temp1_min
     );
-    assert_eq!(EngineTemp1::decode(&temp1_min).unwrap().oil_temp_c, -273.0);
+    assert_sig(EngineTemp1::decode(&temp1_min).unwrap().oil_temp_c, -273.0, 0.0);
 
     let temp1_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -656,34 +656,35 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         EngineTemp1 {
-            coolant_temp_c: 210.0,
-            fuel_temp_c: 210.0,
-            oil_temp_c: 1774.90625,
-            turbo_oil_temp_c: 1774.90625,
-            intercooler_temp_c: 210.0,
+            coolant_temp_c: sig(210.0),
+            fuel_temp_c: sig(210.0),
+            oil_temp_c: sig(1_774.906_25),
+            turbo_oil_temp_c: sig(1_774.906_25),
+            intercooler_temp_c: sig(210.0),
         }
         .encode(),
         temp1_upper
     );
     let decoded = EngineTemp1::decode(&temp1_upper).unwrap();
-    assert_eq!(decoded.coolant_temp_c, 210.0);
-    assert_eq!(decoded.oil_temp_c, 1774.90625);
+    assert_sig(decoded.coolant_temp_c, 210.0, 0.0);
+    assert_sig(decoded.oil_temp_c, 1_774.906_25, 0.0);
 
     let temp2_min =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "engine_temp2_raw_min");
     assert_eq!(
         EngineTemp2 {
-            engine_oil_temp_c: -273.0,
-            turbo_oil_temp_c: -273.0,
-            engine_intercooler_temp_c: -40.0,
-            turbo_1_temp_c: -273.0,
+            engine_oil_temp_c: sig(-273.0),
+            turbo_oil_temp_c: sig(-273.0),
+            engine_intercooler_temp_c: sig(-40.0),
+            turbo_1_temp_c: sig(-273.0),
         }
         .encode(),
         temp2_min
     );
-    assert_eq!(
+    assert_sig(
         EngineTemp2::decode(&temp2_min).unwrap().engine_oil_temp_c,
-        -273.0
+        -273.0,
+        0.0,
     );
 
     let temp2_upper = parse_named_hex_frame(
@@ -692,17 +693,17 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         EngineTemp2 {
-            engine_oil_temp_c: 1774.90625,
-            turbo_oil_temp_c: 1774.90625,
-            engine_intercooler_temp_c: 210.0,
-            turbo_1_temp_c: 1774.90625,
+            engine_oil_temp_c: sig(1_774.906_25),
+            turbo_oil_temp_c: sig(1_774.906_25),
+            engine_intercooler_temp_c: sig(210.0),
+            turbo_1_temp_c: sig(1_774.906_25),
         }
         .encode(),
         temp2_upper
     );
     let decoded = EngineTemp2::decode(&temp2_upper).unwrap();
-    assert_eq!(decoded.engine_intercooler_temp_c, 210.0);
-    assert_eq!(decoded.turbo_1_temp_c, 1774.90625);
+    assert_sig(decoded.engine_intercooler_temp_c, 210.0, 0.0);
+    assert_sig(decoded.turbo_1_temp_c, 1_774.906_25, 0.0);
 
     let fluid_min = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

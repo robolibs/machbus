@@ -169,23 +169,25 @@ impl PyEec3 {
 #[pyclass(name = "EngineTemp1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineTemp1 {
-    pub coolant_temp_c: f64,
-    pub fuel_temp_c: f64,
-    pub oil_temp_c: f64,
-    pub turbo_oil_temp_c: f64,
-    pub intercooler_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub coolant_temp_c: Option<f64>,
+    pub fuel_temp_c: Option<f64>,
+    pub oil_temp_c: Option<f64>,
+    pub turbo_oil_temp_c: Option<f64>,
+    pub intercooler_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineTemp1 {
     #[new]
-    #[pyo3(signature = (coolant_temp_c=-40.0, fuel_temp_c=-40.0, oil_temp_c=-40.0, turbo_oil_temp_c=-40.0, intercooler_temp_c=-40.0))]
+    #[pyo3(signature = (coolant_temp_c=None, fuel_temp_c=None, oil_temp_c=None, turbo_oil_temp_c=None, intercooler_temp_c=None))]
     fn new(
-        coolant_temp_c: f64,
-        fuel_temp_c: f64,
-        oil_temp_c: f64,
-        turbo_oil_temp_c: f64,
-        intercooler_temp_c: f64,
+        coolant_temp_c: Option<f64>,
+        fuel_temp_c: Option<f64>,
+        oil_temp_c: Option<f64>,
+        turbo_oil_temp_c: Option<f64>,
+        intercooler_temp_c: Option<f64>,
     ) -> Self {
         Self {
             coolant_temp_c,
@@ -198,26 +200,26 @@ impl PyEngineTemp1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineTemp1::decode(&data).map(|e| Self {
-            coolant_temp_c: e.coolant_temp_c,
-            fuel_temp_c: e.fuel_temp_c,
-            oil_temp_c: e.oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            intercooler_temp_c: e.intercooler_temp_c,
+            coolant_temp_c: e.coolant_temp_c.value(),
+            fuel_temp_c: e.fuel_temp_c.value(),
+            oil_temp_c: e.oil_temp_c.value(),
+            turbo_oil_temp_c: e.turbo_oil_temp_c.value(),
+            intercooler_temp_c: e.intercooler_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineTemp1 {
-            coolant_temp_c: self.coolant_temp_c,
-            fuel_temp_c: self.fuel_temp_c,
-            oil_temp_c: self.oil_temp_c,
-            turbo_oil_temp_c: self.turbo_oil_temp_c,
-            intercooler_temp_c: self.intercooler_temp_c,
+            coolant_temp_c: py_signal(self.coolant_temp_c),
+            fuel_temp_c: py_signal(self.fuel_temp_c),
+            oil_temp_c: py_signal(self.oil_temp_c),
+            turbo_oil_temp_c: py_signal(self.turbo_oil_temp_c),
+            intercooler_temp_c: py_signal(self.intercooler_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("EngineTemp1(coolant_temp_c={:.1})", self.coolant_temp_c)
+        format!("EngineTemp1(coolant_temp_c={:?})", self.coolant_temp_c)
     }
 }
 
@@ -225,21 +227,23 @@ impl PyEngineTemp1 {
 #[pyclass(name = "EngineTemp2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineTemp2 {
-    pub engine_oil_temp_c: f64,
-    pub turbo_oil_temp_c: f64,
-    pub engine_intercooler_temp_c: f64,
-    pub turbo_1_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub engine_oil_temp_c: Option<f64>,
+    pub turbo_oil_temp_c: Option<f64>,
+    pub engine_intercooler_temp_c: Option<f64>,
+    pub turbo_1_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineTemp2 {
     #[new]
-    #[pyo3(signature = (engine_oil_temp_c=-40.0, turbo_oil_temp_c=-40.0, engine_intercooler_temp_c=-40.0, turbo_1_temp_c=-40.0))]
+    #[pyo3(signature = (engine_oil_temp_c=None, turbo_oil_temp_c=None, engine_intercooler_temp_c=None, turbo_1_temp_c=None))]
     fn new(
-        engine_oil_temp_c: f64,
-        turbo_oil_temp_c: f64,
-        engine_intercooler_temp_c: f64,
-        turbo_1_temp_c: f64,
+        engine_oil_temp_c: Option<f64>,
+        turbo_oil_temp_c: Option<f64>,
+        engine_intercooler_temp_c: Option<f64>,
+        turbo_1_temp_c: Option<f64>,
     ) -> Self {
         Self {
             engine_oil_temp_c,
@@ -251,25 +255,25 @@ impl PyEngineTemp2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineTemp2::decode(&data).map(|e| Self {
-            engine_oil_temp_c: e.engine_oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            engine_intercooler_temp_c: e.engine_intercooler_temp_c,
-            turbo_1_temp_c: e.turbo_1_temp_c,
+            engine_oil_temp_c: e.engine_oil_temp_c.value(),
+            turbo_oil_temp_c: e.turbo_oil_temp_c.value(),
+            engine_intercooler_temp_c: e.engine_intercooler_temp_c.value(),
+            turbo_1_temp_c: e.turbo_1_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineTemp2 {
-            engine_oil_temp_c: self.engine_oil_temp_c,
-            turbo_oil_temp_c: self.turbo_oil_temp_c,
-            engine_intercooler_temp_c: self.engine_intercooler_temp_c,
-            turbo_1_temp_c: self.turbo_1_temp_c,
+            engine_oil_temp_c: py_signal(self.engine_oil_temp_c),
+            turbo_oil_temp_c: py_signal(self.turbo_oil_temp_c),
+            engine_intercooler_temp_c: py_signal(self.engine_intercooler_temp_c),
+            turbo_1_temp_c: py_signal(self.turbo_1_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "EngineTemp2(engine_oil_temp_c={:.1})",
+            "EngineTemp2(engine_oil_temp_c={:?})",
             self.engine_oil_temp_c
         )
     }

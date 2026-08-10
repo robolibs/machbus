@@ -359,21 +359,21 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         EngineTemp1,
         PGN_ET1,
         EngineTemp1 {
-            coolant_temp_c: 90.0,
-            fuel_temp_c: 50.0,
-            oil_temp_c: 100.0,
-            turbo_oil_temp_c: 110.0,
-            intercooler_temp_c: 60.0,
+            coolant_temp_c: Signal::Value(90.0),
+            fuel_temp_c: Signal::Value(50.0),
+            oil_temp_c: Signal::Value(100.0),
+            turbo_oil_temp_c: Signal::Value(110.0),
+            intercooler_temp_c: Signal::Value(60.0),
         }
     );
     assert_fixed_helper!(
         EngineTemp2,
         PGN_ET2,
         EngineTemp2 {
-            engine_oil_temp_c: 95.0,
-            turbo_oil_temp_c: 105.0,
-            engine_intercooler_temp_c: 55.0,
-            turbo_1_temp_c: 200.0,
+            engine_oil_temp_c: Signal::Value(95.0),
+            turbo_oil_temp_c: Signal::Value(105.0),
+            engine_intercooler_temp_c: Signal::Value(55.0),
+            turbo_1_temp_c: Signal::Value(200.0),
         }
     );
     assert_fixed_helper!(
@@ -845,22 +845,30 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
     }
 
     let temp1 = EngineTemp1 {
-        coolant_temp_c: 90.0,
-        fuel_temp_c: 40.0,
-        oil_temp_c: 100.0,
-        turbo_oil_temp_c: 110.0,
-        intercooler_temp_c: 60.0,
+        coolant_temp_c: Signal::Value(90.0),
+        fuel_temp_c: Signal::Value(40.0),
+        oil_temp_c: Signal::Value(100.0),
+        turbo_oil_temp_c: Signal::Value(110.0),
+        intercooler_temp_c: Signal::Value(60.0),
     };
     let encoded_temp1 = temp1.encode();
     assert!(EngineTemp1::decode(&encoded_temp1).is_some());
     for index in [0usize, 1, 6] {
-        let mut bad = encoded_temp1;
-        bad[index] = 0xFE;
+        let mut faulted = encoded_temp1;
+        faulted[index] = 0xFE;
+        let decoded = EngineTemp1::decode(&faulted)
+            .unwrap_or_else(|| panic!("a faulted sensor must not drop the ET1 frame"));
+        let field = [
+            decoded.coolant_temp_c,
+            decoded.fuel_temp_c,
+            decoded.intercooler_temp_c,
+        ][[0usize, 1, 6].iter().position(|i| *i == index).unwrap()];
         assert_eq!(
-            EngineTemp1::decode(&bad),
-            None,
-            "EngineTemp1 one-byte field {index} must reject the error indicator"
+            field,
+            Signal::Error,
+            "EngineTemp1 one-byte field {index} must report the error indicator"
         );
+        assert_signal_close(decoded.oil_temp_c, 100.0);
     }
 
     let tsc1 = Tsc1 {
@@ -901,41 +909,52 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
 #[test]
 fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
     let temp1 = EngineTemp1 {
-        coolant_temp_c: 90.0,
-        fuel_temp_c: 40.0,
-        oil_temp_c: 100.0,
-        turbo_oil_temp_c: 110.0,
-        intercooler_temp_c: 60.0,
+        coolant_temp_c: Signal::Value(90.0),
+        fuel_temp_c: Signal::Value(40.0),
+        oil_temp_c: Signal::Value(100.0),
+        turbo_oil_temp_c: Signal::Value(110.0),
+        intercooler_temp_c: Signal::Value(60.0),
     };
     let encoded_temp1 = temp1.encode();
     assert!(EngineTemp1::decode(&encoded_temp1).is_some());
     for index in [0usize, 1, 6] {
-        let mut bad = encoded_temp1;
-        bad[index] = 0xFF;
-        assert_eq!(EngineTemp1::decode(&bad), None);
+        let mut absent = encoded_temp1;
+        absent[index] = 0xFF;
+        let decoded = EngineTemp1::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.oil_temp_c, 100.0);
     }
     for range in [2..4, 4..6] {
-        let mut bad = encoded_temp1;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(EngineTemp1::decode(&bad), None);
+        let mut absent = encoded_temp1;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = EngineTemp1::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.coolant_temp_c, 90.0);
+        assert_signal_close(decoded.intercooler_temp_c, 60.0);
     }
+    // Every sensor absent is a valid frame, not a decode failure.
+    assert_eq!(
+        EngineTemp1::decode(&EngineTemp1::default().encode()),
+        Some(EngineTemp1::default())
+    );
 
     let temp2 = EngineTemp2 {
-        engine_oil_temp_c: 95.0,
-        turbo_oil_temp_c: 105.0,
-        engine_intercooler_temp_c: 55.0,
-        turbo_1_temp_c: 200.0,
+        engine_oil_temp_c: Signal::Value(95.0),
+        turbo_oil_temp_c: Signal::Value(105.0),
+        engine_intercooler_temp_c: Signal::Value(55.0),
+        turbo_1_temp_c: Signal::Value(200.0),
     };
     let encoded_temp2 = temp2.encode();
     assert!(EngineTemp2::decode(&encoded_temp2).is_some());
     for range in [0..2, 2..4, 5..7] {
-        let mut bad = encoded_temp2;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(EngineTemp2::decode(&bad), None);
+        let mut absent = encoded_temp2;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = EngineTemp2::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.engine_intercooler_temp_c, 55.0);
     }
-    let mut bad_temp2_intercooler = encoded_temp2;
-    bad_temp2_intercooler[4] = 0xFF;
-    assert_eq!(EngineTemp2::decode(&bad_temp2_intercooler), None);
+    let mut absent_intercooler = encoded_temp2;
+    absent_intercooler[4] = 0xFF;
+    let decoded = EngineTemp2::decode(&absent_intercooler).expect("the frame still decodes");
+    assert_eq!(decoded.engine_intercooler_temp_c, Signal::NotAvailable);
+    assert_signal_close(decoded.engine_oil_temp_c, 95.0);
 
     let fluid = EngineFluidLp {
         oil_pressure_kpa: 400.0,

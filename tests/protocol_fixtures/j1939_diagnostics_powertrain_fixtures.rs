@@ -806,19 +806,19 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         "engine_temp1_90_50_100_110_60",
     );
     let expected_temp1 = EngineTemp1 {
-        coolant_temp_c: 90.0,
-        fuel_temp_c: 50.0,
-        oil_temp_c: 100.0,
-        turbo_oil_temp_c: 110.0,
-        intercooler_temp_c: 60.0,
+        coolant_temp_c: sig(90.0),
+        fuel_temp_c: sig(50.0),
+        oil_temp_c: sig(100.0),
+        turbo_oil_temp_c: sig(110.0),
+        intercooler_temp_c: sig(60.0),
     };
     assert_eq!(expected_temp1.encode(), engine_temp1);
     let decoded_temp1 = EngineTemp1::decode(&engine_temp1).unwrap();
-    assert_eq!(decoded_temp1.coolant_temp_c, 90.0);
-    assert_eq!(decoded_temp1.fuel_temp_c, 50.0);
-    assert!((decoded_temp1.oil_temp_c - 100.0).abs() < 0.1);
-    assert!((decoded_temp1.turbo_oil_temp_c - 110.0).abs() < 0.1);
-    assert_eq!(decoded_temp1.intercooler_temp_c, 60.0);
+    assert_sig(decoded_temp1.coolant_temp_c, 90.0, 0.0);
+    assert_sig(decoded_temp1.fuel_temp_c, 50.0, 0.0);
+    assert_sig(decoded_temp1.oil_temp_c, 100.0, 0.1);
+    assert_sig(decoded_temp1.turbo_oil_temp_c, 110.0, 0.1);
+    assert_sig(decoded_temp1.intercooler_temp_c, 60.0, 0.0);
 
     let engine_hours = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -954,17 +954,17 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         "engine_temp2_95_105_55_200",
     );
     let expected_temp2 = EngineTemp2 {
-        engine_oil_temp_c: 95.0,
-        turbo_oil_temp_c: 105.0,
-        engine_intercooler_temp_c: 55.0,
-        turbo_1_temp_c: 200.0,
+        engine_oil_temp_c: sig(95.0),
+        turbo_oil_temp_c: sig(105.0),
+        engine_intercooler_temp_c: sig(55.0),
+        turbo_1_temp_c: sig(200.0),
     };
     assert_eq!(expected_temp2.encode(), engine_temp2);
     let decoded_temp2 = EngineTemp2::decode(&engine_temp2).unwrap();
-    assert!((decoded_temp2.engine_oil_temp_c - 95.0).abs() < 0.1);
-    assert!((decoded_temp2.turbo_oil_temp_c - 105.0).abs() < 0.1);
-    assert_eq!(decoded_temp2.engine_intercooler_temp_c, 55.0);
-    assert!((decoded_temp2.turbo_1_temp_c - 200.0).abs() < 0.1);
+    assert_sig(decoded_temp2.engine_oil_temp_c, 95.0, 0.1);
+    assert_sig(decoded_temp2.turbo_oil_temp_c, 105.0, 0.1);
+    assert_sig(decoded_temp2.engine_intercooler_temp_c, 55.0, 0.0);
+    assert_sig(decoded_temp2.turbo_1_temp_c, 200.0, 0.1);
 
     let fluid = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

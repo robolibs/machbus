@@ -27,17 +27,22 @@ fn main() {
     );
 
     // Engine temperature.
+    // The turbo and intercooler sensors are left unreported, which is what an
+    // engine without them actually puts on the wire.
     let temp = EngineTemp1 {
-        coolant_temp_c: 88.0,
-        fuel_temp_c: 32.0,
-        oil_temp_c: 92.0,
+        coolant_temp_c: Signal::Value(88.0),
+        fuel_temp_c: Signal::Value(32.0),
+        oil_temp_c: Signal::Value(92.0),
         ..Default::default()
     };
     let tbytes = temp.encode();
     let td = EngineTemp1::decode(&tbytes).unwrap();
     println!(
-        "[ET1]   coolant={:.1}°C, fuel={:.1}°C, oil={:.1}°C",
-        td.coolant_temp_c, td.fuel_temp_c, td.oil_temp_c
+        "[ET1]   coolant={:?}°C, fuel={:?}°C, oil={:?}°C, turbo oil={:?}",
+        td.coolant_temp_c.value(),
+        td.fuel_temp_c.value(),
+        td.oil_temp_c.value(),
+        td.turbo_oil_temp_c
     );
 
     // Fuel economy.

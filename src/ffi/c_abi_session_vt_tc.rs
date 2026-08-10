@@ -148,6 +148,30 @@ pub extern "C" fn machbus_identifier_is_broadcast(raw: u32) -> bool {
     Identifier::from_raw(raw).is_broadcast()
 }
 
+// ── J1939 Signal <-> flat C double ────────────────────────────────────
+
+/// A [`Signal`] parameter as a flat C double.
+///
+/// The C ABI has no sum type, so "error" and "not available" both arrive as
+/// `NaN` and a caller must check. Callers that need to tell a faulted sensor
+/// apart from one that is simply not fitted should use the Rust `Signal` API.
+#[inline]
+fn signal_to_c(s: crate::isobus::implement::Signal<f64>) -> f64 {
+    s.value().unwrap_or(f64::NAN)
+}
+
+/// Inverse of [`signal_to_c`]. A non-finite double means "not available"; the
+/// error indicator cannot be reconstructed from a `NaN` alone.
+#[inline]
+fn signal_from_c(v: f64) -> crate::isobus::implement::Signal<f64> {
+    use crate::isobus::implement::Signal;
+    if v.is_finite() {
+        Signal::Value(v)
+    } else {
+        Signal::NotAvailable
+    }
+}
+
 // ── j1939::Eec1 ── engine speed / torque (PGN 61444) ──────────────────
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Eec1`].
@@ -171,10 +195,10 @@ pub struct MachbusEec1 {
 impl From<crate::j1939::Eec1> for MachbusEec1 {
     fn from(e: crate::j1939::Eec1) -> Self {
         Self {
-            engine_torque_percent: e.engine_torque_percent.value().unwrap_or(f64::NAN),
-            driver_demand_percent: e.driver_demand_percent.value().unwrap_or(f64::NAN),
-            actual_engine_percent: e.actual_engine_percent.value().unwrap_or(f64::NAN),
-            engine_speed_rpm: e.engine_speed_rpm.value().unwrap_or(f64::NAN),
+            engine_torque_percent: signal_to_c(e.engine_torque_percent),
+            driver_demand_percent: signal_to_c(e.driver_demand_percent),
+            actual_engine_percent: signal_to_c(e.actual_engine_percent),
+            engine_speed_rpm: signal_to_c(e.engine_speed_rpm),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         }
@@ -183,19 +207,11 @@ impl From<crate::j1939::Eec1> for MachbusEec1 {
 
 impl From<MachbusEec1> for crate::j1939::Eec1 {
     fn from(e: MachbusEec1) -> Self {
-        use crate::isobus::implement::Signal;
-        let signal = |v: f64| {
-            if v.is_finite() {
-                Signal::Value(v)
-            } else {
-                Signal::NotAvailable
-            }
-        };
         Self {
-            engine_torque_percent: signal(e.engine_torque_percent),
-            driver_demand_percent: signal(e.driver_demand_percent),
-            actual_engine_percent: signal(e.actual_engine_percent),
-            engine_speed_rpm: signal(e.engine_speed_rpm),
+            engine_torque_percent: signal_from_c(e.engine_torque_percent),
+            driver_demand_percent: signal_from_c(e.driver_demand_percent),
+            actual_engine_percent: signal_from_c(e.actual_engine_percent),
+            engine_speed_rpm: signal_from_c(e.engine_speed_rpm),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         }
@@ -444,6 +460,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp1`].
+///
+/// A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEngineTemp1 {
@@ -457,11 +475,11 @@ pub struct MachbusEngineTemp1 {
 impl From<crate::j1939::EngineTemp1> for MachbusEngineTemp1 {
     fn from(e: crate::j1939::EngineTemp1) -> Self {
         Self {
-            coolant_temp_c: e.coolant_temp_c,
-            fuel_temp_c: e.fuel_temp_c,
-            oil_temp_c: e.oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            intercooler_temp_c: e.intercooler_temp_c,
+            coolant_temp_c: signal_to_c(e.coolant_temp_c),
+            fuel_temp_c: signal_to_c(e.fuel_temp_c),
+            oil_temp_c: signal_to_c(e.oil_temp_c),
+            turbo_oil_temp_c: signal_to_c(e.turbo_oil_temp_c),
+            intercooler_temp_c: signal_to_c(e.intercooler_temp_c),
         }
     }
 }
@@ -469,11 +487,11 @@ impl From<crate::j1939::EngineTemp1> for MachbusEngineTemp1 {
 impl From<MachbusEngineTemp1> for crate::j1939::EngineTemp1 {
     fn from(e: MachbusEngineTemp1) -> Self {
         Self {
-            coolant_temp_c: e.coolant_temp_c,
-            fuel_temp_c: e.fuel_temp_c,
-            oil_temp_c: e.oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            intercooler_temp_c: e.intercooler_temp_c,
+            coolant_temp_c: signal_from_c(e.coolant_temp_c),
+            fuel_temp_c: signal_from_c(e.fuel_temp_c),
+            oil_temp_c: signal_from_c(e.oil_temp_c),
+            turbo_oil_temp_c: signal_from_c(e.turbo_oil_temp_c),
+            intercooler_temp_c: signal_from_c(e.intercooler_temp_c),
         }
     }
 }
@@ -488,6 +506,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp2`].
+///
+/// A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEngineTemp2 {
@@ -500,10 +520,10 @@ pub struct MachbusEngineTemp2 {
 impl From<crate::j1939::EngineTemp2> for MachbusEngineTemp2 {
     fn from(e: crate::j1939::EngineTemp2) -> Self {
         Self {
-            engine_oil_temp_c: e.engine_oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            engine_intercooler_temp_c: e.engine_intercooler_temp_c,
-            turbo_1_temp_c: e.turbo_1_temp_c,
+            engine_oil_temp_c: signal_to_c(e.engine_oil_temp_c),
+            turbo_oil_temp_c: signal_to_c(e.turbo_oil_temp_c),
+            engine_intercooler_temp_c: signal_to_c(e.engine_intercooler_temp_c),
+            turbo_1_temp_c: signal_to_c(e.turbo_1_temp_c),
         }
     }
 }
@@ -511,10 +531,10 @@ impl From<crate::j1939::EngineTemp2> for MachbusEngineTemp2 {
 impl From<MachbusEngineTemp2> for crate::j1939::EngineTemp2 {
     fn from(e: MachbusEngineTemp2) -> Self {
         Self {
-            engine_oil_temp_c: e.engine_oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            engine_intercooler_temp_c: e.engine_intercooler_temp_c,
-            turbo_1_temp_c: e.turbo_1_temp_c,
+            engine_oil_temp_c: signal_from_c(e.engine_oil_temp_c),
+            turbo_oil_temp_c: signal_from_c(e.turbo_oil_temp_c),
+            engine_intercooler_temp_c: signal_from_c(e.engine_intercooler_temp_c),
+            turbo_1_temp_c: signal_from_c(e.turbo_1_temp_c),
         }
     }
 }

@@ -48,6 +48,18 @@ pub trait Plugin: Any {
         None
     }
 
+    /// An [`Event`] the session observed, delivered before it reaches the
+    /// application. This is the inbound counterpart to [`PluginCtx::emit`]:
+    /// without it a plugin can only speak, so a bus-off, a lost address claim
+    /// or a heartbeat fault could be detected by the session and still never
+    /// reach a subsystem that must react to it by entering a safe state.
+    ///
+    /// Events emitted from here are dispatched in turn, so one plugin can
+    /// react to another's; the session bounds the number of rounds.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let _ = (event, ctx);
+    }
+
     /// Upcast for typed component lookup. Implement as `self`.
     fn as_any(&self) -> &dyn Any;
     /// Mutable upcast for typed component lookup. Implement as `self`.
@@ -81,6 +93,7 @@ pub struct PluginCtx<'a> {
     address: Address,
     name: Name,
     now: Instant,
+    claimed: bool,
     sends: &'a mut Vec<SendCmd>,
     events: &'a mut VecDeque<Event>,
     actions: &'a mut Vec<CtxAction>,
@@ -91,6 +104,7 @@ impl<'a> PluginCtx<'a> {
         address: Address,
         name: Name,
         now: Instant,
+        claimed: bool,
         sends: &'a mut Vec<SendCmd>,
         events: &'a mut VecDeque<Event>,
         actions: &'a mut Vec<CtxAction>,
@@ -99,6 +113,7 @@ impl<'a> PluginCtx<'a> {
             address,
             name,
             now,
+            claimed,
             sends,
             events,
             actions,
@@ -111,10 +126,22 @@ impl<'a> PluginCtx<'a> {
         self.now
     }
 
-    /// Our claimed source address (or `NULL_ADDRESS` before claim completes).
+    /// The control function's current source address.
+    ///
+    /// During address claiming this is already the *preferred* address, so it
+    /// is not a test for whether anything can reach the bus — use
+    /// [`Self::is_claimed`] for that.
     #[must_use]
     pub fn address(&self) -> Address {
         self.address
+    }
+
+    /// Whether the control function has won its address claim. Frames queued
+    /// before this is `true` are refused by the network layer and never reach
+    /// the bus.
+    #[must_use]
+    pub fn is_claimed(&self) -> bool {
+        self.claimed
     }
 
     /// The local control function's current NAME.

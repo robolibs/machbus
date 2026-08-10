@@ -65,7 +65,7 @@ embedded-examples-check:
 	@$(CARGO) check --no-default-features --features embedded --example embedded_hal_adapter
 	@$(CARGO) check --no-default-features --features embedded --example embedded_fixed_queue
 
-check-all:
+check-all: no-std-surface-check
 	@$(CARGO) check --all-targets --features async
 
 fmt:

@@ -208,8 +208,11 @@ impl AisClassAPositionReport {
             return None;
         }
         let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
-        let lat_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
-        let lon_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        let lon_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lat_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        if lon_raw == 0x7FFFFFFF || lat_raw == 0x7FFFFFFF {
+            return None;
+        }
         let cog_raw = u16::from_le_bytes([data[15], data[16]]);
         let sog_raw = u16::from_le_bytes([data[17], data[18]]);
         let heading_raw = u16::from_le_bytes([data[19], data[20]]);
@@ -246,8 +249,11 @@ impl AisClassBPositionReport {
             return None;
         }
         let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
-        let lat_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
-        let lon_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        let lon_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lat_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        if lon_raw == 0x7FFFFFFF || lat_raw == 0x7FFFFFFF {
+            return None;
+        }
         let cog_raw = u16::from_le_bytes([data[15], data[16]]);
         let sog_raw = u16::from_le_bytes([data[17], data[18]]);
         let heading_raw = u16::from_le_bytes([data[19], data[20]]);

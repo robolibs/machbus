@@ -16,7 +16,7 @@ use machbus::net::tp::TP_T_HOLD_MS;
 use machbus::net::{
     BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ErrorCode, ExtendedTransportProtocol, Frame,
     Identifier, NULL_ADDRESS, Priority, SessionState, TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
-    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState,
+    TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState,
     TransportAbortReason, TransportProtocol,
 };
 

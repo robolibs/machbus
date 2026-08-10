@@ -103,19 +103,31 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
         Paragraph::new("steer / throttle")
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
-        Rect { x: cx - 28, y: cy + 4, width: 16, height: 1 },
+        Rect {
+            x: cx - 28,
+            y: cy + 4,
+            width: 16,
+            height: 1,
+        },
     );
 
     // Info line at the bottom.
     f.render_widget(
         Paragraph::new(format!(
             " L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
-            pad.lstick_x, pad.lstick_y,
-            pad.rtrigger * 100.0, pad.ltrigger * 100.0,
+            pad.lstick_x,
+            pad.lstick_y,
+            pad.rtrigger * 100.0,
+            pad.ltrigger * 100.0,
             state.counter_mult,
         ))
         .style(Style::default().fg(WHITE)),
-        Rect { x: inner.x + 1, y: inner.y + inner.height.saturating_sub(1), width: inner.width - 2, height: 1 },
+        Rect {
+            x: inner.x + 1,
+            y: inner.y + inner.height.saturating_sub(1),
+            width: inner.width - 2,
+            height: 1,
+        },
     );
 }
 
@@ -127,8 +139,21 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
         .border_set(ratatui::symbols::border::ROUNDED)
         .border_style(Style::default().fg(col))
         .title(Span::styled(format!(" {label} "), Style::default().fg(col)));
-    let inner = block.inner(Rect { x, y, width: w, height: h });
-    f.render_widget(block, Rect { x, y, width: w, height: h });
+    let inner = block.inner(Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    });
+    f.render_widget(
+        block,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        },
+    );
 
     let ccx = inner.x + inner.width / 2;
     let mid_y = inner.y + inner.height / 2;
@@ -143,7 +168,12 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
         .collect();
     f.render_widget(
         Paragraph::new(Span::styled(h_line, Style::default().fg(GRAY))),
-        Rect { x: inner.x, y: mid_y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y: mid_y,
+            width: inner.width,
+            height: 1,
+        },
     );
 
     // Crosshair — vertical line through centre.
@@ -151,14 +181,27 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
         let ch = if ry == mid_y { '┼' } else { '│' };
         f.render_widget(
             Paragraph::new(Span::styled(ch.to_string(), Style::default().fg(GRAY))),
-            Rect { x: ccx, y: ry, width: 1, height: 1 },
+            Rect {
+                x: ccx,
+                y: ry,
+                width: 1,
+                height: 1,
+            },
         );
     }
 
     // The dot.
     f.render_widget(
-        Paragraph::new(Span::styled("●", Style::default().fg(col).add_modifier(Modifier::BOLD))),
-        Rect { x: dot_x, y: dot_y, width: 1, height: 1 },
+        Paragraph::new(Span::styled(
+            "●",
+            Style::default().fg(col).add_modifier(Modifier::BOLD),
+        )),
+        Rect {
+            x: dot_x,
+            y: dot_y,
+            width: 1,
+            height: 1,
+        },
     );
 }
 
@@ -516,8 +559,7 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
                     ));
                 } else {
                     let filled = (state.arm_progress * 6.0).round() as usize;
-                    let bar: String =
-                        (0..6).map(|i| if i < filled { '█' } else { '░' }).collect();
+                    let bar: String = (0..6).map(|i| if i < filled { '█' } else { '░' }).collect();
                     spans.push(Span::styled(
                         format!("  ⚠ HOLD R2 TO ARM [{bar}]"),
                         Style::default().fg(GOLD).add_modifier(Modifier::BOLD),

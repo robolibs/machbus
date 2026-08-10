@@ -89,6 +89,10 @@ impl can_adapter::Link for NullLink {
     }
 }
 
+/// How many times [`Session::dispatch_events`] re-runs to deliver events a
+/// plugin emitted while reacting to another event.
+const MAX_EVENT_DISPATCH_ROUNDS: usize = 8;
+
 /// The sans-IO protocol core. See the [module docs](self).
 pub struct Session {
     net: IsoNet<NullLink>,
@@ -98,6 +102,11 @@ pub struct Session {
     /// Source addresses seen violating our claim, queued by the network layer.
     violations: Rc<RefCell<Vec<Address>>>,
     events: VecDeque<Event>,
+    /// Events observed but not yet shown to the plugins. Everything the session
+    /// produces lands here first so a subsystem can react before the
+    /// application sees it; [`Session::dispatch_events`] drains it into
+    /// `events`.
+    pending: VecDeque<Event>,
     last_tick: Option<Instant>,
     last_claim: ClaimState,
     /// Address held while `last_claim` was `Claimed`, so a later loss can
@@ -149,6 +158,7 @@ impl Session {
         self.net.feed(frame, port);
         self.route_inbox(now);
         self.detect_claim();
+        self.dispatch_events(now);
     }
 
     /// Advance timers to `now` without new input.
@@ -159,12 +169,20 @@ impl Session {
         // Drive plugin cadences.
         let addr = self.address();
         let name = self.local_name();
+        let claimed = self.is_claimed();
         let mut sends = Vec::new();
         let mut actions = Vec::new();
         let mut deadline: Option<Instant> = None;
         for plugin in &mut self.plugins {
-            let mut ctx =
-                PluginCtx::new(addr, name, now, &mut sends, &mut self.events, &mut actions);
+            let mut ctx = PluginCtx::new(
+                addr,
+                name,
+                now,
+                claimed,
+                &mut sends,
+                &mut self.pending,
+                &mut actions,
+            );
             if let Some(at) = plugin.on_tick(&mut ctx) {
                 deadline = Some(deadline.map_or(at, |cur: Instant| cur.min(at)));
             }
@@ -174,6 +192,7 @@ impl Session {
         self.apply_actions(actions);
         self.raise_address_violation_dtcs();
         self.detect_claim();
+        self.dispatch_events(now);
     }
 
     /// Turn queued address violations into active DTCs so they appear in the
@@ -190,7 +209,7 @@ impl Session {
             } else {
                 // No diagnostics plugged: still surface it, so the violation is
                 // not silently lost.
-                self.events
+                self.pending
                     .push_back(Event::Diag(sys::DiagEvent::Raised(dtc)));
             }
         }
@@ -217,7 +236,48 @@ impl Session {
     /// Queue an event from outside the plugin set (the driver uses this for
     /// bus-level conditions it observes on the transport, such as bus-off).
     pub(crate) fn push_event(&mut self, event: Event) {
-        self.events.push_back(event);
+        self.pending.push_back(event);
+    }
+
+    /// Show every newly observed event to the plugins, then hand it to the
+    /// application queue.
+    ///
+    /// A plugin may emit while reacting, so this runs in rounds; the cap stops
+    /// two plugins echoing each other forever. Whatever is still queued when the
+    /// cap is reached is delivered to the application undispatched rather than
+    /// dropped — losing a safety event is worse than delivering it late.
+    fn dispatch_events(&mut self, now: Instant) {
+        let addr = self.address();
+        let name = self.local_name();
+        let claimed = self.is_claimed();
+        for _ in 0..MAX_EVENT_DISPATCH_ROUNDS {
+            if self.pending.is_empty() {
+                break;
+            }
+            let round: Vec<Event> = self.pending.drain(..).collect();
+            let mut sends = Vec::new();
+            let mut actions = Vec::new();
+            for event in round {
+                for plugin in &mut self.plugins {
+                    let mut ctx = PluginCtx::new(
+                        addr,
+                        name,
+                        now,
+                        claimed,
+                        &mut sends,
+                        &mut self.pending,
+                        &mut actions,
+                    );
+                    plugin.on_event(&event, &mut ctx);
+                }
+                self.events.push_back(event);
+            }
+            self.flush(sends);
+            self.apply_actions(actions);
+        }
+        while let Some(event) = self.pending.pop_front() {
+            self.events.push_back(event);
+        }
     }
 
     /// Next application event, or `None` when drained.
@@ -297,7 +357,7 @@ impl Session {
         // A non-monotonic clock would otherwise saturate to a 0 ms delta and
         // stall every timer silently. Surface it and resynchronise instead.
         if now.as_micros() < last.as_micros() {
-            self.events
+            self.pending
                 .push_back(Event::Bus(BusEvent::ClockWentBackwards {
                     by_micros: last.as_micros() - now.as_micros(),
                 }));
@@ -323,12 +383,20 @@ impl Session {
             };
             let addr = self.address();
             let name = self.local_name();
+            let claimed = self.is_claimed();
             let mut sends = Vec::new();
             let mut actions = Vec::new();
             for plugin in &mut self.plugins {
                 if plugin.interests().contains(&msg.pgn) {
-                    let mut ctx =
-                        PluginCtx::new(addr, name, now, &mut sends, &mut self.events, &mut actions);
+                    let mut ctx = PluginCtx::new(
+                        addr,
+                        name,
+                        now,
+                        claimed,
+                        &mut sends,
+                        &mut self.pending,
+                        &mut actions,
+                    );
                     plugin.on_frame(&msg, &mut ctx);
                 }
             }
@@ -348,7 +416,7 @@ impl Session {
                 .send(cmd.pgn, &cmd.data, self.cf, cmd.dst, cmd.prio)
                 .is_err()
             {
-                self.events.push_back(Event::Bus(BusEvent::SendFailed {
+                self.pending.push_back(Event::Bus(BusEvent::SendFailed {
                     pgn: cmd.pgn,
                     dst: cmd.dst,
                 }));
@@ -383,7 +451,7 @@ impl Session {
 
         match state {
             ClaimState::Claimed => {
-                self.events
+                self.pending
                     .push_back(Event::AddressClaim(ClaimEvent::Claimed {
                         address: self.address(),
                     }));
@@ -392,7 +460,7 @@ impl Session {
             // the bus. Either way anything queued from here on is dropped by
             // `flush`, so the application has to know.
             _ if self.last_claim == ClaimState::Claimed => {
-                self.events.push_back(Event::AddressClaim(match state {
+                self.pending.push_back(Event::AddressClaim(match state {
                     ClaimState::None => ClaimEvent::Disconnected,
                     _ => ClaimEvent::Lost {
                         previous_address: self.last_claimed_address,
@@ -503,6 +571,7 @@ impl SessionBuilder {
             inbox,
             violations,
             events: VecDeque::new(),
+            pending: VecDeque::new(),
             last_tick: None,
             last_claim: ClaimState::None,
             last_claimed_address: crate::net::NULL_ADDRESS,
@@ -548,15 +617,77 @@ mod tests {
             !session.is_claimed(),
             "precondition: the CF has not claimed an address"
         );
-        let reported = std::iter::from_fn(|| session.poll_event()).any(|e| {
+        // The controller must not queue a frame it knows cannot reach the bus.
+        // It used to queue one, have it refused, and still clear `dirty` and
+        // advance the cadence — so the first real command was delayed by up to
+        // MAX_TX_INTERVAL_MS after the claim finally completed.
+        let refused = std::iter::from_fn(|| session.poll_event()).any(|e| {
             matches!(
                 e,
                 Event::Bus(BusEvent::SendFailed { pgn, .. }) if pgn == PGN_GUIDANCE_SYSTEM_CMD
             )
         });
         assert!(
-            reported,
-            "a command dropped for want of an address must surface as SendFailed"
+            !refused,
+            "a guidance command must not be queued before the claim completes"
+        );
+
+        // The raw escape hatch has no such gate, and must refuse rather than
+        // silently drop: this is the path an application drives directly.
+        assert!(
+            session
+                .send_raw(
+                    PGN_GUIDANCE_SYSTEM_CMD,
+                    &[0u8; 8],
+                    crate::net::BROADCAST_ADDRESS,
+                    crate::net::Priority::Normal,
+                )
+                .is_err(),
+            "a raw send without an address must report the refusal to its caller"
+        );
+    }
+
+    /// P1.5 — the measured consequence of clearing `dirty` on a refused send was
+    /// that the first Guidance System Command reached the bus 2000 ms after
+    /// power-up. It must arrive as soon as the claim allows.
+    #[test]
+    fn first_guidance_command_follows_the_claim_promptly() {
+        use super::plugins::Guidance;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        let mut session = Session::builder(test_name(24), 0x80)
+            .plug(Guidance::new())
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        session.get_mut::<Guidance>().unwrap().command_curvature(5.0);
+
+        let mut now = Instant::ZERO;
+        let mut claimed_at: Option<Instant> = None;
+        let mut first_cmd_at: Option<Instant> = None;
+        for _ in 0..200 {
+            now = now.add_millis(10);
+            session.tick(now);
+            while let Some((_, frame)) = session.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD && first_cmd_at.is_none() {
+                    first_cmd_at = Some(now);
+                }
+            }
+            if claimed_at.is_none() && session.is_claimed() {
+                claimed_at = Some(now);
+            }
+            if first_cmd_at.is_some() {
+                break;
+            }
+        }
+
+        let claimed_at = claimed_at.expect("the CF should claim with no contention");
+        let first = first_cmd_at.expect("a guidance command should reach the bus");
+        // One guidance cadence period (Guidance::MIN_TX_INTERVAL_MS).
+        let delay = first.millis_since(claimed_at);
+        assert!(
+            delay <= 100,
+            "first command must follow the claim within one cadence, took {delay} ms"
         );
     }
 

@@ -79,6 +79,26 @@ typedef enum {
   MACHBUS_EVENT_KIND_POWERTRAIN = 89,
   MACHBUS_EVENT_KIND_TC_SERVER_PEER_CONTROL_ASSIGNMENT = 75,
   MACHBUS_EVENT_KIND_GUIDANCE_MACHINE_INFO = 90,
+  /**
+   * Steering ECU went silent; the controller was forced to the safe state.
+   */
+  MACHBUS_EVENT_KIND_GUIDANCE_LINK_LOST = 91,
+  /**
+   * Machine Info resumed after a link loss.
+   */
+  MACHBUS_EVENT_KIND_GUIDANCE_LINK_RESTORED = 92,
+  /**
+   * Operator ISB stop latched; the controller is in the safe state.
+   */
+  MACHBUS_EVENT_KIND_GUIDANCE_STOP_REQUESTED = 93,
+  /**
+   * Combined autodrive controller changed automation state.
+   */
+  MACHBUS_EVENT_KIND_AUTODRIVE_STATE_CHANGED = 94,
+  /**
+   * Combined autodrive controller entered the safe state.
+   */
+  MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP = 95,
   MACHBUS_EVENT_KIND_OTHER = 99,
 } MachbusEventKind;
 
@@ -153,6 +173,17 @@ enum ServerOptions
 #ifndef __cplusplus
 typedef uint8_t ServerOptions;
 #endif // __cplusplus
+
+/**
+ * A monotonic timestamp in microseconds since a driver-chosen origin.
+ *
+ * This is intentionally a plain `u64` micros newtype with no dependency on
+ * `std::time` or any embedded time crate, so the core compiles unchanged on
+ * hosted and bare-metal targets. Convert at the driver boundary with
+ * [`Instant::from_micros`] / [`Instant::as_micros`] (and the provided `From`
+ * impls).
+ */
+typedef struct Instant Instant;
 
 /**
  * Owned, opaque decoded [`machbus::j1939::ComponentIdentification`].
@@ -243,21 +274,17 @@ typedef struct MachbusTransferMsg MachbusTransferMsg;
  */
 typedef struct MachbusVtPool MachbusVtPool;
 
-/**
- * A monotonic timestamp in microseconds since a driver-chosen origin.
- *
- * This is intentionally a plain `u64` micros newtype with no dependency on
- * `std::time` or any embedded time crate, so the core compiles unchanged on
- * hosted and bare-metal targets. Convert at the driver boundary with
- * [`Instant::from_micros`] / [`Instant::as_micros`] (and the provided `From`
- * impls).
- */
-typedef struct Instant Instant;
+typedef struct MakeDef MakeDef;
 
 /**
  * What the crate claims for the powertrain area.
  */
 typedef struct PowertrainClaim PowertrainClaim;
+
+/**
+ * Scale and offset for one TIM function's value SLOT.
+ */
+typedef struct TimSlot TimSlot;
 
 /**
  * Result of [`machbus_session_validate_can_bus_config`].
@@ -1129,6 +1156,27 @@ bool machbus_session_guidance_command_velocity(MachbusSession *h,
 bool machbus_session_guidance_command_straight(MachbusSession *h);
 
 /**
+ * Request the steering ECU to engage and steer to the commanded curvature
+ * (sets the Curvature Command Status to *intended to steer* on PGN 0xAD00 and
+ * re-sends the last curvature). The ECU only steers if it reports itself ready.
+ * Requires the guidance subsystem.
+ */
+bool machbus_session_guidance_engage(MachbusSession *h);
+
+/**
+ * Stop requesting steering: clears the engage request and commands straight
+ * (curvature `0.0`, status *not intended to steer*). Requires the guidance
+ * subsystem.
+ */
+bool machbus_session_guidance_disengage(MachbusSession *h);
+
+/**
+ * Whether the controller is currently requesting steering (its own intent, not
+ * the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
+ */
+bool machbus_session_guidance_is_engaged(const MachbusSession *h);
+
+/**
  * Write the steering system's last estimated curvature (1/km) into `out`.
  * Returns `false` (without setting an error) when no machine info has arrived
  * yet, or when the guidance subsystem is not plugged.
@@ -1790,4 +1838,3 @@ uintptr_t machbus_ecu_identification_hardware_id_into(const MachbusEcuIdentifica
  * Free an ECU Identification handle. Accepts `NULL`.
  */
 void machbus_ecu_identification_free(MachbusEcuIdentification *h);
-

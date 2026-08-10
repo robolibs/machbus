@@ -34,11 +34,17 @@ use crate::net::pgn_defs::{
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::session::sys::{AutodriveRefusal, Event, GuidanceEvent, SafeStopTrigger, StopLatch};
+use crate::session::sys::{
+    AutodriveRefusal, BusEvent, Event, GuidanceEvent, SafeStopTrigger, StopLatch,
+};
 use crate::time::Instant;
 use core::any::Any;
 
 const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO, PGN_SHORTCUT_BUTTON];
+
+/// The PGNs this controller commands the machine with. A refused send on either
+/// means the command never reached the bus.
+const COMMAND_PGNS: &[Pgn] = &[PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD];
 
 /// A steering ECU broadcasts Machine Info (PGN 0xAC00) every 100 ms. Three
 /// missed broadcasts is the AEF 023 loss-of-communication threshold.
@@ -57,6 +63,11 @@ const MAX_TX_INTERVAL_MS: u32 = 2000;
 /// Below this ground speed a commanded yaw rate cannot be expressed as a path
 /// curvature, so [`Guidance::command_velocity`] commands straight instead.
 pub const MIN_CURVATURE_SPEED_MPS: f64 = 0.05;
+
+/// How long an engaged controller re-transmits an unrefreshed setpoint before
+/// treating the commanding application as dead. See
+/// [`super::autodrive::COMMAND_STALE_MS`].
+const COMMAND_STALE_MS: u32 = 300;
 
 /// Automatic-guidance (autosteer) plugin.
 #[derive(Default)]
@@ -86,6 +97,11 @@ pub struct Guidance {
     /// Latching, not momentary: steering must not resume by itself when a
     /// button is released or a link comes back.
     stop: StopLatch,
+    /// Bumped by every application command. The setters have no clock, so
+    /// freshness is timed in `on_tick` by watching this change.
+    command_seq: u64,
+    seen_seq: u64,
+    seq_changed_at: Option<Instant>,
 }
 
 impl Guidance {
@@ -145,6 +161,7 @@ impl Guidance {
         }
         self.engaged = true;
         self.dirty = true;
+        self.command_seq = self.command_seq.wrapping_add(1);
         Ok(())
     }
 
@@ -204,6 +221,7 @@ impl Guidance {
             self.dirty = true;
         }
         self.commanded_curvature = curvature_per_km;
+        self.command_seq = self.command_seq.wrapping_add(1);
     }
 
     /// Command a turn of the given **radius in metres** (a convenience over
@@ -372,6 +390,28 @@ impl Plugin for Guidance {
         }
     }
 
+    /// React to a session-observed fault. `request_stop` used to be the
+    /// application's job to wire up, which meant an application that did not
+    /// know to call it kept steering through bus-off, a lost address claim and
+    /// a heartbeat error alike.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let trigger = SafeStopTrigger::from_event(event).or_else(|| match event {
+            Event::Bus(BusEvent::SendFailed { pgn, .. }) if COMMAND_PGNS.contains(pgn) => {
+                Some(SafeStopTrigger::SendFailed(*pgn))
+            }
+            _ => None,
+        });
+        let Some(trigger) = trigger else {
+            return;
+        };
+        let was_engaged = self.engaged;
+        if self.request_stop(trigger) {
+            ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                was_engaged,
+            }));
+        }
+    }
+
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
 
@@ -393,6 +433,33 @@ impl Plugin for Guidance {
             }));
         }
         self.link_alive = alive;
+
+        // A live application refreshes its setpoint; one that has died does
+        // not. Without this the cadence re-transmits "intended to steer" at the
+        // last curvature forever — unintended motion with no bound in time.
+        if self.command_seq != self.seen_seq {
+            self.seen_seq = self.command_seq;
+            self.seq_changed_at = Some(now);
+        }
+        if self.engaged
+            && self
+                .seq_changed_at
+                .is_some_and(|t| now.millis_since(t) >= COMMAND_STALE_MS)
+            && self.stop.trip(SafeStopTrigger::CommandStale)
+        {
+            let was_engaged = self.engaged;
+            self.enter_safe_state();
+            ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                was_engaged,
+            }));
+        }
+
+        // Nothing queued before the claim completes reaches the bus, and the
+        // cadence used to advance anyway — which both hid the refusal and
+        // delayed the first real command by up to MAX_TX_INTERVAL_MS.
+        if !ctx.is_claimed() {
+            return Some(now.add_millis(u64::from(MIN_TX_INTERVAL_MS)));
+        }
 
         // Last value wins on a bounded cadence: at most one frame per PGN per
         // MIN_TX_INTERVAL_MS, and at least one per MAX_TX_INTERVAL_MS so the
@@ -642,6 +709,73 @@ mod tests {
         );
     }
 
+    /// P1.4 — the other half of the heartbeat. Re-sending an unrefreshed
+    /// setpoint forever is what turned a fail-silent path into a fail-active
+    /// one: before the cadence existed, an application that died produced no
+    /// frames and the steering ECU timed out. An *engaged* controller must stop
+    /// on its own when its commanding application goes quiet.
+    #[test]
+    fn a_dead_application_stops_the_machine_instead_of_steering_forever() {
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+        feed_machine_info(&mut s, now);
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+
+        // The application stops calling. Machine Info keeps arriving, so the
+        // link watchdog stays satisfied and cannot be what trips.
+        let mut last_status = None;
+        for _ in 0..20 {
+            now = now.add_millis(50);
+            feed_machine_info(&mut s, now);
+            s.tick(now);
+            while let Some((_, frame)) = s.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD
+                    && let Some(cmd) = GuidanceSystemCmd::decode(&frame.data)
+                {
+                    last_status = Some(cmd.status);
+                }
+            }
+        }
+
+        assert_eq!(
+            s.get::<Guidance>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::CommandStale),
+            "a setpoint nobody is refreshing must stop the machine"
+        );
+        assert!(!s.get::<Guidance>().unwrap().is_engaged());
+        assert_eq!(
+            last_status,
+            Some(CurvatureCommandStatus::NotIntendedToSteer),
+            "the safe state must reach the bus, not just the local flag"
+        );
+    }
+
+    /// The watchdog must not fire while the application is doing its job.
+    #[test]
+    fn a_refreshed_setpoint_keeps_steering() {
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+        feed_machine_info(&mut s, now);
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+
+        for _ in 0..20 {
+            now = now.add_millis(50);
+            feed_machine_info(&mut s, now);
+            s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+            s.tick(now);
+            while s.poll_transmit().is_some() {}
+        }
+
+        assert_eq!(s.get::<Guidance>().unwrap().stop_reason(), None);
+        assert!(
+            s.get::<Guidance>().unwrap().is_engaged(),
+            "re-commanding the same value is still proof of life"
+        );
+    }
+
     /// S1.8 — and it must not flood. The committed capture shows ~314 Hz on
     /// PGN 0xAD00 against the TECU's 100 ms broadcasts, because every
     /// application call pushed another frame onto an unbounded queue.
@@ -799,9 +933,14 @@ mod tests {
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
         assert_eq!(cmd.commanded_curvature, 0.0);
 
-        // Explicitly clearing the latch restores control.
+        // Explicitly clearing the latch restores control. The machine info must
+        // be stamped after the last tick: a backwards clock is itself a fault
+        // now, and would re-latch the stop before engage() is reached.
         s.get_mut::<Guidance>().unwrap().clear_stop();
-        feed_machine_info(&mut s, Instant::from_millis(base + 60));
+        feed_machine_info(
+            &mut s,
+            Instant::from_millis(base + u64::from(MIN_TX_INTERVAL_MS) + 40),
+        );
         s.get_mut::<Guidance>().unwrap().engage().unwrap();
         assert!(s.get::<Guidance>().unwrap().is_engaged());
     }

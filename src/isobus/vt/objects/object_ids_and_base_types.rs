@@ -1281,17 +1281,25 @@ pub struct StringVariableBody {
 }
 
 impl StringVariableBody {
-    /// Encode to the ISO 11783-6 wire layout `[length:u16][value bytes]`.
-    /// The on-wire length is the actual `value` byte count so the pool
-    /// walker can recover the body without a separate length prefix; the
-    /// struct's `length` field is kept in step on decode.
+    /// Encode to the ISO 11783-6 Table B.44 layout `[length:u16][value bytes]`.
+    ///
+    /// The declared length is always the number of value bytes actually
+    /// written, so a pool walker can never desynchronise on a body that
+    /// promises more than it carries. A non-zero `length` still caps the
+    /// value, since B.44 defines it as the maximum fixed length; padding a
+    /// short value out to that maximum is the runtime's job, not the codec's.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let max_len = (self.length as usize).min(self.value.len());
-        let wire_len = max_len as u16;
-        let mut data = Vec::with_capacity(2 + wire_len as usize);
-        data.extend_from_slice(&self.length.to_le_bytes());
-        data.extend_from_slice(&self.value[..wire_len as usize]);
+        let cap = if self.length == 0 {
+            self.value.len()
+        } else {
+            (self.length as usize).min(self.value.len())
+        };
+        let wire_len = u16::try_from(cap).unwrap_or(u16::MAX);
+        let written = wire_len as usize;
+        let mut data = Vec::with_capacity(2 + written);
+        data.extend_from_slice(&wire_len.to_le_bytes());
+        data.extend_from_slice(&self.value[..written]);
         data
     }
 

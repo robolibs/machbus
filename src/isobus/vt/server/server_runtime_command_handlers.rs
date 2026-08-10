@@ -70,7 +70,7 @@ impl VTServer {
             } else {
                 error_bits |= SELECT_INPUT_ERROR_INVALID_OBJECT_ID;
             }
-        } else if !matches!(option, 0x00 | 0x01) {
+        } else if !matches!(option, 0x00 | 0xFF) {
             error_bits |= SELECT_INPUT_ERROR_INVALID_OPTION;
         } else {
             open_for_input = option == 0x00;
@@ -83,7 +83,7 @@ impl VTServer {
                         error_bits |= SELECT_INPUT_ERROR_DISABLED;
                     } else if !visible_on_active_mask {
                         error_bits |= SELECT_INPUT_ERROR_NOT_ON_ACTIVE_OR_HIDDEN;
-                    } else if open_for_input && self.client_select_input_is_busy(msg.source, id) {
+                    } else if self.client_select_input_is_busy(msg.source, id) {
                         error_bits |= SELECT_INPUT_ERROR_COULD_NOT_COMPLETE;
                     } else {
                         response_code = if open_for_input { 2 } else { 1 };

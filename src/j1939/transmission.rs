@@ -214,6 +214,54 @@ impl CruiseControl {
     }
 }
 
+/// Electronic Transmission Controller 2 (PGN 0xF002).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Etc2 {
+    /// SPN 161: Transmission Requested Range (ASCII characters 1-2).
+    pub requested_range: u16,
+    /// SPN 162: Transmission Current Range (ASCII characters 1-2).
+    pub current_range: u16,
+    /// SPN 163: Transmission Selected Range.
+    pub selected_range: u16,
+    /// SPN 160: Transmission Actual Gear Ratio (0.001 per bit, range 0.000..64.255).
+    pub actual_gear_ratio: f64,
+}
+
+impl Etc2 {
+    #[must_use]
+    pub fn encode(&self) -> [u8; 8] {
+        let mut data = [0xFFu8; 8];
+        data[0..2].copy_from_slice(&self.requested_range.to_le_bytes());
+        data[2..4].copy_from_slice(&self.current_range.to_le_bytes());
+        data[4..6].copy_from_slice(&self.selected_range.to_le_bytes());
+        let ratio = scaled_u16_non_na(self.actual_gear_ratio, 0.001);
+        data[6..8].copy_from_slice(&ratio.to_le_bytes());
+        data
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() != 8 {
+            return None;
+        }
+        let requested_range = u16::from_le_bytes([data[0], data[1]]);
+        let current_range = u16::from_le_bytes([data[2], data[3]]);
+        let selected_range = u16::from_le_bytes([data[4], data[5]]);
+        let ratio_raw = u16::from_le_bytes([data[6], data[7]]);
+        let actual_gear_ratio = if u16_data_is_available(ratio_raw) {
+            f64::from(ratio_raw) * 0.001
+        } else {
+            0.0
+        };
+        Some(Self {
+            requested_range,
+            current_range,
+            selected_range,
+            actual_gear_ratio,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

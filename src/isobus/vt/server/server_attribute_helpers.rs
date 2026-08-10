@@ -85,17 +85,11 @@ fn value_attribute_id_for_type(object_type: ObjectType) -> Option<u8> {
 fn numeric_value_is_valid(pool: &ObjectPool, object: &VTObject, value: u32) -> bool {
     match object.r#type {
         ObjectType::InputBoolean => value <= 1,
-        ObjectType::InputList => object
-            .get_input_list_body()
-            .is_ok_and(|body| (value as usize) < body.items.len()),
-        ObjectType::OutputList => object
-            .get_output_list_body()
-            .is_ok_and(|body| (value as usize) < body.items.len()),
-        ObjectType::InputNumber => object.get_input_number_body().is_ok_and(|body| {
-            let val = value as i32;
-            val >= body.min_value && val <= body.max_value
-        }),
-        ObjectType::OutputNumber => true,
+        // B.18 NOTE: "While the operator is not allowed to enter values outside
+        // the min/max range, the Working Set is allowed to set any value either
+        // by pool upload or by the Change Numeric Value command." The same
+        // applies to a list index, where B.20 reserves 255 for "no item
+        // chosen" rather than bounding the value by the item count.
         ObjectType::Animation => animation_numeric_value_is_valid(object, value),
         ObjectType::ObjectPointer => object_pointer_numeric_value_is_valid_for_context(
             pool,

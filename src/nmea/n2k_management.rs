@@ -559,9 +559,9 @@ fn read_fixed_string(buf: &[u8], label: &str) -> Result<String> {
     let mut padding = false;
     for &b in buf {
         if padding {
-            if b != 0xFF {
+            if b != 0xFF && b != 0x00 {
                 return Err(Error::invalid_data(format!(
-                    "{label} contains non-0xFF bytes after string padding"
+                    "{label} contains non-padding bytes after string padding"
                 )));
             }
             continue;

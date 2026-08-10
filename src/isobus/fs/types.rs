@@ -371,18 +371,19 @@ pub fn is_valid_fs_path(path: &str, allow_root: bool, allow_wildcards: bool) -> 
     if path.is_empty() {
         return false;
     }
-    if path == "\\" || path == "\\\\" {
+    let normalized = path.replace('/', "\\");
+    if normalized == "\\" || normalized == "\\\\" {
         return allow_root;
     }
-    if path.chars().any(|c| {
+    if normalized.chars().any(|c| {
         c.is_control()
-            || matches!(c, '/' | ':' | '"' | '<' | '>' | '|')
+            || matches!(c, ':' | '"' | '<' | '>' | '|')
             || (!allow_wildcards && matches!(c, '*' | '?'))
     }) {
         return false;
     }
 
-    let mut body = path;
+    let mut body = normalized.as_str();
     while let Some(rest) = body.strip_prefix('\\') {
         body = rest;
     }
@@ -400,11 +401,43 @@ pub fn is_valid_fs_path(path: &str, allow_root: bool, allow_wildcards: bool) -> 
         !component.is_empty()
             && component != "."
             && component != ".."
+            && component.len() <= 255
             && component.chars().all(|c| {
                 !c.is_control()
                     && !matches!(c, '/' | '\\' | ':' | '"' | '<' | '>' | '|')
                     && (allow_wildcards || !matches!(c, '*' | '?'))
             })
+    })
+}
+
+/// Strict DOS 8.3 path validation helper (stem <= 8 chars, extension <= 3 chars).
+pub fn is_dos_8_3_path(path: &str) -> bool {
+    let normalized = path.replace('/', "\\");
+    if !is_valid_fs_path(&normalized, true, false) {
+        return false;
+    }
+    let mut body = normalized.as_str();
+    while let Some(rest) = body.strip_prefix('\\') {
+        body = rest;
+    }
+    while let Some(rest) = body.strip_suffix('\\') {
+        body = rest;
+    }
+    if body.is_empty() {
+        return true;
+    }
+    body.split('\\').all(|component| {
+        let parts: Vec<&str> = component.split('.').collect();
+        if parts.len() > 2 {
+            return false;
+        }
+        if parts[0].is_empty() || parts[0].len() > 8 {
+            return false;
+        }
+        if parts.len() == 2 && parts[1].len() > 3 {
+            return false;
+        }
+        true
     })
 }
 

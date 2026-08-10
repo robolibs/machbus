@@ -123,6 +123,14 @@ impl<L: can_adapter::Link> Transport for EndpointTransport<L> {
             .send_can(&frame.to_can_frame())
             .map_err(|e| Error::with_message(crate::net::ErrorCode::DriverError, e.to_string()))
     }
+
+    /// Report only for the port this transport owns; another port's state is
+    /// not ours to answer for. Without this the crate's only shipped transport
+    /// left bus-off unobservable, so the §9.6 fail-safe reaction could never
+    /// fire on real hardware.
+    fn bus_state(&self, port: u8) -> Option<can_adapter::can::BusState> {
+        (port == self.port).then(|| self.endpoint.bus_state())
+    }
 }
 
 /// A cheap, cloneable command handle sharing a [`Session`] with its [`Driver`].
@@ -386,6 +394,9 @@ mod tests {
     struct MemTransport {
         rx: Rc<RefCell<VecDeque<(u8, Frame)>>>,
         tx: Rc<RefCell<Vec<(u8, Frame)>>>,
+        /// Controller confinement state reported for port 0, so a test can drive
+        /// the bus to bus-off the way a real controller would.
+        bus: Rc<RefCell<Option<can_adapter::can::BusState>>>,
     }
 
     impl Transport for MemTransport {
@@ -397,6 +408,9 @@ mod tests {
         fn send(&mut self, port: u8, frame: &Frame) -> Result<()> {
             self.tx.borrow_mut().push((port, *frame));
             Ok(())
+        }
+        fn bus_state(&self, port: u8) -> Option<can_adapter::can::BusState> {
+            (port == 0).then(|| *self.bus.borrow()).flatten()
         }
     }
 
@@ -564,6 +578,64 @@ mod tests {
             *claimed.borrow(),
             before,
             "dropped subscription must not fire"
+        );
+    }
+
+    /// The round-1 fail-safe reaction could never fire on real hardware: the
+    /// only shipped transport reported no bus state, and even when the driver
+    /// did observe a transition nothing carried it into the autonomy path.
+    #[test]
+    fn bus_off_reaches_the_autodrive_stop_latch() {
+        use crate::net::fault_confinement::FaultConfinementAction;
+        use crate::session::plugins::AutoDrive;
+        use crate::session::sys::{AutodriveEvent, BusEvent, SafeStopTrigger};
+
+        let mem = MemTransport::default();
+        *mem.bus.borrow_mut() = Some(can_adapter::can::BusState::ErrorActive);
+        let (ctrl, mut driver) = Session::builder(test_name(7), 0x80)
+            .plug(AutoDrive::new())
+            .spawn(mem.clone())
+            .unwrap();
+        ctrl.start().unwrap();
+        pump_until_claimed(&mut driver, &ctrl);
+
+        assert!(
+            ctrl.with_mut(|d: &mut AutoDrive| d.stop_reason())
+                .flatten()
+                .is_none(),
+            "a healthy bus must not latch a stop"
+        );
+
+        // The controller drops off the bus.
+        *mem.bus.borrow_mut() = Some(can_adapter::can::BusState::BusOff);
+        let mut now = Instant::ZERO.add_millis(10_000);
+        let mut saw_confinement = false;
+        let mut saw_safe_stop = false;
+        for _ in 0..5 {
+            now = now.add_millis(100);
+            while let Some(ev) = driver.poll_at(now).unwrap() {
+                match ev {
+                    Event::Bus(BusEvent::ConfinementChanged {
+                        action: FaultConfinementAction::FailSafe,
+                        ..
+                    }) => saw_confinement = true,
+                    Event::Autodrive(AutodriveEvent::SafeStop {
+                        trigger: SafeStopTrigger::BusOff,
+                    }) => saw_safe_stop = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_confinement, "bus-off must surface as a fail-safe action");
+        assert!(
+            saw_safe_stop,
+            "bus-off must reach the autonomy path as a safe stop, not just an event"
+        );
+        assert_eq!(
+            ctrl.with_mut(|d: &mut AutoDrive| d.stop_reason()).flatten(),
+            Some(SafeStopTrigger::BusOff),
+            "the stop latch must hold the reason the machine was stopped"
         );
     }
 }

@@ -1565,17 +1565,21 @@ impl NMEAInterface {
         };
         let hdop_raw = u16::from_le_bytes([msg.data[34], msg.data[35]]);
         let pdop_raw = u16::from_le_bytes([msg.data[36], msg.data[37]]);
-        let Some(hdop) = nmea_u16_scaled_field(hdop_raw, 0.01) else {
+        if matches!(hdop_raw, 0xFFFD | 0xFFFE) || matches!(pdop_raw, 0xFFFD | 0xFFFE) {
             return;
-        };
-        let Some(pdop) = nmea_u16_scaled_field(pdop_raw, 0.01) else {
-            return;
-        };
-        pos.hdop = hdop;
-        pos.pdop = pdop;
+        }
         let geoidal_raw = i32::from_le_bytes(msg.data[38..42].try_into().unwrap());
         if signed_i32_data_is_reserved(geoidal_raw) {
             return;
+        }
+        if let Some(hdop) = nmea_u16_scaled_field(hdop_raw, 0.01) {
+            pos.hdop = hdop;
+        }
+        if let Some(pdop) = nmea_u16_scaled_field(pdop_raw, 0.01) {
+            pos.pdop = pdop;
+        }
+        if signed_i32_data_is_available(geoidal_raw) {
+            pos.geoidal_separation_m = Some(geoidal_raw as f64 * 0.01);
         }
         if let Some(prev) = self.latest_position {
             pos.heading_rad = prev.heading_rad;

@@ -94,6 +94,7 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         spn: 123,
         fmi: Fmi::AboveNormal,
         occurrence_count: 1,
+        conversion_method: false,
     };
 
     let iop = [0x01, 0x00, 21, 0x0D, 0xF0, 0xFE, 0xCA];

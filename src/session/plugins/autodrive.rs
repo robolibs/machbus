@@ -34,13 +34,17 @@ use crate::net::pgn_defs::{
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{
-    AutodriveEvent, AutodriveRefusal, AutomationStatus, DriveCommand, Event, SafeStopTrigger,
-    StopLatch,
+    AutodriveEvent, AutodriveRefusal, AutomationStatus, BusEvent, DriveCommand, Event,
+    SafeStopTrigger, StopLatch,
 };
 use crate::time::Instant;
 use core::any::Any;
 
 const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO, PGN_SHORTCUT_BUTTON];
+
+/// The PGNs this controller commands the machine with. A refused send on either
+/// means the command never reached the bus.
+const COMMAND_PGNS: &[Pgn] = &[PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD];
 
 /// Three missed 100 ms Machine Info broadcasts (AEF 023 loss of communication).
 pub const LINK_TIMEOUT_MS: u32 = 300;
@@ -50,6 +54,15 @@ pub const MIN_TX_INTERVAL_MS: u32 = 100;
 pub const MAX_TX_INTERVAL_MS: u32 = 2000;
 /// Below this, a yaw rate does not define a forward path curvature.
 pub const DEFAULT_MIN_SPEED_MPS: f64 = 0.05;
+/// How long an engaged controller will re-transmit an unrefreshed setpoint
+/// before treating the commanding application as dead.
+///
+/// The cadence made the command a heartbeat, which turned a fail-silent path
+/// into a fail-active one: an application that stopped commanding used to
+/// produce no frames and let the steering ECU time out, and instead kept the
+/// machine steering at the last curvature indefinitely. Three command periods,
+/// matching [`LINK_TIMEOUT_MS`].
+pub const COMMAND_STALE_MS: u32 = 300;
 
 /// Unified autonomous-driving controller. See the [module docs](self).
 pub struct AutoDrive {
@@ -64,6 +77,12 @@ pub struct AutoDrive {
     min_speed_mps: f64,
     min_tx_ms: u32,
     max_tx_ms: u32,
+    /// Bumped by every application command. The setters have no clock, so
+    /// freshness is timed in `on_tick` by watching this change.
+    command_seq: u64,
+    seen_seq: u64,
+    seq_changed_at: Option<Instant>,
+    stale_ms: u32,
 }
 
 impl Default for AutoDrive {
@@ -88,7 +107,20 @@ impl AutoDrive {
             min_speed_mps: DEFAULT_MIN_SPEED_MPS,
             min_tx_ms: MIN_TX_INTERVAL_MS,
             max_tx_ms: MAX_TX_INTERVAL_MS,
+            command_seq: 0,
+            seen_seq: 0,
+            seq_changed_at: None,
+            stale_ms: COMMAND_STALE_MS,
         }
+    }
+
+    /// Override how long an unrefreshed setpoint is re-transmitted before the
+    /// controller stops. Zero disables the watchdog, which is only appropriate
+    /// when something else guarantees liveness.
+    #[must_use]
+    pub const fn with_command_stale_ms(mut self, ms: u32) -> Self {
+        self.stale_ms = ms;
+        self
     }
 
     /// Override the transmit cadence. The minimum is a conformance limit, so
@@ -160,6 +192,7 @@ impl AutoDrive {
         self.check_preconditions()?;
         self.set_status(AutomationStatus::ActiveNotLimited);
         self.dirty = true;
+        self.command_seq = self.command_seq.wrapping_add(1);
         Ok(())
     }
 
@@ -194,6 +227,7 @@ impl AutoDrive {
             self.dirty = true;
         }
         self.setpoint = cmd;
+        self.command_seq = self.command_seq.wrapping_add(1);
         Ok(())
     }
 
@@ -303,6 +337,26 @@ impl Plugin for AutoDrive {
         }
     }
 
+    /// React to a session-observed fault. Without this the stop latch was fed
+    /// only by what arrives on the two PGNs above, so bus-off, a lost address
+    /// claim, a heartbeat fault and a refused command could all be detected by
+    /// the session and never stop the machine.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let trigger = SafeStopTrigger::from_event(event).or_else(|| match event {
+            Event::Bus(BusEvent::SendFailed { pgn, .. }) if COMMAND_PGNS.contains(pgn) => {
+                Some(SafeStopTrigger::SendFailed(*pgn))
+            }
+            _ => None,
+        });
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if self.stop.trip(trigger) {
+            self.enter_safe_state();
+            ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop { trigger }));
+        }
+    }
+
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
 
@@ -317,6 +371,33 @@ impl Plugin for AutoDrive {
             }));
         }
         self.link_alive = alive;
+
+        // A live application refreshes its setpoint; one that has died does not.
+        // Without this the cadence re-transmits "intended to steer" at the last
+        // curvature forever, which is unintended motion with no bound in time.
+        if self.command_seq != self.seen_seq {
+            self.seen_seq = self.command_seq;
+            self.seq_changed_at = Some(now);
+        }
+        if self.stale_ms > 0
+            && self.status.is_active()
+            && self
+                .seq_changed_at
+                .is_some_and(|t| now.millis_since(t) >= self.stale_ms)
+            && self.stop.trip(SafeStopTrigger::CommandStale)
+        {
+            self.enter_safe_state();
+            ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                trigger: SafeStopTrigger::CommandStale,
+            }));
+        }
+
+        // Nothing queued before the claim completes reaches the bus, and the
+        // cadence used to advance anyway — which both hid the refusal and
+        // delayed the first real command by up to `max_tx_ms`.
+        if !ctx.is_claimed() {
+            return Some(now.add_millis(u64::from(self.min_tx_ms)));
+        }
 
         let due = match self.last_tx_at {
             None => true,

@@ -169,6 +169,10 @@ impl Plugin for Heartbeat {
                 HbReceiverState::Normal => {
                     ctx.emit(Event::Heartbeat(HeartbeatEvent::Recovered { source }));
                 }
+                // Already reported above from the sequence byte itself; the
+                // receiver now also holds the state, so the peer stops reading
+                // as healthy.
+                HbReceiverState::TransmissionError | HbReceiverState::GracefulShutdown => {}
             }
         }
 

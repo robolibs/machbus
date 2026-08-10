@@ -22,11 +22,13 @@ fn fixture_j1939_diagnostic_request_response_payloads_are_stable() {
                 spn: 100,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 0,
+                conversion_method: false,
             },
             Dtc {
                 spn: 523_312,
                 fmi: Fmi::AboveNormal,
                 occurrence_count: 0,
+                conversion_method: false,
             },
         ]
     );
@@ -255,6 +257,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
         spn: 0x1_2345,
         fmi: Fmi::Erratic,
         occurrence_count: 7,
+        conversion_method: false,
     };
     assert_eq!(expected_dtc.encode(), dtc.as_slice());
     assert_eq!(Dtc::decode(&dtc), Some(expected_dtc));
@@ -263,6 +266,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 0x8_0000,
             fmi: Fmi::Erratic,
             occurrence_count: 0xFF,
+            conversion_method: false,
         }
         .encode()
         .as_slice(),
@@ -292,6 +296,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 42,
             fmi: Fmi::CurrentLow,
             occurrence_count: 3,
+            conversion_method: false,
         }],
     };
     assert_eq!(expected_dm4.encode(), dm4);
@@ -550,6 +555,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 0x123,
             fmi: Fmi::VoltageHigh,
             occurrence_count: 2,
+            conversion_method: false,
         },
         timestamp_ms: 0xCAFE_F00D,
         snapshots: vec![SpnSnapshot {
@@ -565,6 +571,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
                 spn: 0x8_0000,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 3,
+                conversion_method: false,
             },
             timestamp_ms: 0xCAFE_F00D,
             snapshots: vec![SpnSnapshot {

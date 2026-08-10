@@ -19,6 +19,7 @@ fn diagnostics_dtc_rejects_reserved_occurrence_count_bit() {
         spn: 0x12345,
         fmi: Fmi::VoltageLow,
         occurrence_count: 7,
+        conversion_method: false,
     };
     let mut encoded = dtc.encode();
     assert_eq!(Dtc::decode(&encoded), Some(dtc));
@@ -38,6 +39,7 @@ fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
             spn: 0x12345,
             fmi,
             occurrence_count: 1,
+            conversion_method: false,
         };
         assert_eq!(Dtc::decode(&dtc.encode()), Some(dtc));
     }
@@ -46,6 +48,7 @@ fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
         spn: 0x12345,
         fmi: Fmi::ConditionExists,
         occurrence_count: 1,
+        conversion_method: false,
     }
     .encode();
     reserved_dtc[2] = (reserved_dtc[2] & 0xE0) | 22;
@@ -136,6 +139,7 @@ fn diagnostics_identification_readiness_and_driver_info_shapes_are_canonical() {
         spn: 0x12345,
         fmi: Fmi::VoltageHigh,
         occurrence_count: 2,
+        conversion_method: false,
     };
     let driver_info = Dm4Message {
         mil_status: LampStatus::On,
@@ -669,6 +673,7 @@ fn diagnostics_dtc_lists_reject_prefix_compatible_garbage_and_bad_padding() {
         spn: 100,
         fmi: Fmi::AboveNormal,
         occurrence_count: 2,
+        conversion_method: false,
     };
     let list = DmDtcList {
         lamps,
@@ -713,6 +718,7 @@ fn diagnostics_dtc_lists_allow_empty_placeholder_only_as_single_frame_empty_list
         spn: 0x12345,
         fmi: Fmi::VoltageLow,
         occurrence_count: 1,
+        conversion_method: false,
     };
 
     let empty = DmDtcList {
@@ -1337,6 +1343,7 @@ fn diagnostics_freeze_frame_rejects_count_mismatch_and_reserved_snapshot_bits() 
             spn: 0x1234,
             fmi: Fmi::AboveNormal,
             occurrence_count: 1,
+            conversion_method: false,
         },
         timestamp_ms: 42,
         snapshots: vec![SpnSnapshot {

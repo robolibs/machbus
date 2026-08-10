@@ -674,6 +674,7 @@ fn diagnostic_dtc_packing_matches_agisostack_reference_dtcs() {
         spn: 1234,
         fmi: Fmi::ConditionExists,
         occurrence_count: 0,
+        conversion_method: false,
     };
     assert_eq!(dtc1.encode(), [0xD2, 0x04, 31, 0x00]);
     assert_eq!(Dtc::decode(&dtc1.encode()), Some(dtc1));
@@ -682,6 +683,7 @@ fn diagnostic_dtc_packing_matches_agisostack_reference_dtcs() {
         spn: 567,
         fmi: Fmi::Erratic,
         occurrence_count: 0,
+        conversion_method: false,
     };
     assert_eq!(dtc2.encode(), [0x37, 0x02, 2, 0x00]);
     assert_eq!(Dtc::decode(&dtc2.encode()), Some(dtc2));
@@ -690,6 +692,7 @@ fn diagnostic_dtc_packing_matches_agisostack_reference_dtcs() {
         spn: 8910,
         fmi: Fmi::BadDevice,
         occurrence_count: 0,
+        conversion_method: false,
     };
     assert_eq!(dtc3.encode(), [0xCE, 0x22, 12, 0x00]);
     assert_eq!(Dtc::decode(&dtc3.encode()), Some(dtc3));
@@ -887,17 +890,24 @@ fn diagnostic_identification_strings_match_agisostack_examples() {
         Some(product)
     );
 
-    // The same AgIsoStack test sends Software Identification as plain
-    // star-delimited version strings; there is no leading count byte.
+    // ISO 11783-12 A.3 makes byte 1 the "number of software identification
+    // fields". This vector previously omitted it, matching what machbus itself
+    // emitted rather than the standard; a conformant receiver would have read
+    // the 'U' of "Unit Test" as the field count.
+    //
+    // The count is spec-derived, not taken from an AgIsoStack capture — if the
+    // AgIsoStack example genuinely omits it, that is a defect on their side and
+    // this vector should be re-derived from a real device.
     let software = SoftwareIdentification {
         versions: vec!["Unit Test 1.0.0".into(), "Another version x.x.x.x".into()],
     };
-    let software_payload = b"Unit Test 1.0.0*Another version x.x.x.x*";
+    let software_payload = b"\x02Unit Test 1.0.0*Another version x.x.x.x*";
     assert_eq!(software.encode().unwrap(), software_payload);
     assert_eq!(
         SoftwareIdentification::decode(software_payload),
         Some(software)
     );
+    // A count that disagrees with the payload is malformed.
     assert!(SoftwareIdentification::decode(b"\x02Unit Test 1.0.0*").is_none());
 }
 

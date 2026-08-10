@@ -5,14 +5,14 @@ use machbus::isobus::fs::{
     FileServerPropertiesV2, FileServerStatus, OpenFlags, VolumeStateV2, VolumeStatus, encode_ccm,
 };
 use machbus::isobus::implement::{
-    AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommand, CurvatureCommandStatus,
+    AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommandStatus,
     DriveStrategyCmd, DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue,
     GroundBasedSpeedDist, GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd,
-    GuidanceSystemStatus, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd,
+    HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd,
     HitchStatus, LightState, LightingState, LimitStatus, MachineDirection,
     MachineSelectedSpeedFull, MachineSelectedSpeedMsg, MachineSpeedCommandMsg, MechanicalLockout,
     PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, SpeedExitCode, SpeedSource,
-    SteeringReadiness, TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole,
+    TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole,
     TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
     estimated_flow_pgn, measured_flow_pgn,
 };
@@ -79,7 +79,7 @@ use machbus::j1939::{
     Vep1, VolumeUnit,
 };
 use machbus::net::constants::{
-    BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
+    BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
     TP_MAX_PACKETS_PER_CTS, TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS,
 };
 use machbus::net::error::Error;
@@ -95,7 +95,7 @@ use machbus::net::pgn_defs::{
     PGN_FRONT_HITCH, PGN_FRONT_HITCH_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_FRONT_PTO,
     PGN_FRONT_PTO_CMD, PGN_GNSS_COG_SOG_RAPID, PGN_GNSS_DOPS, PGN_GNSS_POSITION_DATA,
     PGN_GNSS_POSITION_RAPID, PGN_GNSS_SATELLITES_IN_VIEW, PGN_GROUND_BASED_SPEED_DIST,
-    PGN_GUIDANCE_CURVATURE_CMD, PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM,
+    PGN_GUIDANCE_MACHINE_INFO,
     PGN_GUIDANCE_SYSTEM_CMD, PGN_HEADING_TRACK, PGN_HEARTBEAT,
     PGN_HEARTBEAT_N2K, PGN_HITCH_PTO_COMBINED_CMD, PGN_HUMIDITY, PGN_LANGUAGE_COMMAND,
     PGN_LIGHTING_DATA, PGN_MACHINE_SELECTED_SPEED, PGN_MACHINE_SELECTED_SPEED_CMD,
@@ -1563,6 +1563,7 @@ fn fixture_j1939_dtc_and_dm1_bytes_are_stable() {
             spn: 523_312,
             fmi: Fmi::AboveNormal,
             occurrence_count: 0,
+            conversion_method: false,
         }],
     };
     let dm1 = DmDtcList::decode(DM1_AMBER_SPN523312).expect("DM1 fixture decodes");
@@ -1599,11 +1600,13 @@ fn fixture_j1939_dm2_previous_dtc_payload_is_stable() {
                 spn: 100,
                 fmi: Fmi::AboveNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             },
             Dtc {
                 spn: 200,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 5,
+                conversion_method: false,
             },
         ]
     );
@@ -1628,6 +1631,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x1234,
             fmi: Fmi::CurrentLow,
             occurrence_count: 2,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm6.encode(), dm6_bytes);
@@ -1644,6 +1648,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x56,
             fmi: Fmi::VoltageLow,
             occurrence_count: 1,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm12.encode(), dm12_bytes);
@@ -1660,6 +1665,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x789,
             fmi: Fmi::VoltageHigh,
             occurrence_count: 4,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm23.encode(), dm23_bytes);
@@ -1717,3 +1723,39 @@ fn fixture_j1939_dm3_and_dm11_clear_requests_use_reserved_ff_payloads() {
     assert_eq!(dm11_frame.data, *DM11_CLEAR_ACTIVE_REQUEST);
 }
 
+
+/// X4 — the published coverage ledgers name source files and are read by
+/// anyone auditing this crate. Two of them pointed at `src/isobus/guidance.rs`,
+/// a path that does not exist, so the guidance surface looked audited when the
+/// real codec lives elsewhere. Keep every cited path real.
+#[test]
+fn coverage_ledgers_only_cite_paths_that_exist() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut missing = Vec::new();
+
+    for ledger in [
+        "book/src/reference/assets/protocol_matrix.csv",
+        "book/src/reference/assets/standard_gap_matrix.csv",
+    ] {
+        let Ok(text) = std::fs::read_to_string(repo.join(ledger)) else {
+            continue;
+        };
+        for (lineno, line) in text.lines().enumerate().skip(1) {
+            // Cells may list several paths separated by semicolons.
+            for field in line.split([',', ';']) {
+                let field = field.trim().trim_matches('"');
+                let looks_like_source = field.starts_with("src/")
+                    && (field.ends_with(".rs") || field.ends_with(".toml"));
+                if looks_like_source && !repo.join(field).exists() {
+                    missing.push(format!("{ledger}:{}: {field}", lineno + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "coverage ledgers cite non-existent source paths:\n  {}",
+        missing.join("\n  ")
+    );
+}

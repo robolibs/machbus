@@ -20,10 +20,10 @@ use machbus::isobus::vt::{
     VTState, WorkingSet, WorkingSetBody, create_data_mask, create_working_set,
 };
 use machbus::isobus::{
-    AuxFunctionState, AuxFunctionType, AuxNFunction, CurvatureCommand, Functionalities,
-    GroundBasedSpeedDist, GroupFunctionMsg, LightState, LightingState,
-    MachineSpeedCommandMsg, SCD_LABEL_NONE, SCSequenceState, ScdAction, SequenceRecorder,
-    SequenceTanTracker, TimOption, TimOptionSet, TractorFacilities, scd_action,
+    AuxFunctionState, AuxFunctionType, AuxNFunction, Functionalities, GroundBasedSpeedDist,
+    GroupFunctionMsg, LightState, LightingState, MachineSpeedCommandMsg, SCD_LABEL_NONE,
+    SCSequenceState, ScdAction, SequenceRecorder, SequenceTanTracker, TimOption, TimOptionSet,
+    TractorFacilities, scd_action,
 };
 use machbus::j1939::{Fmi, diagnostic::Dtc};
 use machbus::net::{
@@ -107,7 +107,6 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         setpoint: 42,
     };
     assert_eq!(aux.encode().len(), 8);
-    assert_eq!(CurvatureCommand::default().encode().len(), 8);
     assert!(!Functionalities::new().with_min_cf(1).serialize().is_empty());
     assert!(
         GroupFunctionMsg::acknowledge(PGN_REQUEST, Default::default())
@@ -122,7 +121,6 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         GroundBasedSpeedDist::decode(&GroundBasedSpeedDist::default().encode()),
         Some(GroundBasedSpeedDist::default())
     );
-    assert_eq!(CurvatureCommand::default().encode().len(), 8);
     assert_eq!(
         LightingState {
             front_work: LightState::On,

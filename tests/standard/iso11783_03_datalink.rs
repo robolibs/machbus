@@ -16,8 +16,8 @@ use machbus::net::tp::TP_T_HOLD_MS;
 use machbus::net::{
     BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ErrorCode, ExtendedTransportProtocol, Frame,
     Identifier, NULL_ADDRESS, Priority, SessionState, TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
-    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState, TransportAbortReason,
-    TransportProtocol,
+    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState,
+    TransportAbortReason, TransportProtocol,
 };
 
 fn tp_cm_frame(source: u8, destination: u8, data: [u8; 8]) -> Frame {
@@ -1087,6 +1087,8 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
         TransportAbortReason::BadSequence,
         TransportAbortReason::DuplicateSequence,
         TransportAbortReason::UnexpectedDataSize,
+        // J1939-21 Table 8 value 250, "any other reason".
+        TransportAbortReason::Other,
     ];
     for reason in valid {
         assert_eq!(
@@ -1097,6 +1099,10 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
     for raw in [10, 11, 0x7F, 0x80, 0xFE, 0xFF] {
         assert_eq!(TransportAbortReason::try_from_u8(raw), None);
     }
+    assert_eq!(
+        TransportAbortReason::try_from_u8(250),
+        Some(TransportAbortReason::Other)
+    );
 
     let pgn = 0xEF00;
     let mut tp = TransportProtocol::new();
@@ -1121,11 +1127,14 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
             ((pgn >> 16) & 0xFF) as u8,
         ],
     );
+    // An unassigned reason byte is still an abort: the peer has torn the
+    // connection down. This used to drop the frame and leave our half of the
+    // session open indefinitely.
     assert!(tp.process_frame(&invalid_tp_abort, 0).is_empty());
-    assert_eq!(tp.active_sessions().len(), 1);
-    assert_eq!(tp.active_sessions()[0].state, SessionState::WaitingForData);
-    assert_eq!(tp.stats().aborts_received, 0);
-    assert_eq!(tp.stats().dropped_frames, 1);
+    assert!(
+        tp.active_sessions().is_empty(),
+        "an abort with an unrecognised reason must still close the session"
+    );
 
     let etp_pgn = 0xCA00;
     let mut etp = ExtendedTransportProtocol::new();
@@ -1160,10 +1169,10 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
         ],
     );
     assert!(etp.process_frame(&invalid_etp_abort, 0).is_empty());
-    assert_eq!(etp.active_sessions().len(), 1);
-    assert_eq!(etp.active_sessions()[0].state, SessionState::WaitingForData);
-    assert_eq!(etp.stats().aborts_received, 0);
-    assert_eq!(etp.stats().dropped_frames, 1);
+    assert!(
+        etp.active_sessions().is_empty(),
+        "an abort with an unrecognised reason must still close the ETP session"
+    );
 }
 
 #[test]
@@ -1567,8 +1576,9 @@ fn datalink_etp_timeout_window_aborts_extended_session_without_state_leak() {
     etp.send(pgn, &payload, 0x10, 0x20, 0, Priority::Default)
         .unwrap();
 
+    // A transmitter waiting for a CTS is on T3 (§5.11.4.1), not T1.
     assert!(
-        etp.update(machbus::net::ETP_TIMEOUT_T1_MS - 1).is_empty(),
+        etp.update(machbus::net::ETP_TIMEOUT_T3_MS - 1).is_empty(),
         "ETP timeout boundary should not fire one millisecond early"
     );
     assert_eq!(etp.active_sessions()[0].state, SessionState::WaitingForCTS);

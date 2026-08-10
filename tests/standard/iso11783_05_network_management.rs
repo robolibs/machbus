@@ -555,11 +555,20 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
             0,
         )
         .unwrap();
+    // The CF re-claims at a different address only after its RTxD delay
+    // (§4.4.3), which is now derived per-CF from the NAME instead of being
+    // hard-wired to 0. The delay is capped at ADDRESS_CLAIM_RTXD_MAX_MS, so
+    // pumping past that is enough for any NAME.
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 10, 1, |_, b| {
-            b.internal_cf(local_cf).unwrap().address() == 0x81
-        }),
-        "a claimed CF that loses to a lower NAME must immediately reclaim a different address when RTxD is zero"
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            machbus::net::ADDRESS_CLAIM_RTXD_MAX_MS as usize + 10,
+            1,
+            |_, b| { b.internal_cf(local_cf).unwrap().address() == 0x81 }
+        ),
+        "a claimed CF that loses to a lower NAME must reclaim a different address once RTxD elapses"
     );
     let reclaiming = local.internal_cf(local_cf).unwrap();
     assert_eq!(reclaiming.claim_state(), ClaimState::WaitForContest);

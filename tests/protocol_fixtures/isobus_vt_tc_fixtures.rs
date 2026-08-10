@@ -1362,7 +1362,11 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
 
     let invalid_type = parse_named_hex_bytes(ISOBUS_TC_DDOP_HEX, "invalid_unknown_element_type");
     assert!(DDOP::deserialize(&invalid_type).is_err());
-    assert_eq!(invalid_type[0], TCObjectType::DeviceElement.as_u8());
+    assert_eq!(
+        &invalid_type[0..3],
+        &TCObjectType::DeviceElement.table_id(),
+        "records open with the 3-byte ASCII Table ID of Tables A.1-A.5"
+    );
 
     let duplicate = parse_named_hex_bytes(ISOBUS_TC_DDOP_HEX, "invalid_duplicate_object_id");
     let duplicate_ddop = DDOP::deserialize(&duplicate).expect("duplicate fixture still parses");

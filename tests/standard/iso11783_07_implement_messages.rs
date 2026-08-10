@@ -1,13 +1,13 @@
 use machbus::isobus::implement::{
     AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommandStatus, DriveStrategyCmd,
     DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue, GroundBasedSpeedDist,
-    GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, GuidanceSystemStatus,
-    HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState,
-    LightingState, LimitStatus, MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull,
-    MachineSelectedSpeedMsg, MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg,
-    PtoStatus, RequestResetCommandStatus, SpeedExitCode, SpeedSource, SteeringReadiness,
-    TractorControlModeMsg, TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState,
-    WheelBasedSpeedDist, estimated_flow_pgn, measured_flow_pgn,
+    GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg,
+    HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState, LightingState, LimitStatus,
+    MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg,
+    MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus,
+    RequestResetCommandStatus, SpeedExitCode, SpeedSource, TractorControlModeMsg, TractorMode,
+    ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
+    estimated_flow_pgn, measured_flow_pgn,
 };
 use machbus::j1939::shortcut_button::{self, ShortcutButtonState};
 use machbus::j1939::{
@@ -15,9 +15,8 @@ use machbus::j1939::{
     HeartbeatTracker, PGN_HEARTBEAT_REQUEST, SpeedAndDistance, heartbeat::hb_seq,
 };
 use machbus::net::pgn_defs::{
-    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD,
-    PGN_HEARTBEAT, PGN_MACHINE_SPEED, PGN_REAR_HITCH_ROLL_PITCH_CMD, PGN_SHORTCUT_BUTTON,
-    PGN_TIME_DATE, PGN_WHEEL_SPEED,
+    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_HEARTBEAT, PGN_MACHINE_SPEED,
+    PGN_REAR_HITCH_ROLL_PITCH_CMD, PGN_SHORTCUT_BUTTON, PGN_TIME_DATE, PGN_WHEEL_SPEED,
 };
 use machbus::net::{BROADCAST_ADDRESS, Message, NULL_ADDRESS, Priority};
 use std::cell::RefCell;
@@ -235,9 +234,16 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     for packed_or_reserved in [0x04, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
         assert_eq!(LightState::try_from_u8(packed_or_reserved), None);
         assert_eq!(MachineDirection::try_from_u8(packed_or_reserved), None);
-        assert_eq!(SpeedSource::try_from_u8(packed_or_reserved), None);
         assert_eq!(SpeedExitCode::try_from_u8(packed_or_reserved), None);
         assert_eq!(LimitStatus::try_from_u8(packed_or_reserved), None);
+    }
+
+    // SpeedSource is a 3-bit field, so 4 (simulated) and 7 (not available) are
+    // real values rather than reserved ones. Only 5 and 6 are unassigned.
+    assert_eq!(SpeedSource::try_from_u8(4), Some(SpeedSource::Simulated));
+    assert_eq!(SpeedSource::try_from_u8(7), Some(SpeedSource::NotAvailable));
+    for reserved_or_packed in [5, 6, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
+        assert_eq!(SpeedSource::try_from_u8(reserved_or_packed), None);
     }
 
     let lighting = LightingState {
@@ -263,8 +269,8 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let selected_full = MachineSelectedSpeedFull {
-        speed_mps: 4.2,
-        distance_m: 99.0,
+        speed_mps: 4.2.into(),
+        distance_m: 99.0.into(),
         direction: MachineDirection::Reverse,
         source: SpeedSource::NavigationBased,
         limit_status: 5,
@@ -276,8 +282,8 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     assert_eq!(decoded_selected_full.limit_status, 5);
 
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 1.25,
-        distance_m: 12.5,
+        speed_mps: 1.25.into(),
+        distance_m: 12.5.into(),
         direction: MachineDirection::Forward,
         key_switch_state: 1,
         implement_start_stop_operations_state: 2,
@@ -290,8 +296,8 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 1.25,
-        distance_m: 12.5,
+        speed_mps: 1.25.into(),
+        distance_m: 12.5.into(),
         direction: MachineDirection::Reverse,
     };
     assert_eq!(
@@ -874,17 +880,6 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         assert_eq!(RequestResetCommandStatus::from_u8(raw), status);
     }
 
-    for (raw, status) in [
-        (0, SteeringReadiness::NotReady),
-        (1, SteeringReadiness::MechanicalReady),
-        (2, SteeringReadiness::FullyReady),
-        (3, SteeringReadiness::Error),
-        (7, SteeringReadiness::NotAvailable),
-    ] {
-        assert_eq!(SteeringReadiness::try_from_u8(raw), Some(status));
-        assert_eq!(SteeringReadiness::from_u8(raw), status);
-    }
-
     for packed_or_reserved in [0x04, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
         assert_eq!(MechanicalLockout::try_from_u8(packed_or_reserved), None);
         assert_eq!(
@@ -895,10 +890,6 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
             RequestResetCommandStatus::try_from_u8(packed_or_reserved),
             None
         );
-    }
-
-    for reserved_or_packed in [4, 5, 6, 0x08, 0x10, 0x40, 0xFF] {
-        assert_eq!(SteeringReadiness::try_from_u8(reserved_or_packed), None);
     }
 
     for reserved_or_packed in [4, 5, 0x08, 0x10, 0x40, 0xFF] {
@@ -916,13 +907,6 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         remote_engage_switch_status: GenericSaeBs02SlotValue::DisabledOffPassive,
     };
     assert_eq!(GuidanceMachineInfo::decode(&info.encode()), Some(info));
-
-    let status = GuidanceSystemStatus {
-        estimated_curvature: -0.5,
-        readiness: SteeringReadiness::FullyReady,
-        integrity_level: 3,
-    };
-    assert_eq!(GuidanceSystemStatus::decode(&status.encode()), Some(status));
 }
 
 #[test]
@@ -959,26 +943,6 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     let mut bad_tail = encoded;
     bad_tail[5] = 0x00;
     assert_eq!(GuidanceMachineInfo::decode(&bad_tail), None);
-
-    let status = GuidanceSystemStatus {
-        estimated_curvature: 1.0,
-        readiness: SteeringReadiness::FullyReady,
-        integrity_level: 2,
-    };
-    let status_encoded = status.encode();
-    assert_eq!(
-        GuidanceSystemStatus::decode(&status_encoded)
-            .unwrap()
-            .readiness,
-        SteeringReadiness::FullyReady
-    );
-
-    for reserved_readiness in 4..=6 {
-        let mut bad_readiness = status_encoded;
-        bad_readiness[2] &= !0x07;
-        bad_readiness[2] |= reserved_readiness;
-        assert_eq!(GuidanceSystemStatus::decode(&bad_readiness), None);
-    }
 }
 
 #[test]
@@ -1057,8 +1021,8 @@ fn implement_exit_reason_public_decoders_reject_noncanonical_bytes() {
 #[test]
 fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_position_values() {
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.0,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.0.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 60,
         key_switch_state: 1,
@@ -1070,24 +1034,36 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         WheelBasedSpeedDist::decode(&wheel_bytes).unwrap().direction,
         MachineDirection::Forward
     );
-    let mut bad_wheel_speed = wheel_bytes;
-    bad_wheel_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(WheelBasedSpeedDist::decode(&bad_wheel_speed), None);
+    // A speed the TECU does not provide is reported as such; the rest of the
+    // PG (direction, key switch, power time) is still mandatory data and must
+    // survive. Dropping the whole frame here is what blinded the stack to
+    // every real ground-speed message.
+    let mut na_wheel_speed = wheel_bytes;
+    na_wheel_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = WheelBasedSpeedDist::decode(&na_wheel_speed)
+        .expect("a not-available speed must not discard the whole PG");
+    assert!(decoded.speed_mps.is_not_available());
+    assert_eq!(decoded.speed_mps.value(), None);
+    assert_eq!(decoded.direction, MachineDirection::Forward);
+    assert_eq!(decoded.max_power_time_min, 60);
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 3.0,
-        distance_m: 100.0,
+        speed_mps: 3.0.into(),
+        distance_m: 100.0.into(),
         direction: MachineDirection::Reverse,
     };
     let ground_bytes = ground.encode();
     assert_eq!(GroundBasedSpeedDist::decode(&ground_bytes), Some(ground));
-    let mut bad_ground_speed = ground_bytes;
-    bad_ground_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(GroundBasedSpeedDist::decode(&bad_ground_speed), None);
+    let mut na_ground_speed = ground_bytes;
+    na_ground_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded_ground = GroundBasedSpeedDist::decode(&na_ground_speed)
+        .expect("a machine with no ground-speed sensor still sends a valid PG");
+    assert!(decoded_ground.speed_mps.is_not_available());
+    assert_eq!(decoded_ground.direction, MachineDirection::Reverse);
 
     let selected = MachineSelectedSpeedFull {
-        speed_mps: 2.5,
-        distance_m: 1_000.0,
+        speed_mps: 2.5.into(),
+        distance_m: 1_000.0.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
         limit_status: 1,
@@ -1100,9 +1076,12 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
             .source,
         SpeedSource::GroundBased
     );
-    let mut bad_selected_speed = selected_bytes;
-    bad_selected_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(MachineSelectedSpeedFull::decode(&bad_selected_speed), None);
+    let mut na_selected_speed = selected_bytes;
+    na_selected_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded_selected = MachineSelectedSpeedFull::decode(&na_selected_speed)
+        .expect("a not-available selected speed must not discard the whole PG");
+    assert!(decoded_selected.speed_mps.is_not_available());
+    assert_eq!(decoded_selected.source, SpeedSource::GroundBased);
 
     let pto = PtoStatus {
         shaft_speed_rpm: 540.0,
@@ -1158,8 +1137,8 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
 #[test]
 fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling() {
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.0,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.0.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 60,
         key_switch_state: 1,
@@ -1167,28 +1146,52 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
         operator_direction_reversed_state: 0,
     };
     let wheel_bytes = wheel.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = wheel_bytes;
-        bad[0..2].copy_from_slice(&raw.to_le_bytes());
+    // Only the reserved band is a genuine decode failure. The error and
+    // not-available bands are states the transmitter is entitled to report,
+    // and they must be distinguishable from each other.
+    let mut reserved = wheel_bytes;
+    reserved[0..2].copy_from_slice(&0xFB00_u16.to_le_bytes());
+    assert_eq!(WheelBasedSpeedDist::decode(&reserved), None);
+
+    for (raw, expect_error) in [(0xFE00_u16, true), (0xFFFF, false)] {
+        let mut frame = wheel_bytes;
+        frame[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = WheelBasedSpeedDist::decode(&frame)
+            .unwrap_or_else(|| panic!("raw 0x{raw:04X} is a reportable state, not a bad frame"));
         assert_eq!(
-            WheelBasedSpeedDist::decode(&bad),
-            None,
-            "wheel speed raw value 0x{raw:04X} must stay outside accepted signal data"
+            decoded.speed_mps.is_error(),
+            expect_error,
+            "raw 0x{raw:04X}"
         );
+        assert_eq!(
+            decoded.speed_mps.is_not_available(),
+            !expect_error,
+            "raw 0x{raw:04X}"
+        );
+        assert_eq!(decoded.distance_m.value(), Some(12_345.0));
     }
-    for raw in [0xFB00_0000_u32, 0xFE00_0000, 0xFFFF_FFFF] {
-        let mut bad = wheel_bytes;
-        bad[2..6].copy_from_slice(&raw.to_le_bytes());
+
+    let mut reserved_distance = wheel_bytes;
+    reserved_distance[2..6].copy_from_slice(&0xFB00_0000_u32.to_le_bytes());
+    assert_eq!(WheelBasedSpeedDist::decode(&reserved_distance), None);
+
+    for (raw, expect_error) in [(0xFE00_0000_u32, true), (0xFFFF_FFFF, false)] {
+        let mut frame = wheel_bytes;
+        frame[2..6].copy_from_slice(&raw.to_le_bytes());
+        let decoded = WheelBasedSpeedDist::decode(&frame)
+            .unwrap_or_else(|| panic!("raw 0x{raw:08X} is a reportable state, not a bad frame"));
         assert_eq!(
-            WheelBasedSpeedDist::decode(&bad),
-            None,
-            "wheel distance raw value 0x{raw:08X} must stay outside accepted signal data"
+            decoded.distance_m.is_error(),
+            expect_error,
+            "raw 0x{raw:08X}"
         );
+        // A bad distance must never take a valid speed down with it.
+        assert_eq!(decoded.speed_mps.value(), Some(5.5));
     }
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 3.0,
-        distance_m: 100.0,
+        speed_mps: 3.0.into(),
+        distance_m: 100.0.into(),
         direction: MachineDirection::Reverse,
     };
     let ground_bytes = ground.encode();
@@ -1199,24 +1202,45 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     bad_ground_distance[2..6].copy_from_slice(&0xFB00_0000_u32.to_le_bytes());
     assert_eq!(GroundBasedSpeedDist::decode(&bad_ground_distance), None);
 
+    // The error band is reportable, not malformed.
+    let mut error_ground_speed = ground_bytes;
+    error_ground_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
+    assert!(
+        GroundBasedSpeedDist::decode(&error_ground_speed)
+            .expect("error band decodes")
+            .speed_mps
+            .is_error()
+    );
+
     let selected = MachineSelectedSpeedFull {
-        speed_mps: 2.5,
-        distance_m: 1_000.0,
+        speed_mps: 2.5.into(),
+        distance_m: 1_000.0.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
         limit_status: 1,
         exit_code: 0x42,
     };
     let selected_bytes = selected.encode();
-    let mut bad_selected_speed = selected_bytes;
-    bad_selected_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
-    assert_eq!(MachineSelectedSpeedFull::decode(&bad_selected_speed), None);
-    let mut bad_selected_distance = selected_bytes;
-    bad_selected_distance[2..6].copy_from_slice(&0xFE00_0000_u32.to_le_bytes());
-    assert_eq!(
-        MachineSelectedSpeedFull::decode(&bad_selected_distance),
-        None
+    let mut error_selected_speed = selected_bytes;
+    error_selected_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
+    assert!(
+        MachineSelectedSpeedFull::decode(&error_selected_speed)
+            .expect("error band decodes")
+            .speed_mps
+            .is_error()
     );
+    let mut error_selected_distance = selected_bytes;
+    error_selected_distance[2..6].copy_from_slice(&0xFE00_0000_u32.to_le_bytes());
+    assert!(
+        MachineSelectedSpeedFull::decode(&error_selected_distance)
+            .expect("error band decodes")
+            .distance_m
+            .is_error()
+    );
+    // Reserved raws remain genuine decode failures.
+    let mut reserved_selected = selected_bytes;
+    reserved_selected[0..2].copy_from_slice(&0xFB00_u16.to_le_bytes());
+    assert_eq!(MachineSelectedSpeedFull::decode(&reserved_selected), None);
 
     let pto = PtoStatus {
         shaft_speed_rpm: 540.0,
@@ -1249,8 +1273,8 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     }
 
     let saturated = WheelBasedSpeedDist {
-        speed_mps: 1.0e9,
-        distance_m: 1.0e12,
+        speed_mps: 1.0e9.into(),
+        distance_m: 1.0e12.into(),
         ..wheel
     }
     .encode();

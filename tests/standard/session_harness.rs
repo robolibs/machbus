@@ -175,6 +175,7 @@ fn diagnostics_dm1_crosses_to_peer() {
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
 
@@ -221,8 +222,8 @@ fn implement_status_broadcast_reaches_peer() {
             },
         );
         imp.broadcast_wheel_speed(WheelBasedSpeedDist {
-            speed_mps: 2.0,
-            distance_m: 100.0,
+            speed_mps: 2.0.into(),
+            distance_m: 100.0.into(),
             ..WheelBasedSpeedDist::default()
         });
     });
@@ -255,7 +256,7 @@ fn implement_status_broadcast_reaches_peer() {
         .with::<Implement, _>(|imp| imp.last_wheel_speed())
         .flatten();
     assert!(
-        cached.is_some_and(|w| (w.speed_mps - 2.0).abs() < 0.01),
+        cached.is_some_and(|w| (w.speed_mps.unwrap_or(f64::NAN) - 2.0).abs() < 0.01),
         "peer Implement cache should hold the broadcast wheel speed"
     );
 }

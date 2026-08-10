@@ -1128,3 +1128,67 @@ fn sequence_control_rejects_reserved_sequence_numbers_without_state_progress() {
         "valid acknowledgement after the reserved-id rejection should still satisfy active progress"
     );
 }
+
+/// 6G — ISO 11783-14 B.1: both SC PGNs default to **priority 4**, and B.3
+/// defines SCC → SCM as PDU1 (PF 141), i.e. destination-specific. The client
+/// plugin broadcast its status at priority 6, so a conformant SCM expecting an
+/// addressed reply never saw one.
+#[test]
+fn sequence_control_client_status_is_addressed_to_the_master_at_priority_four() {
+    use machbus::net::{BROADCAST_ADDRESS, Frame, Identifier, Name, Priority};
+    use machbus::session::{Session, plugins::ScClient};
+    use machbus::time::Instant;
+
+    let name = Name::default()
+        .with_identity_number(0x5C)
+        .with_function_code(0x80)
+        .with_self_configurable(true);
+    let mut session = Session::builder(name, 0x80)
+        .plug(ScClient::new(Default::default()))
+        .build()
+        .unwrap();
+    session.start().unwrap();
+
+    let mut now = Instant::ZERO;
+    for _ in 0..40 {
+        now = now.add_millis(100);
+        session.tick(now);
+        while session.poll_transmit().is_some() {}
+        if session.is_claimed() {
+            break;
+        }
+    }
+    assert!(session.is_claimed());
+
+    // An SCM at 0x10 announces itself.
+    let scm = Frame::new(
+        Identifier::encode(
+            Priority::BelowNormal,
+            PGN_SC_MASTER_STATUS,
+            0x10,
+            BROADCAST_ADDRESS,
+        ),
+        master_ready(),
+        8,
+    );
+    session.feed(0, &scm, now.add_millis(10));
+    session.tick(now.add_millis(20));
+
+    let mut seen = false;
+    while let Some((_, frame)) = session.poll_transmit() {
+        if frame.id.pgn() == PGN_SC_CLIENT_STATUS {
+            assert_eq!(
+                frame.id.priority(),
+                Priority::BelowNormal,
+                "SC messages default to priority 4 (B.1)"
+            );
+            assert_eq!(
+                frame.destination(),
+                0x10,
+                "SCC to SCM is destination-specific (B.3), not broadcast"
+            );
+            seen = true;
+        }
+    }
+    assert!(seen, "the client answered the SCM's status");
+}

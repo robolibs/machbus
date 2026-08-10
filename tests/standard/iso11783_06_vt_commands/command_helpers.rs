@@ -1744,3 +1744,52 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
     assert!(server.clients()[0].pool_uploaded);
     assert_eq!(server.clients()[0].pool.size(), 2);
 }
+
+/// 6D — ISO 11783-6 §4.6.9: the VT sends its Status message once per second,
+/// and 3 s of silence "is determined to be a shutdown of the VT. When this
+/// happens the Working Set shall enter a safe state."
+///
+/// The client's `Connected` arm of the tick was empty and the status age was
+/// never tracked, so a working set stayed connected indefinitely to a terminal
+/// that had gone away.
+#[test]
+fn vt_client_enters_safe_state_after_three_seconds_without_status() {
+    use machbus::isobus::vt::client::VT_STATUS_TIMEOUT_MS;
+
+    let mut client = VTClient::new(VTClientConfig::default());
+    let lost = Rc::new(RefCell::new(0u32));
+    {
+        let sink = lost.clone();
+        client.on_vt_status_lost.subscribe(move |()| {
+            *sink.borrow_mut() += 1;
+        });
+    }
+
+    connect_standard_client(&mut client);
+    assert_eq!(client.state(), VTState::Connected);
+
+    // A VT Status refreshes the window, so a live terminal never trips it.
+    for _ in 0..5 {
+        client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
+        let _ = client.update(VT_STATUS_TIMEOUT_MS - 1);
+    }
+    assert_eq!(client.state(), VTState::Connected);
+    assert_eq!(*lost.borrow(), 0);
+
+    // Re-establish the window before testing the expiry itself.
+    client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
+
+    // Just under the window after the last status: still connected.
+    let _ = client.update(VT_STATUS_TIMEOUT_MS - 1);
+    assert_eq!(client.state(), VTState::Connected);
+    assert_eq!(*lost.borrow(), 0);
+
+    // Past it: safe state.
+    let _ = client.update(2);
+    assert_eq!(
+        client.state(),
+        VTState::Disconnected,
+        "3 s without a VT Status must drop the working set to the safe state"
+    );
+    assert_eq!(*lost.borrow(), 1, "and report it");
+}

@@ -1305,12 +1305,19 @@ fn shortcut_button_layout_matches_agisostack_isb_examples() {
 // AgIsoStack `speed_distance_message_tests.cpp` uses raw mm/s and mm
 // values below while checking Machine Selected Speed, Wheel Based Speed,
 // and Ground Based Speed frame layouts.
+//
+// The Machine Selected Speed expectation below previously asserted byte 8 =
+// 0x39, which is machbus's own historic packing (2-bit source, limit status
+// at bit 5), not AgIsoStack's output. With the 3-bit source and the limit
+// status at bit 6 the byte is 0x69, which is what AgIsoStack actually emits.
+// Byte 7 carries the 6-bit exit reason with its top two bits reserved, so a
+// conformant transmitter sends them as ones (0xCF), not zeros.
 
 #[test]
 fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     let machine_selected = MachineSelectedSpeedFull {
-        speed_mps: 1.0,
-        distance_m: 123.456,
+        speed_mps: 1.0.into(),
+        distance_m: 123.456.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::NavigationBased,
         limit_status: 3,
@@ -1322,12 +1329,12 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
     assert_eq!(
         machine_selected.encode(),
-        [0xE8, 0x03, 0x40, 0xE2, 0x01, 0x00, 15, 0x39]
+        [0xE8, 0x03, 0x40, 0xE2, 0x01, 0x00, 0xCF, 0x69]
     );
 
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 9.876,
-        distance_m: 5.0,
+        speed_mps: 9.876.into(),
+        distance_m: 5.0.into(),
         direction: MachineDirection::Reverse,
         max_power_time_min: 3,
         key_switch_state: 1,
@@ -1344,8 +1351,8 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 9.999,
-        distance_m: 80.0,
+        speed_mps: 9.999.into(),
+        distance_m: 80.0.into(),
         direction: MachineDirection::Forward,
     };
     assert_eq!(
@@ -1354,7 +1361,7 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
     assert_eq!(
         ground.encode(),
-        [0x0F, 0x27, 0x80, 0x38, 0x01, 0x00, 0xFF, 0x01]
+        [0x0F, 0x27, 0x80, 0x38, 0x01, 0x00, 0xFF, 0xFD]
     );
 }
 

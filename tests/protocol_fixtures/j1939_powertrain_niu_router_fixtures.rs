@@ -1126,11 +1126,9 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
     let add_filter = parse_named_hex_frame(ISOBUS_NIU_CONTROL_HEX, "add_filter_pgn_ef00_port1");
     let delete_filter =
         parse_named_hex_frame(ISOBUS_NIU_CONTROL_HEX, "delete_filter_pgn_ef00_port1");
-    let set_block_all =
-        parse_named_hex_frame(ISOBUS_NIU_CONTROL_HEX, "set_filter_mode_block_all_port1");
     let port_stats = parse_named_hex_frame(
         ISOBUS_NIU_CONTROL_HEX,
-        "port_stats_forwarded1234_blockedabcd_port2",
+        "general_parametrics_forwarded1234_blockedabcd_port2",
     );
 
     let expected_add = NiuNetworkMsg {
@@ -1169,20 +1167,14 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
     assert_eq!(expected_delete.encode().unwrap(), delete_filter);
     assert_eq!(NiuNetworkMsg::decode(&delete_filter), Some(expected_delete));
 
-    let expected_set_block_all = NiuNetworkMsg {
-        function: NiuFunction::SetFilterMode,
-        port_number: 1,
-        filter_mode: NiuFilterMode::BlockAll,
-        ..Default::default()
-    };
-    assert_eq!(expected_set_block_all.encode().unwrap(), set_block_all);
-    assert_eq!(
-        NiuNetworkMsg::decode(&set_block_all),
-        Some(expected_set_block_all)
-    );
+    // The "set filter mode" message this fixture exercised has no ISO 11783-4
+    // Table 2 function code. Section 6.6.2.3.3 explains why: the filter mode
+    // "cannot be changed without clearing and rebuilding the database for that
+    // port pair", so it is configured out of band rather than over the wire.
+    // The message and its vector are gone.
 
     let expected_stats = NiuNetworkMsg {
-        function: NiuFunction::PortStatsResponse,
+        function: NiuFunction::GeneralParametricsResponse,
         port_number: 2,
         msgs_forwarded: 0x1234,
         msgs_blocked: 0xABCD,
@@ -1195,9 +1187,7 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
         "malformed_niu_short_add_filter",
         "malformed_niu_add_filter_bad_pgn_high_bits",
         "malformed_niu_add_filter_bad_tail",
-        "malformed_niu_set_filter_mode_reserved_mode",
-        "malformed_niu_set_filter_mode_bad_tail",
-        "malformed_niu_port_stats_bad_tail",
+        "malformed_niu_general_parametrics_bad_tail",
         "malformed_niu_unknown_function",
     ] {
         assert!(
@@ -1241,7 +1231,7 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
         );
     }
 
-    let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
+    let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
     niu.add_filter(decoded_rule);
     niu.start().unwrap();
     let snapshot_before = niu.filter_snapshot();
@@ -1253,7 +1243,7 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
     assert_eq!(snapshot_before[0].max_frequency_ms, 250);
     let policy_before = niu.policy_snapshot();
     assert_eq!(policy_before.name, "NIU");
-    assert_eq!(policy_before.filter_mode, NiuFilterMode::BlockAll);
+    assert_eq!(policy_before.filter_mode, NiuFilterMode::PassSpecific);
     assert!(policy_before.forward_global_by_default);
     assert!(policy_before.forward_specific_by_default);
     assert_eq!(policy_before.loop_guard_window_ms, 250);
@@ -1297,8 +1287,6 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
         "malformed_niu_short_add_filter",
         "malformed_niu_add_filter_bad_pgn_high_bits",
         "malformed_niu_add_filter_bad_tail",
-        "malformed_niu_set_filter_mode_reserved_mode",
-        "malformed_niu_set_filter_mode_bad_tail",
         "malformed_niu_unknown_function",
     ] {
         control_niu.handle_niu_message(&Message::with_addressing(
@@ -1310,21 +1298,13 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
         ));
     }
     assert!(control_niu.filters().is_empty());
-    assert_eq!(control_niu.filter_mode(), NiuFilterMode::PassAll);
+    assert_eq!(control_niu.filter_mode(), NiuFilterMode::BlockSpecific);
     assert!(captured.borrow().is_empty());
-    let set_mode_msg = Message::with_addressing(
-        PGN_NIU_NETWORK_MSG,
-        set_block_all.to_vec(),
-        0x21,
-        0x80,
-        Priority::Default,
-    );
-    control_niu.handle_niu_message(&set_mode_msg);
-    assert_eq!(control_niu.filter_mode(), NiuFilterMode::BlockAll);
-    assert_eq!(
-        captured.borrow().as_slice(),
-        &[(expected_set_block_all, 0x21)]
-    );
+    // The filter mode is configured out of band (§6.6.2.3.3), not by a
+    // network message — there is no Table 2 code for it.
+    control_niu.set_filter_mode(NiuFilterMode::PassSpecific);
+    assert_eq!(control_niu.filter_mode(), NiuFilterMode::PassSpecific);
+    assert!(captured.borrow().is_empty());
     let unmatched = Frame::from_message(
         Priority::Default,
         PGN_HEARTBEAT,
@@ -1341,7 +1321,7 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
     let mut router = Router::new(
         NiuConfig::default()
             .name("fixture-router")
-            .mode(NiuFilterMode::BlockAll)
+            .mode(NiuFilterMode::PassSpecific)
             .global_default(false)
             .specific_default(false)
             .loop_guard_window_ms(600)
@@ -1354,7 +1334,7 @@ fn fixture_isobus_niu_control_and_policy_snapshots_are_stable() {
     router.add_translation(tractor_cf, 0x10, 0x20).unwrap();
     let router_policy = router.policy_snapshot();
     assert_eq!(router_policy.niu.name, "fixture-router");
-    assert_eq!(router_policy.niu.filter_mode, NiuFilterMode::BlockAll);
+    assert_eq!(router_policy.niu.filter_mode, NiuFilterMode::PassSpecific);
     assert!(!router_policy.niu.forward_global_by_default);
     assert!(!router_policy.niu.forward_specific_by_default);
     assert_eq!(router_policy.niu.loop_guard_window_ms, 600);

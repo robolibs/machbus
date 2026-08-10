@@ -316,8 +316,8 @@ const NMEA_GNSS_POSITION_DATA_REFERENCE_STATION_LENGTHS_HEX: &str =
     include_str!("../fixtures/nmea/gnss_position_data_reference_station_lengths.hex");
 const NMEA_GNSS_DOPS_AUTO_3D_HDOP0_85_VDOP1_10_TDOP0_50_HEX: &str =
     include_str!("../fixtures/nmea/gnss_dops_auto_3d_hdop0_85_vdop1_10_tdop0_50.hex");
-const NMEA_GNSS_DOPS_BAD_RESERVED_BITS_HEX: &str =
-    include_str!("../fixtures/nmea/gnss_dops_bad_reserved_bits.hex");
+const NMEA_GNSS_DOPS_BAD_SEQUENCE_ID_HEX: &str =
+    include_str!("../fixtures/nmea/gnss_dops_bad_sequence_id.hex");
 const NMEA_GNSS_DOPS_BAD_RESERVED_MODE_HEX: &str =
     include_str!("../fixtures/nmea/gnss_dops_bad_reserved_mode.hex");
 const NMEA_ATTITUDE_YAW1_PITCH_NEG0_1_ROLL0_25_HEX: &str =

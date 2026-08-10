@@ -1402,7 +1402,7 @@ fn fixture_nmea_gnss_position_cog_sog_and_heading_vectors_are_stable() {
 fn fixture_nmea_gnss_detail_dops_and_attitude_vectors_are_stable() {
     let position_detail = parse_hex_bytes(NMEA_GNSS_POSITION_DATA_52N_5E_ALT12_345_RTK_HEX.trim());
     let dops_bytes = parse_hex_bytes(NMEA_GNSS_DOPS_AUTO_3D_HDOP0_85_VDOP1_10_TDOP0_50_HEX.trim());
-    let dops_bad_reserved = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_RESERVED_BITS_HEX.trim());
+    let dops_bad_sequence = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_SEQUENCE_ID_HEX.trim());
     let dops_bad_reserved_mode = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_RESERVED_MODE_HEX.trim());
     let attitude_bytes = parse_hex_bytes(NMEA_ATTITUDE_YAW1_PITCH_NEG0_1_ROLL0_25_HEX.trim());
     let position_detail_one_ref = parse_named_hex_bytes(
@@ -1492,12 +1492,14 @@ fn fixture_nmea_gnss_detail_dops_and_attitude_vectors_are_stable() {
     assert!((dop_cached.vdop.unwrap() - 1.10).abs() < 0.000001);
     assert!((dop_cached.pdop.unwrap() - 1.32).abs() < 0.000001);
 
-    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved, 0x23));
+    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_sequence, 0x23));
     iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved_mode, 0x23));
     assert_eq!(
         dops_log.borrow().len(),
         1,
-        "GNSS DOPs reserved bits/modes must be ignored before event emission"
+        "a non-canonical sequence ID and a reserved Set Mode are both refused; \
+         the two NMEA reserved bits in byte 2 are set in every fixture here, as a \
+         conformant transmitter sends them, and must not cause a rejection"
     );
     let dop_cached = iface
         .latest_position()

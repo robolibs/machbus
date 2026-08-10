@@ -144,6 +144,51 @@ mod tests {
         );
     }
 
+    /// H8 — the DOPs in PGN 129539 are documented as "Range: +/-327.64" with a
+    /// 1x10E-2 resolution, i.e. `int16`. Decoding them as unsigned put the
+    /// unavailable sentinel at 0xFFFF instead of 0x7FFF, so an unavailable DOP
+    /// read as a plausible 327.67 and a quality gate treated "no value" as a
+    /// real, very poor one.
+    #[test]
+    fn unavailable_dops_are_not_reported_as_327_67() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let seen: Rc<RefCell<Vec<GNSSDOPData>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        iface.on_gnss_dops.subscribe(move |d| sink.borrow_mut().push(*d));
+
+        // Byte 2 as a conformant transmitter sends it: desired mode 1,
+        // actual mode 2, and the two NMEA reserved bits set to 1 (0xD1).
+        let mut data = vec![0x2A, 0xD1, 0, 0, 0, 0, 0, 0];
+        data[2..4].copy_from_slice(&i16::MAX.to_le_bytes()); // HDOP not available
+        data[4..6].copy_from_slice(&120i16.to_le_bytes()); // VDOP 1.20
+        data[6..8].copy_from_slice(&50i16.to_le_bytes()); // TDOP 0.50
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, data));
+
+        let dops = *seen.borrow().last().expect("a DOP report is emitted");
+        assert!(
+            (dops.hdop - 327.67).abs() > 1.0,
+            "an unavailable HDOP must not decode as 327.67, got {}",
+            dops.hdop
+        );
+        assert!((dops.vdop - 1.20).abs() < 1e-9);
+        assert!((dops.tdop - 0.50).abs() < 1e-9);
+        assert_eq!(dops.desired_mode, GNSSDOPMode::Mode2D);
+        assert_eq!(dops.actual_mode, GNSSDOPMode::Mode3D);
+
+        // The error sentinel is a decode refusal, not a value.
+        let before = seen.borrow().len();
+        let mut err = vec![0x2A, 0xD1, 0, 0, 0, 0, 0, 0];
+        err[2..4].copy_from_slice(&(i16::MAX - 2).to_le_bytes());
+        err[4..6].copy_from_slice(&120i16.to_le_bytes());
+        err[6..8].copy_from_slice(&50i16.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, err));
+        assert_eq!(
+            seen.borrow().len(),
+            before,
+            "a reserved DOP value must not produce a report"
+        );
+    }
+
     #[test]
     fn position_detail_rejects_reference_station_count_mismatches() {
         let mut iface = NMEAInterface::default();
@@ -467,10 +512,14 @@ mod tests {
             PGN_RATE_OF_TURN,
             vec![0x05, 0x00, 0xD4, 0x30, 0x00, 0x00, 0xFF, 0xFF],
         ));
+        // A non-canonical sequence ID (0xFD is reserved) is refused. Note the
+        // two NMEA reserved bits in byte 2 are *set*, as a conformant
+        // transmitter sends them — that alone must not reject the frame.
         iface.handle_message(&nmea_msg(
             PGN_GNSS_DOPS,
-            vec![0x2A, 0xD3, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],
+            vec![0xFD, 0xD3, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],
         ));
+        // A reserved Set Mode value (4) is refused.
         iface.handle_message(&nmea_msg(
             PGN_GNSS_DOPS,
             vec![0x2A, 0x14, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],

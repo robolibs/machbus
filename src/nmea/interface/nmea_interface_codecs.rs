@@ -1191,9 +1191,11 @@ impl NMEAInterface {
         if !nmea_sequence_id_is_canonical(data[0]) {
             return;
         }
-        if data[1] & 0xC0 != 0 {
-            return;
-        }
+        // Byte 2 is [Set Mode: 3 bits][Mode, GNSS: 3 bits][NMEA Reserved: 2
+        // bits]. NMEA reserved fields are *transmitted as 1s*, so requiring the
+        // top two bits to be zero rejected every conformant frame — the whole
+        // PG was dropped and no DOP ever reached a consumer. Reserved bits are
+        // written as 1 and ignored on receive.
         let Some(desired_mode) = GNSSDOPMode::try_from_u8(data[1] & 0x07) else {
             return;
         };
@@ -1206,16 +1208,18 @@ impl NMEAInterface {
             actual_mode,
             ..Default::default()
         };
-        let hdop_raw = u16::from_le_bytes([data[2], data[3]]);
-        let vdop_raw = u16::from_le_bytes([data[4], data[5]]);
-        let tdop_raw = u16::from_le_bytes([data[6], data[7]]);
-        let Some(hdop) = nmea_u16_scaled_field(hdop_raw, DOP_RESOLUTION) else {
+        // The DOPs are signed (+/-327.64 at 1x10E-2), so the unavailable and
+        // error sentinels live at the top of the *signed* range.
+        let hdop_raw = i16::from_le_bytes([data[2], data[3]]);
+        let vdop_raw = i16::from_le_bytes([data[4], data[5]]);
+        let tdop_raw = i16::from_le_bytes([data[6], data[7]]);
+        let Some(hdop) = nmea_dop_field(hdop_raw, DOP_RESOLUTION) else {
             return;
         };
-        let Some(vdop) = nmea_u16_scaled_field(vdop_raw, DOP_RESOLUTION) else {
+        let Some(vdop) = nmea_dop_field(vdop_raw, DOP_RESOLUTION) else {
             return;
         };
-        let Some(tdop) = nmea_u16_scaled_field(tdop_raw, DOP_RESOLUTION) else {
+        let Some(tdop) = nmea_dop_field(tdop_raw, DOP_RESOLUTION) else {
             return;
         };
         if let Some(hdop) = hdop {
@@ -1662,6 +1666,33 @@ fn nmea_u16_scaled_field(raw: u16, resolution: f64) -> Option<Option<f64>> {
         0xFFFD | 0xFFFE => None,
         0xFFFF => Some(None),
         value => Some(Some(f64::from(value) * resolution)),
+    }
+}
+
+/// Scale a **signed** 16-bit NMEA field, honouring the signed sentinel band.
+///
+/// The DOPs in PGN 129539 are documented as "Range: +/-327.64" with a 1x10E-2
+/// resolution — that is `int16`, so "data not available" is `0x7FFF` and not
+/// `0xFFFF`. Decoding them as unsigned made an unavailable DOP read as a
+/// perfectly plausible 327.67, which a quality gate then treated as a real
+/// (very poor) value rather than as no value at all.
+fn nmea_i16_scaled_field(raw: i16, resolution: f64) -> Option<Option<f64>> {
+    if signed_i16_data_is_reserved(raw) {
+        return None;
+    }
+    if !signed_i16_data_is_available(raw) {
+        return Some(None);
+    }
+    Some(Some(f64::from(raw) * resolution))
+}
+
+/// A dilution-of-precision value, which is a ratio and so cannot be negative
+/// however the field is encoded. A negative raw is a corrupt frame, not a
+/// measurement.
+fn nmea_dop_field(raw: i16, resolution: f64) -> Option<Option<f64>> {
+    match nmea_i16_scaled_field(raw, resolution)? {
+        Some(value) if value < 0.0 => None,
+        other => Some(other),
     }
 }
 

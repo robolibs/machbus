@@ -1231,7 +1231,9 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     valid_dops[4..6].copy_from_slice(&150u16.to_le_bytes());
     valid_dops[6..8].copy_from_slice(&200u16.to_le_bytes());
     for range in [2..4, 4..6, 6..8] {
-        for reserved in [0xFFFDu16, 0xFFFE] {
+        // The DOPs are signed, so the reserved sentinel is at the top of the
+        // signed range, and a negative ratio is a corrupt frame either way.
+        for reserved in [(i16::MAX - 2) as u16, 0xFFFDu16] {
             let mut frame = valid_dops;
             frame[range.clone()].copy_from_slice(&reserved.to_le_bytes());
             iface.handle_message(&Message::new(PGN_GNSS_DOPS, frame.to_vec(), 0x24));
@@ -1241,10 +1243,12 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     assert!(iface.latest_position().unwrap().hdop.is_none());
     assert!(iface.latest_position().unwrap().vdop.is_none());
 
+    // Signed field, so "data not available" is 0x7FFF, not 0xFFFF.
+    let na = (i16::MAX as u16).to_le_bytes();
     let mut unavailable_dops = valid_dops;
-    unavailable_dops[2..4].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    unavailable_dops[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    unavailable_dops[6..8].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    unavailable_dops[2..4].copy_from_slice(&na);
+    unavailable_dops[4..6].copy_from_slice(&na);
+    unavailable_dops[6..8].copy_from_slice(&na);
     iface.handle_message(&Message::new(
         PGN_GNSS_DOPS,
         unavailable_dops.to_vec(),
@@ -1478,9 +1482,9 @@ fn nmea2000_gnss_dops_mode_byte_rejects_reserved_values_before_event_or_cache_up
     valid[4..6].copy_from_slice(&150u16.to_le_bytes());
     valid[6..8].copy_from_slice(&200u16.to_le_bytes());
 
+    // Note the two NMEA reserved bits (0x40/0x80) are deliberately absent:
+    // conformant transmitters set them, so they must never reject a frame.
     for reserved_mode_byte in [
-        valid[1] | 0x40,
-        valid[1] | 0x80,
         (valid[1] & !0x07) | 0x04,
         (valid[1] & !0x07) | 0x05,
         (valid[1] & !0x38) | (0x04 << 3),

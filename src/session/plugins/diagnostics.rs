@@ -26,6 +26,13 @@ pub struct Diagnostics {
     next_broadcast: Option<Instant>,
     lamps: DiagnosticLamps,
     active: Vec<Dtc>,
+    /// Whether the last broadcast carried at least one DTC.
+    ///
+    /// ISO 11783-12: a DTC that "has been active for 1 s or longer, and then
+    /// becomes inactive" requires one DM1 reflecting the change, "after that,
+    /// the DM1 is discontinued". Simply falling silent left the fault latched
+    /// in every receiver on the bus, with no way to learn it had cleared.
+    announced_active: bool,
 }
 
 impl Diagnostics {
@@ -37,6 +44,7 @@ impl Diagnostics {
             next_broadcast: None,
             lamps: DiagnosticLamps::default(),
             active: Vec::new(),
+            announced_active: false,
         }
     }
 
@@ -116,7 +124,10 @@ impl Plugin for Diagnostics {
         let now = ctx.now();
         let due = self.next_broadcast.is_none_or(|t| now >= t);
         if due {
-            if !self.active.is_empty() {
+            let has_active = !self.active.is_empty();
+            // Broadcast while faults are active, and exactly once more on the
+            // transition to none so receivers can clear what they are holding.
+            if has_active || self.announced_active {
                 ctx.send(
                     PGN_DM1,
                     self.dm1_payload(),
@@ -124,6 +135,7 @@ impl Plugin for Diagnostics {
                     Priority::Default,
                 );
             }
+            self.announced_active = has_active;
             self.next_broadcast = Some(now.add_millis(u64::from(self.interval_ms)));
         }
         self.next_broadcast
@@ -135,5 +147,90 @@ impl Plugin for Diagnostics {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::j1939::diagnostic::Fmi;
+    use crate::net::Name;
+    use crate::session::Session;
+
+    fn node() -> Session {
+        let name = Name::default()
+            .with_identity_number(0x31)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let mut s = Session::builder(name, 0x80)
+            .plug(Diagnostics::every(1000))
+            .build()
+            .unwrap();
+        s.start().unwrap();
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            s.tick(now);
+            while s.poll_transmit().is_some() {}
+            if s.is_claimed() {
+                break;
+            }
+        }
+        s
+    }
+
+    fn drain_dm1(s: &mut Session) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_DM1 {
+                out.push(frame.data.to_vec());
+            }
+        }
+        out
+    }
+
+    /// H36 — ISO 11783-12: a DTC that "has been active for 1 s or longer, and
+    /// then becomes inactive" requires one DM1 reflecting the change, "after
+    /// that, the DM1 is discontinued". Falling silent instead left the fault
+    /// latched in every receiver on the bus with no way to learn it cleared.
+    #[test]
+    fn clearing_the_last_dtc_is_announced_exactly_once() {
+        let mut s = node();
+        let mut now = Instant::from_millis(10_000);
+        s.get_mut::<Diagnostics>().unwrap().raise(Dtc {
+            spn: 1234,
+            fmi: Fmi::AboveNormal,
+            occurrence_count: 1,
+            conversion_method: false,
+        });
+
+        now = now.add_millis(1_000);
+        s.tick(now);
+        assert_eq!(drain_dm1(&mut s).len(), 1, "the active fault is broadcast");
+
+        s.get_mut::<Diagnostics>().unwrap().clear();
+        now = now.add_millis(1_000);
+        s.tick(now);
+        let cleared = drain_dm1(&mut s);
+        assert_eq!(
+            cleared.len(),
+            1,
+            "the transition to no active faults must be broadcast"
+        );
+        let decoded = DmDtcList::decode(&cleared[0]).expect("a well-formed DM1");
+        assert!(
+            decoded.dtcs.is_empty(),
+            "the clearing DM1 carries no active DTCs"
+        );
+
+        // And then it stops: nothing further while the list stays empty.
+        for _ in 0..5 {
+            now = now.add_millis(1_000);
+            s.tick(now);
+        }
+        assert!(
+            drain_dm1(&mut s).is_empty(),
+            "after the state change the DM1 is discontinued"
+        );
     }
 }

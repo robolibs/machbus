@@ -118,7 +118,16 @@ impl GNSSPosition {
     /// Straight-line (ECEF chord) distance in metres to `other`. For the short
     /// baselines typical in field work this is within millimetres of the surface
     /// arc, and it avoids picking an ENU/NED reference origin.
+    ///
+    /// **Not available on the `embedded` profile.** The `no_std` [`to_ecf`] is
+    /// a shape-only placeholder that leaves latitude and longitude in *degrees*
+    /// while `x` is in metres, so this would subtract degrees from degrees and
+    /// call the result a distance — off by orders of magnitude, with no hint
+    /// that anything was wrong. A number a guidance loop would act on is worth
+    /// a compile error rather than a plausible-looking lie; use a real geodesy
+    /// crate on the target until `geo-concord` builds for it.
     #[must_use]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn distance_to(&self, other: &GNSSPosition) -> f64 {
         let a = self.to_ecf();
         let b = other.to_ecf();
@@ -133,8 +142,13 @@ fn sqrt_f64(value: f64) -> f64 {
     value.sqrt()
 }
 
+/// Newton-Raphson square root for `no_std` builds without libm. Currently only
+/// reachable from the hosted `distance_to`, which is why it is allowed to be
+/// unused here — it stays so the embedded profile keeps a working sqrt the day
+/// a real geodesy backend lands.
 #[must_use]
 #[cfg(feature = "embedded")]
+#[allow(dead_code)]
 fn sqrt_f64(value: f64) -> f64 {
     if value <= 0.0 {
         return 0.0;

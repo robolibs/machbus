@@ -252,6 +252,12 @@ pub fn to_ecf(wgs: Wgs) -> Ecf {
     // Embedded fallback intentionally avoids libm. It is a stable,
     // dependency-free placeholder for protocol code that only needs a
     // Cartesian-shaped value; richer conversions require `geo-concord`.
+    //
+    // NOTE the units do not match the hosted implementation: `x` is metres
+    // while `y` and `z` are the raw degrees. Anything that treats the result as
+    // a metric Cartesian triple — differencing two of them for a distance, for
+    // instance — is wrong by orders of magnitude. `GNSSPosition::distance_to`
+    // is therefore not compiled on this profile.
     Ecf::new(EARTH_A_M + wgs.altitude, wgs.latitude, wgs.longitude)
 }
 

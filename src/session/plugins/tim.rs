@@ -16,6 +16,7 @@ use crate::net::pgn_defs::{
     PGN_REAR_HITCH_CMD, PGN_REAR_PTO, PGN_REAR_PTO_CMD,
 };
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
+use crate::safety::{SafeModeTrigger, TecuSafeMode};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{Event, Hitch, Pto, TimEvent};
 use crate::time::Instant;
@@ -49,6 +50,8 @@ pub struct Tim {
     /// Previous tick instant, so the authority watchdog can be advanced by the
     /// elapsed time rather than by tick count.
     last_tick: Option<Instant>,
+    /// ISO 11783-9 §4.7 safe-mode guard.
+    safe_mode: TecuSafeMode,
 }
 
 impl Tim {
@@ -65,7 +68,25 @@ impl Tim {
             pending_events: Vec::new(),
             pending_tx: Vec::new(),
             last_tick: None,
+            safe_mode: TecuSafeMode::new(),
         }
+    }
+
+    /// Enter ISO 11783-9 §4.7 safe mode. Engage commands are refused until it
+    /// is explicitly cleared; stops always pass.
+    pub const fn enter_safe_mode(&mut self, trigger: SafeModeTrigger) {
+        self.safe_mode.enter(trigger);
+    }
+
+    /// Leave safe mode — the operator override of §4.7. Deliberately explicit.
+    pub const fn clear_safe_mode(&mut self) {
+        self.safe_mode.clear();
+    }
+
+    /// Whether safe mode is currently blocking engage commands.
+    #[must_use]
+    pub const fn is_safe_mode_active(&self) -> bool {
+        self.safe_mode.is_active()
     }
 
     /// Current local authority/interlock guard.
@@ -213,6 +234,18 @@ impl Tim {
     }
 
     fn guarded(&mut self, guard: TimCommand, pgn: Pgn, bytes: Vec<u8>) -> Result<()> {
+        // ISO 11783-9 §4.7: no unexpected start, but always allow a stop.
+        // `TecuSafeMode` implemented exactly this and was consulted nowhere —
+        // the third of three safety abstractions the crate had that could not
+        // actually stop anything.
+        if !self.safe_mode.allows(guard.safe_mode_kind()) {
+            let error = TimValidationError::SafeModeActive;
+            self.pending_events.push(TimEvent::CommandBlocked {
+                command: guard,
+                error,
+            });
+            return Err(tim_error(error));
+        }
         match self.authority.ensure_command(guard) {
             Ok(()) => {
                 self.pending_tx.push((pgn, bytes, BROADCAST_ADDRESS));
@@ -406,6 +439,7 @@ mod tests {
         let mut s = Session::builder(name, 0x80)
             .plug(Tim::new(TimAuthority::new(TimOptionSet::from_options(&[
                 TimOption::FrontPtoEngagementCwIsSupported,
+                TimOption::FrontPtoDisengagementIsSupported,
             ]))))
             .build()
             .unwrap();
@@ -429,6 +463,66 @@ mod tests {
             8,
         );
         s.feed(0, &frame, at);
+    }
+
+    /// H59 — `TecuSafeMode` implemented the ISO 11783-9 §4.7 obligations ("no
+    /// unexpected start", "must allow stop") in full and was consulted by
+    /// nothing outside its own unit test. Wiring it into the guarded-command
+    /// path is what makes it able to stop anything.
+    #[test]
+    fn safe_mode_blocks_engagement_but_never_a_stop() {
+        let mut s = node();
+        let now = Instant::from_millis(10_000);
+        s.tick(now);
+        feed_pto_status(&mut s, now);
+        s.get_mut::<Tim>()
+            .unwrap()
+            .set_interlocks(TimInterlocks::all_clear());
+        s.get_mut::<Tim>()
+            .unwrap()
+            .request_authority(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+                TimOption::FrontPtoDisengagementIsSupported,
+            ]))
+            .unwrap();
+        s.get_mut::<Tim>().unwrap().grant_authority().unwrap();
+
+        // Engaging is allowed while safe mode is clear.
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_ok()
+        );
+
+        s.get_mut::<Tim>()
+            .unwrap()
+            .enter_safe_mode(SafeModeTrigger::TecuCommLoss);
+        assert!(s.get::<Tim>().unwrap().is_safe_mode_active());
+
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_err(),
+            "safe mode must refuse an unexpected start"
+        );
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_disengage(Pto::Front)
+                .is_ok(),
+            "a stop is never refused, whatever the safe-mode state"
+        );
+
+        // The exit is explicit, per the operator-override obligation.
+        s.get_mut::<Tim>().unwrap().clear_safe_mode();
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_ok()
+        );
     }
 
     /// C25 — `TimAuthority::keepalive` had no caller anywhere in the crate, so

@@ -206,6 +206,22 @@ pub enum TimCommand {
 }
 
 impl TimCommand {
+    /// How this command relates to the ISO 11783-9 §4.7 safe-mode constraints.
+    ///
+    /// Safe mode must block an *unexpected start* while always allowing a
+    /// *stop*, so anything that engages an actuator or commands motion is an
+    /// `Engage` and anything that disengages or halts is a `Disengage`.
+    #[must_use]
+    pub const fn safe_mode_kind(self) -> crate::safety::TecuCommandKind {
+        use crate::safety::TecuCommandKind as Kind;
+        match self {
+            Self::FrontPtoDisengage
+            | Self::RearPtoDisengage
+            | Self::VehicleSpeedStopMotion => Kind::Disengage,
+            _ => Kind::Engage,
+        }
+    }
+
     #[must_use]
     pub const fn required_option(self) -> TimOption {
         match self {
@@ -585,6 +601,9 @@ impl TimAuthority {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimValidationError {
+    /// ISO 11783-9 §4.7 safe mode is active, so a command that would start or
+    /// continue motion is refused. Stops are never refused.
+    SafeModeActive,
     AuxValveIndexOutOfRange {
         index: u8,
     },

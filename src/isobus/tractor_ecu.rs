@@ -34,77 +34,7 @@ pub enum PowerState {
     FinalShutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SafeModeTrigger {
-    #[default]
-    None,
-    PowerLoss,
-    EcuPowerLoss,
-    CanBusFail,
-    TecuCommLoss,
-    ManualTrigger,
-}
-
-/// How a command relates to the TECU safe-mode constraints (ISO 11783-9 §4.7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TecuCommandKind {
-    /// Engages motion / starts an actuator (hitch lower, PTO engage, drive).
-    Engage,
-    /// Disengages / stops / moves to a safe state.
-    Disengage,
-    /// Read-only status, no actuation.
-    Query,
-}
-
-/// TECU safe-mode guard (ISO 11783-9 §4.7). Enforces the safety obligations as
-/// repo-owned logic: no unexpected start (engage commands are blocked while in
-/// safe mode), must allow stop (disengage always passes), loss-of-comms auto-
-/// stop (enter on the relevant trigger), and operator override (explicit clear).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TecuSafeMode {
-    active: bool,
-    trigger: SafeModeTrigger,
-}
-
-impl TecuSafeMode {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            active: false,
-            trigger: SafeModeTrigger::None,
-        }
-    }
-
-    /// Enter safe mode, recording why.
-    pub const fn enter(&mut self, trigger: SafeModeTrigger) {
-        self.active = true;
-        self.trigger = trigger;
-    }
-
-    /// Operator override / conditions clear: leave safe mode.
-    pub const fn clear(&mut self) {
-        self.active = false;
-        self.trigger = SafeModeTrigger::None;
-    }
-
-    #[must_use]
-    pub const fn is_active(&self) -> bool {
-        self.active
-    }
-
-    #[must_use]
-    pub const fn trigger(&self) -> SafeModeTrigger {
-        self.trigger
-    }
-
-    /// Whether a command of `kind` may take effect now. In safe mode only
-    /// disengage/stop and read-only queries are allowed; engage commands are
-    /// refused (and the caller should NACK them).
-    #[must_use]
-    pub const fn allows(&self, kind: TecuCommandKind) -> bool {
-        !self.active || matches!(kind, TecuCommandKind::Disengage | TecuCommandKind::Query)
-    }
-}
+pub use crate::safety::{SafeModeTrigger, TecuCommandKind, TecuSafeMode};
 
 // ─── Classification ───────────────────────────────────────────────────
 

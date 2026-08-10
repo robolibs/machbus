@@ -675,6 +675,7 @@ fn vt_server_get_attribute_value_reports_working_set_special_controls_extension_
     );
     let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
     transfer.extend(pool.serialize().unwrap());
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, source))

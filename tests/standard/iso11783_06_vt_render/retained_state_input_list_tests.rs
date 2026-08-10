@@ -1185,6 +1185,7 @@ fn vt_server_accepts_input_list_change_numeric_value_as_one_byte_selection() {
     ));
     let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
     transfer.extend(pool.serialize().unwrap());
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, source))
@@ -1202,11 +1203,7 @@ fn vt_server_accepts_input_list_change_numeric_value_as_one_byte_selection() {
     change[1..3].copy_from_slice(&3u16.to_le_bytes());
     change[3] = 0xFF;
     change[4] = 1;
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, change.to_vec(), source))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, change.to_vec(), source)));
 
     let state = &server.clients()[0].object_state;
     assert_eq!(state.numeric_values.get(&ObjectID::new(3)), Some(&1));

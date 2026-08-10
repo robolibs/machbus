@@ -1,3 +1,22 @@
+/// E1 — ISO 11783-6 Annex F.1: "The VT shall respond to these commands even if
+/// no object pool of the originating Working Set is loaded. The originator
+/// shall wait for a response before sending another command."
+///
+/// A command the VT refuses is still answered; the refusal goes in the error
+/// byte. These assertions used to require an *empty* reply, which is exactly
+/// the defect — a Working Set then blocked 1,5 s and retried three times before
+/// declaring the terminal unresponsive.
+#[allow(dead_code)]
+#[track_caller]
+fn assert_annex_f_refusal(out: &[machbus::isobus::vt::OutboundFrame]) {
+    assert_eq!(out.len(), 1, "Annex F.1 requires a response");
+    assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+    assert!(
+        out[0].data[1..].iter().any(|&b| b != 0xFF),
+        "a refused command must carry an error, not an all-FF reply"
+    );
+}
+
 #[test]
 fn fixture_isobus_niu_router_reassembles_routed_tp_etp_sessions() {
     let raw_id =
@@ -542,6 +561,8 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ] {
         let mut bad_server = VTServer::new(VTServerConfig::default());
         bad_server.start().unwrap();
+        // Object Pool Transfer has no Annex F response — it is answered by the
+        // End of Object Pool response — so silence is correct here.
         assert!(
             bad_server
                 .handle_ecu_message(&Message::with_addressing(
@@ -1128,53 +1149,57 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     server
         .on_string_value_change
         .subscribe(move |v| server_string_log_sink.borrow_mut().push(v.clone()));
+    // E1 — Annex F.1: the VT answers these commands whether it carries them out
+    // or not; a refusal is reported in the error byte, not by silence. These
+    // used to assert an *empty* reply, which is the defect: a Working Set that
+    // sends a malformed command would wait 1,5 s and retry three times before
+    // giving up on the terminal.
+    let refused = |server: &mut VTServer, data: Vec<u8>| {
+        let function = data[0];
+        let out = server.handle_ecu_message(&Message::with_addressing(
+            PGN_ECU_TO_VT,
+            data,
+            0x42,
+            0x80,
+            Priority::Default,
+        ));
+        assert_eq!(out.len(), 1, "F.1 requires a response to {function:#04X}");
+        assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+        assert_eq!(
+            out[0].data[0], function,
+            "F.1: the response echoes the command's function code"
+        );
+        // The error byte's position is per-command; the unit tests in
+        // `vt::server` check it against `VtResponseShape`. Here it is enough
+        // that the VT answered at all and did not act on the command.
+        assert!(
+            out[0].data[1..].iter().any(|&b| b != 0xFF),
+            "a refused command must carry an error, not an all-FF reply"
+        );
+    };
+    refused(&mut server, truncated_client_string);
     assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                truncated_client_string,
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
+        server_string_log.borrow().is_empty(),
+        "VT server must not act on truncated ECU string-change commands"
+    );
+    refused(
+        &mut server,
+        parse_named_hex_frame(
+            ISOBUS_VT_COMMANDS_HEX,
+            "client_change_numeric_value_bad_reserved",
+        )
+        .to_vec(),
+    );
+    refused(
+        &mut server,
+        parse_named_hex_bytes(
+            ISOBUS_VT_COMMANDS_HEX,
+            "client_change_string_value_obj5_bad_tail",
+        ),
     );
     assert!(
         server_string_log.borrow().is_empty(),
-        "VT server must reject truncated ECU string-change commands"
-    );
-    assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                parse_named_hex_frame(
-                    ISOBUS_VT_COMMANDS_HEX,
-                    "client_change_numeric_value_bad_reserved",
-                )
-                .to_vec(),
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
-    );
-    assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                parse_named_hex_bytes(
-                    ISOBUS_VT_COMMANDS_HEX,
-                    "client_change_string_value_obj5_bad_tail"
-                ),
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
-    );
-    assert!(
-        server_string_log.borrow().is_empty(),
-        "VT server must reject bad reserved numeric and bad-tail string commands"
+        "VT server must not act on bad reserved numeric or bad-tail string commands"
     );
     assert_eq!(
         VTServer::build_select_input_object(0x1234, true, true),

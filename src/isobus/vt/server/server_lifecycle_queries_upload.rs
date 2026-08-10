@@ -432,12 +432,12 @@ impl VTServer {
             cmd::GET_WINDOW_MASK_DATA => self.handle_get_window_mask_data(msg),
             cmd::END_OF_POOL => self.handle_end_of_pool(msg),
             cmd::CHANGE_NUMERIC_VALUE => {
-                self.handle_numeric_value_change(msg);
-                Vec::new()
+                let outcome = self.handle_numeric_value_change(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_STRING_VALUE => {
-                self.handle_string_value_change(msg);
-                Vec::new()
+                let outcome = self.handle_string_value_change(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SELECT_ACTIVE_WORKING_SET => {
                 self.handle_select_active_working_set(msg);
@@ -445,107 +445,107 @@ impl VTServer {
             }
             cmd::ESC_INPUT => self.handle_esc_input(msg),
             cmd::HIDE_SHOW => {
-                self.handle_hide_show(msg);
-                Vec::new()
+                let outcome = self.handle_hide_show(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::ENABLE_DISABLE => {
-                self.handle_enable_disable(msg);
-                Vec::new()
+                let outcome = self.handle_enable_disable(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SELECT_INPUT_OBJECT_COMMAND => self.handle_select_input_object_command(msg),
             cmd::CONTROL_AUDIO_SIGNAL => {
-                self.handle_control_audio_signal(msg);
-                Vec::new()
+                let outcome = self.handle_control_audio_signal(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SET_AUDIO_VOLUME => {
-                self.handle_set_audio_volume(msg);
-                Vec::new()
+                let outcome = self.handle_set_audio_volume(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_CHILD_LOCATION => {
-                self.handle_change_child_location(msg);
-                Vec::new()
+                let outcome = self.handle_change_child_location(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_SIZE => {
-                self.handle_change_size(msg);
-                Vec::new()
+                let outcome = self.handle_change_size(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_BACKGROUND_COLOUR => {
-                self.handle_change_background_colour(msg);
-                Vec::new()
+                let outcome = self.handle_change_background_colour(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_END_POINT => {
-                self.handle_change_end_point(msg);
-                Vec::new()
+                let outcome = self.handle_change_end_point(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_FONT_ATTRIBUTES => {
-                self.handle_change_font_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_font_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_LINE_ATTRIBUTES => {
-                self.handle_change_line_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_line_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_FILL_ATTRIBUTES => {
-                self.handle_change_fill_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_fill_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_ACTIVE_MASK => {
-                self.handle_change_active_mask(msg);
-                Vec::new()
+                let outcome = self.handle_change_active_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_SOFT_KEY_MASK => {
-                self.handle_change_soft_key_mask(msg);
-                Vec::new()
+                let outcome = self.handle_change_soft_key_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_ATTRIBUTE => {
-                self.handle_change_attribute(msg);
-                Vec::new()
+                let outcome = self.handle_change_attribute(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::GET_ATTRIBUTE_VALUE => self.handle_get_attribute_value(msg),
             cmd::CHANGE_PRIORITY => {
-                self.handle_change_priority(msg);
-                Vec::new()
+                let outcome = self.handle_change_priority(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_LIST_ITEM => {
-                self.handle_change_list_item(msg);
-                Vec::new()
+                let outcome = self.handle_change_list_item(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::DELETE_OBJECT_POOL => {
-                self.handle_delete_object_pool(msg);
-                Vec::new()
+                let outcome = self.handle_delete_object_pool(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_CHILD_POSITION => {
-                self.handle_change_child_position(msg);
-                Vec::new()
+                let outcome = self.handle_change_child_position(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_OBJECT_LABEL => {
-                self.handle_change_object_label(msg);
-                Vec::new()
+                let outcome = self.handle_change_object_label(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_POLYGON_POINT => {
-                self.handle_change_polygon_point(msg);
-                Vec::new()
+                let outcome = self.handle_change_polygon_point(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_POLYGON_SCALE => {
-                self.handle_change_polygon_scale(msg);
-                Vec::new()
+                let outcome = self.handle_change_polygon_scale(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::GRAPHICS_CONTEXT => self.handle_graphics_context(msg),
             cmd::SELECT_COLOUR_MAP => {
-                self.handle_select_colour_map(msg);
-                Vec::new()
+                let outcome = self.handle_select_colour_map(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::LOCK_UNLOCK_MASK => {
-                self.handle_lock_unlock_mask(msg);
-                Vec::new()
+                let outcome = self.handle_lock_unlock_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::EXECUTE_MACRO => {
-                self.handle_execute_macro(msg);
-                Vec::new()
+                let outcome = self.handle_execute_macro(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::EXECUTE_EXTENDED_MACRO => {
-                self.handle_execute_extended_macro(msg);
-                Vec::new()
+                let outcome = self.handle_execute_extended_macro(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::WORKING_SET_MAINTENANCE => self.handle_working_set_maintenance(msg),
             cmd::UNSUPPORTED_VT_FUNCTION => Vec::new(),
@@ -570,6 +570,27 @@ impl VTServer {
     /// This was unhandled, so it fell through to the catch-all and the VT
     /// answered every one with Unsupported VT Function — once per second,
     /// forever — while never noticing a working set going away.
+    /// Build the Annex F response for a command, if that command defines one.
+    ///
+    /// F.1: "The VT shall respond to these commands even if no object pool of
+    /// the originating Working Set is loaded. The originator shall wait for a
+    /// response before sending another command. Unless stated otherwise,
+    /// another command can be sent if a response is not received within 1,5 s."
+    ///
+    /// Commands with no Annex F response — Object Pool Transfer, answered by
+    /// End of Object Pool — return nothing.
+    fn annex_f_response(&self, msg: &Message, outcome: CommandOutcome) -> Vec<OutboundFrame> {
+        let Some(shape) = VtResponseShape::for_command(msg.data[0]) else {
+            return Vec::new();
+        };
+        vec![OutboundFrame::to(
+            shape
+                .response(&msg.data, shape.error_bits(outcome))
+                .to_vec(),
+            msg.source,
+        )]
+    }
+
     fn handle_working_set_maintenance(&mut self, msg: &Message) -> Vec<OutboundFrame> {
         if !is_fixed_vt_payload(&msg.data) {
             return Vec::new();
@@ -944,26 +965,26 @@ impl VTServer {
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }
 
-    fn handle_numeric_value_change(&mut self, msg: &Message) {
+    fn handle_numeric_value_change(&mut self, msg: &Message) -> CommandOutcome {
         if msg.data.len() != 8 || msg.data[3] != 0xFF {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let Some(client) = self
             .find_client(msg.source)
             .filter(|client| client.pool_activated)
         else {
-            return;
+            return CommandOutcome::Other;
         };
         let Some(object) = client.pool.find(id) else {
-            return;
+            return CommandOutcome::Other;
         };
         let object_type = object.r#type;
         let Some(value_width) = numeric_value_width_for_type(object_type) else {
-            return;
+            return CommandOutcome::Other;
         };
         if !numeric_value_payload_width_is_canonical(&msg.data, value_width) {
-            return;
+            return CommandOutcome::Other;
         }
         let raw_val = u32_le(&msg.data[4..]);
         let value = match value_width {
@@ -972,7 +993,7 @@ impl VTServer {
             _ => raw_val,
         };
         if !numeric_value_is_valid(&client.pool, object, value) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.activated_client_object_state_mut(msg.source) {
             state.numeric_values.insert(id, value);
@@ -987,23 +1008,24 @@ impl VTServer {
                 .push(ServerRenderEffect::ChangeNumericValue { id, value });
             self.on_numeric_value_change.emit(&(id, value));
         }
+        CommandOutcome::Done
     }
 
-    fn handle_string_value_change(&mut self, msg: &Message) {
+    fn handle_string_value_change(&mut self, msg: &Message) -> CommandOutcome {
         if msg.data.len() < 5 {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let len = u16_le(&msg.data[3..]) as usize;
         let end = 5 + len;
         if !vt_string_payload_is_canonical(&msg.data, end) {
-            return;
+            return CommandOutcome::Other;
         }
         let Some(s) = decode_vt_string_value(&msg.data[5..end]) else {
-            return;
+            return CommandOutcome::Other;
         };
         let Some(s) = self.normalized_string_value_change(msg.source, id, s) else {
-            return;
+            return CommandOutcome::Other;
         };
         if let Some(state) = self.activated_client_object_state_mut(msg.source) {
             state.string_values.insert(id, s.clone());
@@ -1015,6 +1037,7 @@ impl VTServer {
                 });
             self.on_string_value_change.emit(&(id, s));
         }
+        CommandOutcome::Done
     }
 
     fn normalized_string_value_change(

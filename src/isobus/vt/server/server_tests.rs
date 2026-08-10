@@ -430,6 +430,87 @@ mod tests {
         );
     }
 
+    /// E1 — Annex F.1: "The VT shall respond to these commands even if no object
+    /// pool of the originating Working Set is loaded. The originator shall wait
+    /// for a response before sending another command. Unless stated otherwise,
+    /// another command can be sent if a response is not received within 1,5 s."
+    ///
+    /// Every mutating command used to return no frame at all, so a conformant
+    /// Working Set blocked 1,5 s per command and retried three times before
+    /// declaring the VT unresponsive. A burst of Change Numeric Value updates
+    /// advanced at roughly one command per 1,5 s instead of one per CAN frame.
+    #[test]
+    fn every_annex_f_command_is_answered_even_with_no_pool_loaded() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        // Deliberately no pool: F.1 says the VT answers anyway.
+        for function in [
+            cmd::HIDE_SHOW,
+            cmd::ENABLE_DISABLE,
+            cmd::CONTROL_AUDIO_SIGNAL,
+            cmd::SET_AUDIO_VOLUME,
+            cmd::CHANGE_CHILD_LOCATION,
+            cmd::CHANGE_CHILD_POSITION,
+            cmd::CHANGE_SIZE,
+            cmd::CHANGE_BACKGROUND_COLOUR,
+            cmd::CHANGE_NUMERIC_VALUE,
+            cmd::CHANGE_END_POINT,
+            cmd::CHANGE_FONT_ATTRIBUTES,
+            cmd::CHANGE_LINE_ATTRIBUTES,
+            cmd::CHANGE_FILL_ATTRIBUTES,
+            cmd::CHANGE_ACTIVE_MASK,
+            cmd::CHANGE_SOFT_KEY_MASK,
+            cmd::CHANGE_ATTRIBUTE,
+            cmd::CHANGE_PRIORITY,
+            cmd::CHANGE_LIST_ITEM,
+            cmd::DELETE_OBJECT_POOL,
+            cmd::CHANGE_POLYGON_POINT,
+            cmd::CHANGE_POLYGON_SCALE,
+            cmd::SELECT_COLOUR_MAP,
+            cmd::LOCK_UNLOCK_MASK,
+            cmd::EXECUTE_MACRO,
+        ] {
+            let mut data = [0xFFu8; 8];
+            data[0] = function;
+            // A real, non-NULL Object ID: 0xFFFF means "no object" on several
+            // of these commands, which is a legitimate no-pool operation and
+            // would not exercise the missing-object path at all.
+            data[1..3].copy_from_slice(&0x1234u16.to_le_bytes());
+            let out = s.handle_ecu_message(&ecu_msg(data.to_vec(), 0x42));
+
+            assert_eq!(
+                out.len(),
+                1,
+                "function {function:#04X} must be answered (Annex F.1)"
+            );
+            let reply = &out[0].data;
+            assert_eq!(reply.len(), 8);
+            assert_eq!(
+                reply[0], function,
+                "F.1: the response echoes the command's function code"
+            );
+
+            // Commands that address an object cannot have succeeded with no
+            // pool loaded. Three do not address one: the two audio commands,
+            // and Delete Object Pool, which is idempotent — deleting nothing is
+            // not an error. F.1 only requires that they are *answered*.
+            let shape = VtResponseShape::for_command(function)
+                .expect("this command defines an Annex F response");
+            let addresses_an_object = !matches!(
+                function,
+                cmd::CONTROL_AUDIO_SIGNAL | cmd::SET_AUDIO_VOLUME | cmd::DELETE_OBJECT_POOL
+            );
+            if addresses_an_object {
+                assert_ne!(
+                    reply[shape.echo + 1],
+                    0,
+                    "function {function:#04X} cannot have succeeded with no pool"
+                );
+            }
+        }
+    }
+
     #[test]
     fn vt_status_carries_the_visible_mask_object_ids() {
         let mut s = VTServer::new(VTServerConfig::default());
@@ -524,9 +605,45 @@ mod tests {
         s.start().unwrap();
         activate_valid_pool(&mut s, 0x42);
 
+        // E1 — Annex F.1: "The originator shall wait for a response before
+        // sending another command." This used to assert `out.is_empty()`, i.e.
+        // that these commands produce no frame at all, which is the defect: a
+        // conformant Working Set then blocked 1,5 s per command.
         let send = |server: &mut VTServer, data: Vec<u8>| {
+            let function = data[0];
+            let out = server.handle_ecu_message(&ecu_msg(data.clone(), 0x42));
+            let shape = VtResponseShape::for_command(function)
+                .expect("every command here has an Annex F response");
+            assert_eq!(out.len(), 1, "function {function:#04X} must be answered");
+            let reply = &out[0].data;
+            assert_eq!(reply.len(), 8);
+            assert_eq!(reply[0], function, "F.1: the response echoes the function");
+            for i in 1..=shape.echo {
+                assert_eq!(
+                    reply[i], data[i],
+                    "F.1: byte {} must be echoed from the command",
+                    i + 1
+                );
+            }
+            assert_eq!(
+                reply[shape.echo + 1],
+                0,
+                "command {function:#04X} reported an error"
+            );
+        };
+
+        // A command the VT refuses still gets an Annex F response — that is the
+        // whole point of F.1 — but with the error byte set.
+        let send_rejected = |server: &mut VTServer, data: Vec<u8>| {
+            let function = data[0];
             let out = server.handle_ecu_message(&ecu_msg(data, 0x42));
-            assert!(out.is_empty(), "implemented ECU command must not NACK");
+            let shape = VtResponseShape::for_command(function).expect("has a response");
+            assert_eq!(out.len(), 1, "a refusal must still be answered");
+            assert_ne!(
+                out[0].data[shape.echo + 1],
+                0,
+                "command {function:#04X} was refused and must say so"
+            );
         };
 
         send(
@@ -771,7 +888,8 @@ mod tests {
         );
         assert_eq!(state.executed_macros, vec![ObjectID(0x99)]);
 
-        send(
+        // 0x02 is not a canonical Hide/Show value (F.2: 0 = Hide, 1 = Show).
+        send_rejected(
             &mut s,
             vec![cmd::HIDE_SHOW, 0x11, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF],
         );

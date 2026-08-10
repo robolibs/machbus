@@ -302,3 +302,118 @@ struct DecodedAuxInputStatus {
     state: AuxFunctionState,
     setpoint: u16,
 }
+
+/// What a command handler did, in terms Annex F can encode.
+///
+/// Handlers return this rather than raw error bits because the bit *positions*
+/// differ per command — Change Size (F.19) reports an invalid Object ID in bit
+/// 0, Hide/Show (F.3) in bit 1 — and repeating that in every handler is how
+/// they drift apart. [`VtResponseShape`] owns the mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandOutcome {
+    /// The command was carried out.
+    Done,
+    /// The referenced object does not exist, or is the wrong type.
+    InvalidObject,
+    /// Anything else: a malformed payload, an unknown client, a refused change.
+    Other,
+}
+
+/// Annex F response shape for a VT command the Working Set must wait on.
+///
+/// F.1: "The VT shall respond to these commands even if no object pool of the
+/// originating Working Set is loaded. The originator shall wait for a response
+/// before sending another command. Unless stated otherwise, another command can
+/// be sent if a response is not received within 1,5 s."
+///
+/// Every one of these commands used to return no frame at all, so a conformant
+/// Working Set blocked 1,5 s per command, retried three times, then declared
+/// the VT unresponsive. A burst of Change Numeric Value updates advanced at
+/// roughly one command per 1,5 s instead of one per CAN frame.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VtResponseShape {
+    /// How many bytes after the function code the response echoes verbatim.
+    /// F.1: "any attribute in a response message which also exists in the
+    /// command message shall be set to the same value as in the command
+    /// message".
+    pub echo: usize,
+    /// Bit for "invalid Object ID" in this command's error byte. Commands
+    /// differ: Change Size (F.19) uses bit 0, Hide/Show (F.3) uses bit 1.
+    pub invalid_object_bit: u8,
+    /// Bit for "any other error" in this command's error byte.
+    pub other_error_bit: u8,
+}
+
+impl VtResponseShape {
+    const fn new(echo: usize, invalid_object_bit: u8, other_error_bit: u8) -> Self {
+        Self {
+            echo,
+            invalid_object_bit,
+            other_error_bit,
+        }
+    }
+
+    /// The Annex F shape for `function`, or `None` if it has no such response.
+    pub(crate) const fn for_command(function: u8) -> Option<Self> {
+        use crate::isobus::vt::commands::cmd;
+        Some(match function {
+            // F.3 / F.5: Object ID + the show/enable flag, error in byte 5.
+            cmd::HIDE_SHOW | cmd::ENABLE_DISABLE => Self::new(3, 0x02, 0x10),
+            // F.11 / F.13: nothing echoed, error in byte 2.
+            cmd::CONTROL_AUDIO_SIGNAL | cmd::SET_AUDIO_VOLUME => Self::new(0, 0x00, 0x10),
+            // F.15 / F.17: parent Object ID + child Object ID, error in byte 6.
+            cmd::CHANGE_CHILD_LOCATION | cmd::CHANGE_CHILD_POSITION => Self::new(4, 0x01, 0x10),
+            // F.19 / F.27 / F.29 / F.31 / F.33 / F.35 / F.53 / F.61:
+            // Object ID only, error in byte 4.
+            cmd::CHANGE_SIZE
+            | cmd::CHANGE_END_POINT
+            | cmd::CHANGE_FONT_ATTRIBUTES
+            | cmd::CHANGE_LINE_ATTRIBUTES
+            | cmd::CHANGE_FILL_ATTRIBUTES
+            | cmd::CHANGE_POLYGON_POINT
+            | cmd::SELECT_COLOUR_MAP => Self::new(2, 0x01, 0x10),
+            // F.35 uses bit 0 for an invalid Working Set and bit 1 for the mask.
+            cmd::CHANGE_ACTIVE_MASK => Self::new(2, 0x02, 0x10),
+            // F.21 / F.39 / F.41: Object ID + one parameter byte, error in byte 5.
+            cmd::CHANGE_BACKGROUND_COLOUR | cmd::CHANGE_ATTRIBUTE | cmd::CHANGE_PRIORITY => {
+                Self::new(3, 0x01, 0x10)
+            }
+            // F.37 / F.55: Object ID + a second two-byte field, error in byte 6.
+            cmd::CHANGE_SOFT_KEY_MASK | cmd::CHANGE_POLYGON_SCALE => Self::new(4, 0x01, 0x10),
+            // F.43: Object ID + list index + new Object ID, error in byte 7.
+            cmd::CHANGE_LIST_ITEM => Self::new(5, 0x01, 0x10),
+            // F.23: Object ID, error in byte 4.
+            cmd::CHANGE_NUMERIC_VALUE => Self::new(2, 0x01, 0x10),
+            // F.25: byte 2 reserved FF, Object ID in bytes 4-5, error in byte 6.
+            cmd::CHANGE_STRING_VALUE => Self::new(4, 0x02, 0x10),
+            // F.51: nothing echoed, error in byte 2.
+            cmd::CHANGE_OBJECT_LABEL => Self::new(0, 0x01, 0x08),
+            // F.45: nothing echoed, error in byte 2.
+            cmd::DELETE_OBJECT_POOL => Self::new(0, 0x00, 0x08),
+            // F.47 / F.49: one echoed byte, error in byte 3.
+            cmd::LOCK_UNLOCK_MASK => Self::new(1, 0x01, 0x04),
+            cmd::EXECUTE_MACRO => Self::new(1, 0x01, 0x04),
+            _ => return None,
+        })
+    }
+
+    /// The error bits for `outcome` in this command's error byte.
+    pub(crate) const fn error_bits(self, outcome: CommandOutcome) -> u8 {
+        match outcome {
+            CommandOutcome::Done => 0,
+            CommandOutcome::InvalidObject => self.invalid_object_bit,
+            CommandOutcome::Other => self.other_error_bit,
+        }
+    }
+
+    /// Build the response frame for `msg` carrying `error_bits`.
+    pub(crate) fn response(self, msg: &[u8], error_bits: u8) -> [u8; 8] {
+        let mut out = [0xFFu8; 8];
+        out[0] = msg[0];
+        for (i, byte) in out.iter_mut().enumerate().take(self.echo + 1).skip(1) {
+            *byte = msg.get(i).copied().unwrap_or(0xFF);
+        }
+        out[self.echo + 1] = error_bits;
+        out
+    }
+}

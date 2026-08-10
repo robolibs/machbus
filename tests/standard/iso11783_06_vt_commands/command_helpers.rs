@@ -44,6 +44,25 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// E1 — ISO 11783-6 Annex F.1: "The VT shall respond to these commands even if
+/// no object pool of the originating Working Set is loaded. The originator
+/// shall wait for a response before sending another command."
+///
+/// A command the VT refuses is still answered; the refusal goes in the error
+/// byte. These assertions used to require an *empty* reply, which is exactly
+/// the defect — a Working Set then blocked 1,5 s and retried three times before
+/// declaring the terminal unresponsive.
+#[allow(dead_code)]
+#[track_caller]
+fn assert_annex_f_refusal(out: &[machbus::isobus::vt::OutboundFrame]) {
+    assert_eq!(out.len(), 1, "Annex F.1 requires a response");
+    assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+    assert!(
+        out[0].data[1..].iter().any(|&b| b != 0xFF),
+        "a refused command must carry an error, not an all-FF reply"
+    );
+}
+
 fn fixed_command(command: u8) -> Vec<u8> {
     let mut data = [0xFFu8; 8];
     data[0] = command;
@@ -618,13 +637,11 @@ fn activate_standard_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                minimal_object_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, minimal_object_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -648,13 +665,11 @@ fn activate_reference_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                object_reference_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, object_reference_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -678,13 +693,11 @@ fn activate_key_pointer_context_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                key_pointer_context_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, key_pointer_context_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -708,6 +721,8 @@ fn activate_aux_assignment_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response (it is answered by End of
+    // Object Pool), so silence is correct here.
     assert!(
         server
             .handle_ecu_message(&Message::new(
@@ -892,6 +907,7 @@ fn vt_server_rejects_invalid_ecu_sources_before_client_or_reply_state() {
 
         let mut get_memory = [0xFFu8; 8];
         get_memory[0] = cmd::GET_MEMORY;
+        // An unusable source address is dropped before dispatch, so no response is owed.
         assert!(
             server
                 .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, get_memory.to_vec(), source))
@@ -912,6 +928,8 @@ fn vt_server_rejects_invalid_ecu_sources_before_client_or_reply_state() {
     server.start().unwrap();
     let mut get_memory = [0xFFu8; 8];
     get_memory[0] = cmd::GET_MEMORY;
+    // A frame addressed to the NULL address is not addressed to this VT, so it
+    // is dropped before dispatch and no Annex F response is owed.
     assert!(
         server
             .handle_ecu_message(&Message::with_addressing(
@@ -1201,6 +1219,8 @@ fn vt_handlers_reject_wrong_pgn_envelopes_before_state_or_events() {
     let mut server = VTServer::new(VTServerConfig::default());
     server.start().unwrap();
 
+    // A frame on the wrong PGN is not a VT command at all: it is dropped
+    // before dispatch, so no Annex F response is owed.
     assert!(
         server
             .handle_ecu_message(&Message::new(
@@ -1712,6 +1732,7 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
     let mut server = VTServer::new(VTServerConfig::default());
     server.start().unwrap();
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer.clone(), 0x42))
@@ -1746,6 +1767,7 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
     );
     assert_eq!(server.clients().len(), 1);
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, 0x42))

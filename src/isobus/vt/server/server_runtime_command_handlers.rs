@@ -1,15 +1,15 @@
 impl VTServer {
-    fn handle_hide_show(&mut self, msg: &Message) {
+    fn handle_hide_show(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data)
             || !is_canonical_bool(msg.data[3])
             || !has_ff_tail(&msg.data, 4)
         {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let object_type = self.client_pool_object_type(msg.source, id);
         if object_type != Some(ObjectType::Container) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             let visible = msg.data[3] != 0;
@@ -23,21 +23,22 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::HideShow { id, visible });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_enable_disable(&mut self, msg: &Message) {
+    fn handle_enable_disable(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data)
             || !is_canonical_bool(msg.data[3])
             || !has_ff_tail(&msg.data, 4)
         {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let Some(object_type) = self.client_pool_object_type(msg.source, id) else {
-            return;
+            return CommandOutcome::InvalidObject;
         };
         if !is_enable_disable_object_type(object_type) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             let enabled = msg.data[3] != 0;
@@ -46,6 +47,7 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::EnableDisable { id, enabled });
         }
+        CommandOutcome::Done
     }
 
     fn handle_select_input_object_command(&mut self, msg: &Message) -> Vec<OutboundFrame> {
@@ -112,9 +114,9 @@ impl VTServer {
         )]
     }
 
-    fn handle_control_audio_signal(&mut self, msg: &Message) {
+    fn handle_control_audio_signal(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) {
-            return;
+            return CommandOutcome::Other;
         }
         let audio = AudioSignalState {
             activations: msg.data[1],
@@ -126,11 +128,12 @@ impl VTServer {
             state.audio_signal = Some(audio);
             state.accepted_effects.push(ServerRenderEffect::AudioSignal);
         }
+        CommandOutcome::Done
     }
 
-    fn handle_set_audio_volume(&mut self, msg: &Message) {
+    fn handle_set_audio_volume(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || msg.data[1] > 100 || !has_ff_tail(&msg.data, 2) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             let percent = msg.data[1];
@@ -139,16 +142,17 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::SetAudioVolume { percent });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_child_location(&mut self, msg: &Message) {
+    fn handle_change_child_location(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let parent = ObjectID(u16_le(&msg.data[1..]));
         let child = ObjectID(u16_le(&msg.data[3..]));
         if !self.client_pool_object_is_child_of(msg.source, parent, child) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state
@@ -163,18 +167,19 @@ impl VTServer {
                     y: msg.data[6],
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_size(&mut self, msg: &Message) {
+    fn handle_change_size(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let Some(object_type) = self.client_pool_object_type(msg.source, id) else {
-            return;
+            return CommandOutcome::InvalidObject;
         };
         if !change_size_target_is_valid(object_type) {
-            return;
+            return CommandOutcome::Other;
         }
         let width = u16_le(&msg.data[3..]);
         let height = u16_le(&msg.data[5..]);
@@ -184,18 +189,19 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangeSize { id, width, height });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_background_colour(&mut self, msg: &Message) {
+    fn handle_change_background_colour(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 4) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let Some(object_type) = self.client_pool_object_type(msg.source, id) else {
-            return;
+            return CommandOutcome::InvalidObject;
         };
         if !change_background_colour_target_is_valid(object_type) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             let colour = msg.data[3];
@@ -204,11 +210,12 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangeBackgroundColour { id, colour });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_end_point(&mut self, msg: &Message) {
+    fn handle_change_end_point(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let width = u16_le(&msg.data[3..]);
@@ -216,7 +223,7 @@ impl VTServer {
         let line_direction = msg.data[7];
         if line_direction > 1 || !self.client_pool_has_object_type(msg.source, id, ObjectType::Line)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.endpoints.insert(id, (width, height, line_direction));
@@ -229,11 +236,12 @@ impl VTServer {
                     line_direction,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_font_attributes(&mut self, msg: &Message) {
+    fn handle_change_font_attributes(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let colour = msg.data[3];
@@ -244,7 +252,7 @@ impl VTServer {
             || !is_standard_font_type(font_type)
             || !self.client_pool_has_object_type(msg.source, id, ObjectType::FontAttributes)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.attributes.insert((id, 1), u32::from(colour));
@@ -261,18 +269,19 @@ impl VTServer {
                     style,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_line_attributes(&mut self, msg: &Message) {
+    fn handle_change_line_attributes(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let colour = msg.data[3];
         let width = msg.data[4];
         let line_art = u16_le(&msg.data[5..]);
         if !self.client_pool_has_object_type(msg.source, id, ObjectType::LineAttributes) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.attributes.insert((id, 1), u32::from(colour));
@@ -287,11 +296,12 @@ impl VTServer {
                     line_art,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_fill_attributes(&mut self, msg: &Message) {
+    fn handle_change_fill_attributes(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let fill_type = msg.data[3];
@@ -300,18 +310,18 @@ impl VTServer {
         if fill_type > 3
             || !self.client_pool_has_object_type(msg.source, id, ObjectType::FillAttributes)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if pattern != ObjectID::NULL
             && !self.client_pool_has_object_type(msg.source, pattern, ObjectType::PictureGraphic)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if fill_type == 3
             && pattern != ObjectID::NULL
             && !self.client_pool_fill_pattern_buffer_is_valid(msg.source, pattern)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.attributes.insert((id, 1), u32::from(fill_type));
@@ -326,15 +336,16 @@ impl VTServer {
                     pattern,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_active_mask(&mut self, msg: &Message) {
+    fn handle_change_active_mask(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 5) {
-            return;
+            return CommandOutcome::Other;
         }
         let working_set = ObjectID(u16_le(&msg.data[1..]));
         if !self.client_pool_has_object_type(msg.source, working_set, ObjectType::WorkingSet) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         let mask = ObjectID(u16_le(&msg.data[3..]));
         if !self.client_pool_has_any_object_type(
@@ -342,7 +353,7 @@ impl VTServer {
             mask,
             &[ObjectType::DataMask, ObjectType::AlarmMask],
         ) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.active_data_mask = mask;
@@ -350,25 +361,26 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangeActiveMask { mask });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_soft_key_mask(&mut self, msg: &Message) {
+    fn handle_change_soft_key_mask(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 6) {
-            return;
+            return CommandOutcome::Other;
         }
         let mask_type = msg.data[1];
         let data_mask = ObjectID(u16_le(&msg.data[2..]));
         let soft_key_mask = ObjectID(u16_le(&msg.data[4..]));
         let Some(object_type) = self.client_pool_object_type(msg.source, data_mask) else {
-            return;
+            return CommandOutcome::InvalidObject;
         };
         if !change_soft_key_mask_type_matches(mask_type, object_type) {
-            return;
+            return CommandOutcome::Other;
         }
         if soft_key_mask != ObjectID::NULL
             && !self.client_pool_has_object_type(msg.source, soft_key_mask, ObjectType::SoftKeyMask)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.soft_key_masks.insert(data_mask, soft_key_mask);
@@ -380,20 +392,21 @@ impl VTServer {
                     soft_key_mask,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_attribute(&mut self, msg: &Message) {
+    fn handle_change_attribute(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let attribute_id = msg.data[3];
         let value = u32_le(&msg.data[4..]);
         let Some(object_type) = self.client_pool_object_type(msg.source, id) else {
-            return;
+            return CommandOutcome::InvalidObject;
         };
         if !self.client_pool_change_attribute_is_valid(msg.source, id, attribute_id, value) {
-            return;
+            return CommandOutcome::Other;
         }
         let value = self
             .client_pool_retained_change_attribute_value(msg.source, id, attribute_id, value)
@@ -433,6 +446,7 @@ impl VTServer {
                     value,
                 });
         }
+        CommandOutcome::Done
     }
 
     fn handle_get_attribute_value(&self, msg: &Message) -> Vec<OutboundFrame> {
@@ -480,15 +494,15 @@ impl VTServer {
         vec![OutboundFrame::to(response.to_vec(), msg.source)]
     }
 
-    fn handle_change_priority(&mut self, msg: &Message) {
+    fn handle_change_priority(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 4) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let priority = msg.data[3];
         if priority > 2 || !self.client_pool_has_object_type(msg.source, id, ObjectType::AlarmMask)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.priorities.insert(id, priority);
@@ -496,11 +510,12 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangePriority { id, priority });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_list_item(&mut self, msg: &Message) {
+    fn handle_change_list_item(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 6) {
-            return;
+            return CommandOutcome::Other;
         }
         let list = ObjectID(u16_le(&msg.data[1..]));
         let index = msg.data[3];
@@ -517,7 +532,7 @@ impl VTServer {
         ) || !self.client_pool_list_index_is_valid(msg.source, list, index)
             || !self.client_pool_list_item_reference_is_valid(msg.source, list, item)
         {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.list_items.insert((list, index), item);
@@ -525,11 +540,12 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangeListItem { list, index, item });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_delete_object_pool(&mut self, msg: &Message) {
+    fn handle_delete_object_pool(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 1) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(client) = self.find_client_mut(msg.source) {
             client.pool.clear();
@@ -541,18 +557,19 @@ impl VTServer {
         if self.active_working_set == msg.source {
             self.set_active_working_set(NULL_ADDRESS);
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_child_position(&mut self, msg: &Message) {
+    fn handle_change_child_position(&mut self, msg: &Message) -> CommandOutcome {
         if msg.data.len() != 9 {
-            return;
+            return CommandOutcome::Other;
         }
         let parent = ObjectID(u16_le(&msg.data[1..]));
         let child = ObjectID(u16_le(&msg.data[3..]));
         let x = u16_le(&msg.data[5..]);
         let y = u16_le(&msg.data[7..]);
         if !self.client_pool_object_is_child_of(msg.source, parent, child) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.child_positions.insert((parent, child), (x, y));
@@ -565,18 +582,19 @@ impl VTServer {
                     y,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_object_label(&mut self, msg: &Message) {
+    fn handle_change_object_label(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let label_string = ObjectID(u16_le(&msg.data[3..]));
         let font_type = msg.data[5];
         let graphic_designator = ObjectID(u16_le(&msg.data[6..]));
         if !self.client_pool_has_object_label_target(msg.source, id) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if label_string != ObjectID::NULL
             && !self.client_pool_has_object_type(
@@ -585,13 +603,13 @@ impl VTServer {
                 ObjectType::StringVariable,
             )
         {
-            return;
+            return CommandOutcome::Other;
         }
         if !is_standard_font_type(font_type) {
-            return;
+            return CommandOutcome::Other;
         }
         if !self.client_pool_has_object_label_graphic_designator(msg.source, graphic_designator) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         let label = ObjectLabelState {
             string_variable: label_string,
@@ -604,18 +622,19 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangeObjectLabel { id, label });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_polygon_point(&mut self, msg: &Message) {
+    fn handle_change_polygon_point(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let index = msg.data[3];
         let x = u16_le(&msg.data[4..]);
         let y = u16_le(&msg.data[6..]);
         if !self.client_pool_polygon_point_index_is_valid(msg.source, id, index) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.polygon_points.insert((id, index), (x, y));
@@ -623,17 +642,18 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangePolygonPoint { id, index, x, y });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_change_polygon_scale(&mut self, msg: &Message) {
+    fn handle_change_polygon_scale(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 7) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let width = u16_le(&msg.data[3..]);
         let height = u16_le(&msg.data[5..]);
         if !self.client_pool_has_object_type(msg.source, id, ObjectType::Polygon) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.polygon_scales.insert(id, (width, height));
@@ -641,6 +661,7 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ChangePolygonScale { id, width, height });
         }
+        CommandOutcome::Done
     }
 
     fn handle_graphics_context(&mut self, msg: &Message) -> Vec<OutboundFrame> {
@@ -714,22 +735,22 @@ impl VTServer {
         )]
     }
 
-    fn handle_select_colour_map(&mut self, msg: &Message) {
+    fn handle_select_colour_map(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 3) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let object_type = if id == ObjectID::NULL {
             None
         } else {
             let Some(object_type) = self.client_pool_object_type(msg.source, id) else {
-                return;
+                return CommandOutcome::InvalidObject;
             };
             if !matches!(
                 object_type,
                 ObjectType::ColourMap | ObjectType::ColourPalette
             ) {
-                return;
+                return CommandOutcome::Other;
             }
             Some(object_type)
         };
@@ -762,11 +783,12 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::SelectColourMap { id });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_lock_unlock_mask(&mut self, msg: &Message) {
+    fn handle_lock_unlock_mask(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || msg.data[1] > 1 || !has_ff_tail(&msg.data, 6) {
-            return;
+            return CommandOutcome::Other;
         }
         let locked = msg.data[1] == 1;
         let id = ObjectID(u16_le(&msg.data[2..]));
@@ -776,7 +798,7 @@ impl VTServer {
             id,
             &[ObjectType::DataMask, ObjectType::WindowMask],
         ) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state
@@ -790,15 +812,16 @@ impl VTServer {
                     timeout_ms,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_execute_macro(&mut self, msg: &Message) {
+    fn handle_execute_macro(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 3) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         if !self.client_pool_has_object_type(msg.source, id, ObjectType::Macro) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.executed_macros.push(id);
@@ -809,15 +832,16 @@ impl VTServer {
                     extended: false,
                 });
         }
+        CommandOutcome::Done
     }
 
-    fn handle_execute_extended_macro(&mut self, msg: &Message) {
+    fn handle_execute_extended_macro(&mut self, msg: &Message) -> CommandOutcome {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 3) {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         if !self.client_pool_has_object_type(msg.source, id, ObjectType::Macro) {
-            return;
+            return CommandOutcome::InvalidObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.executed_extended_macros.push(id);
@@ -825,6 +849,7 @@ impl VTServer {
                 .accepted_effects
                 .push(ServerRenderEffect::ExecuteMacro { id, extended: true });
         }
+        CommandOutcome::Done
     }
 
     // ─── Client tracking ──────────────────────────────────────────────

@@ -58,6 +58,25 @@ const PROJECT_MAKEFILE: &str = include_str!("../../../Makefile");
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
+/// E1 — ISO 11783-6 Annex F.1: "The VT shall respond to these commands even if
+/// no object pool of the originating Working Set is loaded. The originator
+/// shall wait for a response before sending another command."
+///
+/// A command the VT refuses is still answered; the refusal goes in the error
+/// byte. These assertions used to require an *empty* reply, which is exactly
+/// the defect — a Working Set then blocked 1,5 s and retried three times before
+/// declaring the terminal unresponsive.
+#[allow(dead_code)]
+#[track_caller]
+fn assert_annex_f_refusal(out: &[machbus::isobus::vt::OutboundFrame]) {
+    assert_eq!(out.len(), 1, "Annex F.1 requires a response");
+    assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+    assert!(
+        out[0].data[1..].iter().any(|&b| b != 0xFF),
+        "a refused command must carry an error, not an all-FF reply"
+    );
+}
+
 fn render(pool: &ObjectPool, active_mask: ObjectID) -> machbus::isobus::vt::render::Scene {
     LayoutEngine::new(LayoutConfig::default()).build(pool, active_mask)
 }
@@ -694,6 +713,7 @@ fn vt_server_change_active_mask_accepts_external_alarm_mask_fixture() {
     );
     let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
     transfer.extend_from_slice(VT3_TEST_POOL_IOP);
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, source))
@@ -711,15 +731,11 @@ fn vt_server_change_active_mask_accepts_external_alarm_mask_fixture() {
     change_active_mask[0] = cmd::CHANGE_ACTIVE_MASK;
     change_active_mask[1..3].copy_from_slice(&0u16.to_le_bytes());
     change_active_mask[3..5].copy_from_slice(&0x07D0u16.to_le_bytes());
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(
                 PGN_ECU_TO_VT,
                 change_active_mask.to_vec(),
                 source,
-            ))
-            .is_empty()
-    );
+            )));
 
     let client = &server.clients()[0];
     assert_eq!(client.object_state.active_data_mask, ObjectID::new(0x07D0));

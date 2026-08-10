@@ -6,13 +6,10 @@ fn vt_server_object_pool_upload_window_is_per_client_and_not_unsolicited() {
     assert!(server.clients()[0].pool.find(1u16).is_some());
     assert!(server.clients()[0].pool_activated);
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                alternate_object_pool_transfer(),
-                0x42,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, alternate_object_pool_transfer(), 0x42))
             .is_empty()
     );
     assert!(
@@ -36,13 +33,10 @@ fn vt_server_object_pool_upload_window_is_per_client_and_not_unsolicited() {
     );
     assert_eq!(server.clients().len(), 2);
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                vec![cmd::OBJECT_POOL_TRANSFER, 0x00, 0x00, 0x00],
-                0x43,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, vec![cmd::OBJECT_POOL_TRANSFER, 0x00, 0x00, 0x00], 0x43))
             .is_empty()
     );
     assert!(
@@ -50,6 +44,7 @@ fn vt_server_object_pool_upload_window_is_per_client_and_not_unsolicited() {
         "malformed transfer payload must not consume or create per-client pool state"
     );
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(
@@ -95,11 +90,7 @@ fn vt_server_delete_object_pool_requires_canonical_fixed_frame_before_reset() {
 
     let mut malformed_delete = fixed_command(cmd::DELETE_OBJECT_POOL);
     malformed_delete[1] = 0x00;
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, malformed_delete, 0x42))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, malformed_delete, 0x42)));
     assert_eq!(
         server.clients()[0].pool.size(),
         original_pool_size,
@@ -109,15 +100,11 @@ fn vt_server_delete_object_pool_requires_canonical_fixed_frame_before_reset() {
     assert!(server.clients()[0].pool_activated);
     assert_eq!(server.active_working_set(), 0x42);
 
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(
                 PGN_ECU_TO_VT,
                 fixed_command(cmd::DELETE_OBJECT_POOL),
                 0x42,
-            ))
-            .is_empty()
-    );
+            )));
     assert!(server.clients()[0].pool.is_empty());
     assert!(!server.clients()[0].pool_uploaded);
     assert!(!server.clients()[0].pool_upload_allowed);
@@ -146,13 +133,10 @@ fn vt_server_reupload_failure_does_not_accept_stale_active_pool_as_new_upload() 
     ));
     assert_eq!(response.len(), 1);
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                vec![cmd::OBJECT_POOL_TRANSFER, 0x00, 0x00, 0x00],
-                0x42,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, vec![cmd::OBJECT_POOL_TRANSFER, 0x00, 0x00, 0x00], 0x42))
             .is_empty()
     );
     assert_eq!(
@@ -260,11 +244,7 @@ fn vt_server_runtime_commands_require_activated_object_pool_before_state_or_even
         data
     };
 
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, numeric_change.clone(), 0x42))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, numeric_change.clone(), 0x42)));
     assert!(server.clients().is_empty());
     assert!(numeric_events.borrow().is_empty());
 
@@ -1001,11 +981,7 @@ fn vt_server_change_commands_reject_malformed_payloads_without_state_mutation() 
     hide_show[0] = cmd::HIDE_SHOW;
     hide_show[1..3].copy_from_slice(&0x1001u16.to_le_bytes());
     hide_show[3] = 1;
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, hide_show.to_vec(), 0x42))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, hide_show.to_vec(), 0x42)));
 
     let state = &server.clients()[0].object_state;
     assert!(
@@ -1016,11 +992,7 @@ fn vt_server_change_commands_reject_malformed_payloads_without_state_mutation() 
     let mut bad_bool = hide_show;
     bad_bool[1..3].copy_from_slice(&0x1002u16.to_le_bytes());
     bad_bool[3] = 2;
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, bad_bool.to_vec(), 0x42))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, bad_bool.to_vec(), 0x42)));
     assert!(
         !server.clients()[0]
             .object_state
@@ -1563,15 +1535,15 @@ fn vt_server_child_geometry_and_input_selection_require_uploaded_objects() {
         "VT4+ Select Input Object must admit Key focus targets"
     );
 
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                change_soft_key_mask(2, ObjectID::NULL.raw()),
-                0x42,
-            ))
-            .is_empty()
-    );
+    // E1 — Change Soft Key Mask (F.37) is answered whether it is carried out or
+    // not; setting the NULL Object ID is accepted, so the error byte is zero.
+    let reply = server.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        change_soft_key_mask(2, ObjectID::NULL.raw()),
+        0x42,
+    ));
+    assert_eq!(reply.len(), 1);
+    assert_eq!(reply[0].data[0], cmd::CHANGE_SOFT_KEY_MASK);
     assert_eq!(
         server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, select_input(4, 0xFF), 0x42)),
         vec![select_input_response(4, 1, 0)],
@@ -1586,15 +1558,11 @@ fn vt_server_child_geometry_and_input_selection_require_uploaded_objects() {
         ObjectID(4),
         "off-mask Key selection must not replace retained focus"
     );
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(
                 PGN_ECU_TO_VT,
                 change_soft_key_mask(2, 3),
                 0x42,
-            ))
-            .is_empty()
-    );
+            )));
     assert_eq!(
         server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, select_input(34, 0xFF), 0x42)),
         vec![select_input_response(34, 1, 0)],
@@ -1660,11 +1628,7 @@ fn vt_server_child_geometry_and_input_selection_require_uploaded_objects() {
     hide_container[0] = cmd::HIDE_SHOW;
     hide_container[1..3].copy_from_slice(&26u16.to_le_bytes());
     hide_container[3] = 0;
-    assert!(
-        server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, hide_container.to_vec(), 0x42))
-            .is_empty()
-    );
+    assert_annex_f_refusal(&server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, hide_container.to_vec(), 0x42)));
     assert_eq!(
         server.handle_ecu_message(&Message::new(PGN_ECU_TO_VT, select_input(25, 0xFF), 0x42)),
         vec![select_input_response(25, 0, 0x04)],

@@ -761,7 +761,27 @@ impl TransportProtocol {
                     return responses;
                 }
 
-                if self.receive_dt_path_is_active(src, dst, port) {
+                // §5.10.4.2: "If multiple RTS are received from the same SA for
+                // the same PGN, then the most recent RTS shall be acted on and
+                // the previous RTS abandoned. No abort message shall be sent for
+                // the abandoned RTS in this specific case." Answering with
+                // Conn_Abort instead meant a peer retrying its RTS — after a
+                // lost CTS, say — could never open the connection.
+                if let Some(existing) = self.receive_session_for(src, dst, port, cm_pgn) {
+                    tracing::debug!(
+                        target: "machbus.transport.tp",
+                        source = %format_args!("0x{src:02X}"),
+                        pgn = %format_args!("0x{cm_pgn:04X}"),
+                        "replacing an in-flight receive session on a repeated RTS",
+                    );
+                    self.sessions.swap_remove(existing);
+                } else if self.receive_path_is_active(src, dst, port) {
+                    // A *different* PGN on the same source/destination pair is
+                    // genuinely ambiguous: TP.DT frames carry only a sequence
+                    // number, so an arriving packet could belong to either
+                    // session. That one is refused. A BAM from the same node is
+                    // not a conflict — its DT frames are broadcast, so the two
+                    // paths stay distinguishable.
                     let tmp = TransportSession {
                         source_address: dst,
                         destination_address: src,
@@ -1016,14 +1036,20 @@ impl TransportProtocol {
                 let msg_size = frame.data[1] as u32 | ((frame.data[2] as u32) << 8);
                 let total_packets = frame.data[3];
                 let over_receive_cap = msg_size > self.max_receive_bytes;
-                if self.receive_dt_path_is_active(src, BROADCAST_ADDRESS, port) {
-                    tracing::warn!(
+                // BAM is connectionless — there is no abort to send and no
+                // handshake to retry — so a repeated BAM for the same PGN can
+                // only mean "start again". Dropping it left the receiver stuck
+                // on the abandoned first attempt until it timed out.
+                if let Some(existing) =
+                    self.receive_session_for(src, BROADCAST_ADDRESS, port, cm_pgn)
+                {
+                    tracing::debug!(
                         target: "machbus.transport.tp",
-                        source = src,
-                        "dropping BAM because TP DT endpoint path is already active",
+                        source = %format_args!("0x{src:02X}"),
+                        pgn = %format_args!("0x{cm_pgn:04X}"),
+                        "restarting a broadcast session on a repeated BAM",
                     );
-                    self.note_dropped_frame();
-                    return responses;
+                    self.sessions.swap_remove(existing);
                 }
                 if !frame.is_broadcast()
                     || !valid_tp_payload_shape(msg_size, total_packets)
@@ -1139,7 +1165,12 @@ impl TransportProtocol {
                 && s.can_port == port
                 && (s.state == SessionState::WaitingForData
                     || s.state == SessionState::ReceivingData)
-                && (s.is_broadcast() || s.destination_address == dst)
+                // Exact destination match. A BAM's TP.DT frames go to the
+                // global address and a connection-mode session's to the
+                // specific one, so the two are distinguishable on the wire —
+                // but `is_broadcast()` matching *any* destination let an
+                // in-flight BAM swallow a destination-specific data packet.
+                && s.destination_address == dst
         }) else {
             self.note_dropped_frame();
             return responses;
@@ -1285,14 +1316,38 @@ impl TransportProtocol {
         responses
     }
 
-    fn receive_dt_path_is_active(&self, source: Address, destination: Address, port: u8) -> bool {
+    /// Index of an existing receive session for exactly this
+    /// (source, destination, port, PGN), if one is open.
+    ///
+    /// §5.10.4.2 scopes the rule to "multiple RTS ... from the same SA for the
+    /// same PGN". Matching on the source alone — and treating a broadcast
+    /// destination as matching everything — meant a BAM already in flight
+    /// blocked an unrelated destination-specific RTS from the same node, and a
+    /// second RTS for a *different* PGN was refused outright.
+    /// Whether any receive session already occupies this exact source →
+    /// destination DT path, regardless of PGN.
+    fn receive_path_is_active(&self, source: Address, destination: Address, port: u8) -> bool {
         self.sessions.iter().any(|s| {
             s.direction == TransportDirection::Receive
                 && s.source_address == source
                 && s.can_port == port
-                && (s.destination_address == BROADCAST_ADDRESS
-                    || destination == BROADCAST_ADDRESS
-                    || s.destination_address == destination)
+                && s.destination_address == destination
+        })
+    }
+
+    fn receive_session_for(
+        &self,
+        source: Address,
+        destination: Address,
+        port: u8,
+        pgn: Pgn,
+    ) -> Option<usize> {
+        self.sessions.iter().position(|s| {
+            s.direction == TransportDirection::Receive
+                && s.source_address == source
+                && s.can_port == port
+                && s.destination_address == destination
+                && s.pgn == pgn
         })
     }
 }

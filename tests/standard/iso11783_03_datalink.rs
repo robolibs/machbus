@@ -1014,7 +1014,7 @@ fn datalink_tp_etp_reject_invalid_endpoint_frames_without_session_mutation() {
 }
 
 #[test]
-fn datalink_tp_rejects_concurrent_sessions_that_share_dt_endpoint_path() {
+fn datalink_tp_scopes_concurrent_sessions_by_their_dt_endpoint_path() {
     let payload = vec![0xA5; 20];
 
     let mut sender = TransportProtocol::new();
@@ -1064,14 +1064,37 @@ fn datalink_tp_rejects_concurrent_sessions_that_share_dt_endpoint_path() {
             0x00,
         ],
     );
+    // A BAM from the same source is *not* a conflict: its TP.DT frames go to
+    // the global address while the connection-mode session's go to 0x20, so the
+    // two streams are distinguishable and both may be open at once.
     assert!(
         receiver
             .process_frame(&bam_same_source_while_specific_session_is_active, 0)
             .is_empty(),
-        "a BAM from the same source would share the same TP.DT stream and must be dropped"
+        "a BAM is connectionless, so it is accepted without a response"
     );
-    assert_eq!(receiver.active_sessions().len(), 1);
-    assert_eq!(receiver.stats().dropped_frames, 2);
+    assert_eq!(
+        receiver.active_sessions().len(),
+        2,
+        "a broadcast and a destination-specific session coexist"
+    );
+    assert_eq!(receiver.stats().dropped_frames, 1);
+
+    // §5.10.4.2: a repeated RTS for the *same* PGN abandons the previous one
+    // and is answered with a CTS, never an abort.
+    let repeat_rts = tp_cm_frame(
+        0x10,
+        0x20,
+        [machbus::net::tp::tp_cm::RTS, 20, 0, 3, 16, 0x00, 0xEF, 0x00],
+    );
+    let responses = receiver.process_frame(&repeat_rts, 0);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        responses[0].data[0],
+        machbus::net::tp::tp_cm::CTS,
+        "the most recent RTS is acted on, with no abort for the abandoned one"
+    );
+    assert_eq!(receiver.active_sessions().len(), 2);
 }
 
 #[test]

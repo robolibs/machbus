@@ -99,6 +99,20 @@ typedef enum {
    * Combined autodrive controller entered the safe state.
    */
   MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP = 95,
+  /**
+   * No GNSS position inside the staleness window; `u0` is how long it has
+   * been silent, in milliseconds.
+   */
+  MACHBUS_EVENT_KIND_GNSS_POSITION_STALE = 96,
+  /**
+   * The receiver reported a method that cannot be steered on; `fmi_or_sub`
+   * is the NMEA fix type.
+   */
+  MACHBUS_EVENT_KIND_GNSS_FIX_DEGRADED = 97,
+  /**
+   * A steerable fix returned; `fmi_or_sub` is the NMEA fix type.
+   */
+  MACHBUS_EVENT_KIND_GNSS_FIX_RESTORED = 98,
   MACHBUS_EVENT_KIND_OTHER = 99,
 } MachbusEventKind;
 

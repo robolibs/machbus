@@ -38,11 +38,25 @@ const INTERESTS: &[Pgn] = &[
 
 const FAST_PACKET: &[Pgn] = &[PGN_GNSS_POSITION_DATA];
 
+/// How long the plugin waits for a position before calling it stale.
+///
+/// PGN 129025 broadcasts at 10 Hz and 129029 at 1 Hz, so this must clear the
+/// slower of the two with margin: a receiver that only sends the detailed fix
+/// must not read as failed between two healthy reports.
+pub const DEFAULT_POSITION_STALE_MS: u32 = 1500;
+
 /// GNSS / NMEA 2000 plugin.
 pub struct Gnss {
     iface: NMEAInterface,
     collected: Rc<RefCell<Vec<GnssEvent>>>,
     pending: Vec<(Pgn, Vec<u8>)>,
+    /// When a position last arrived, and whether the last reported method was
+    /// one an autonomy path can steer on. Nothing consumed either before this:
+    /// the quality signal existed in the decoder and reached no consumer.
+    last_position_at: Option<Instant>,
+    stale_ms: u32,
+    position_stale: bool,
+    fix_degraded: bool,
 }
 
 impl Gnss {
@@ -56,7 +70,31 @@ impl Gnss {
             iface,
             collected,
             pending: Vec::new(),
+            last_position_at: None,
+            stale_ms: DEFAULT_POSITION_STALE_MS,
+            position_stale: false,
+            fix_degraded: false,
         }
+    }
+
+    /// Override the position staleness window. Zero disables the watchdog,
+    /// which is only appropriate when nothing safety-relevant consumes GNSS.
+    #[must_use]
+    pub const fn with_position_stale_ms(mut self, ms: u32) -> Self {
+        self.stale_ms = ms;
+        self
+    }
+
+    /// `true` when no position has arrived inside the staleness window.
+    #[must_use]
+    pub const fn is_position_stale(&self) -> bool {
+        self.position_stale
+    }
+
+    /// `true` when the receiver's last reported method cannot be steered on.
+    #[must_use]
+    pub const fn is_fix_degraded(&self) -> bool {
+        self.fix_degraded
     }
 
     /// Listen with the default NMEA configuration.
@@ -108,7 +146,24 @@ impl Plugin for Gnss {
 
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         self.iface.handle_message(msg);
-        for event in self.collected.borrow_mut().drain(..) {
+        let drained: Vec<GnssEvent> = self.collected.borrow_mut().drain(..).collect();
+        for event in drained {
+            if let GnssEvent::Position(pos) = &event {
+                self.last_position_at = Some(ctx.now());
+                self.position_stale = false;
+                let usable = fix_is_steerable(pos.fix_type);
+                if !usable && !self.fix_degraded {
+                    self.fix_degraded = true;
+                    ctx.emit(Event::Gnss(GnssEvent::FixDegraded {
+                        fix_type: pos.fix_type,
+                    }));
+                } else if usable && self.fix_degraded {
+                    self.fix_degraded = false;
+                    ctx.emit(Event::Gnss(GnssEvent::FixRestored {
+                        fix_type: pos.fix_type,
+                    }));
+                }
+            }
             ctx.emit(Event::Gnss(event));
         }
     }
@@ -116,6 +171,19 @@ impl Plugin for Gnss {
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         for (pgn, data) in self.pending.drain(..) {
             ctx.send(pgn, data, BROADCAST_ADDRESS, Priority::Default);
+        }
+
+        // A receiver that stops reporting is a fault, not a hold: the position
+        // feeding the guidance loop has simply stopped being true.
+        if self.stale_ms > 0
+            && !self.position_stale
+            && let Some(seen) = self.last_position_at
+        {
+            let silent_for_ms = ctx.now().millis_since(seen);
+            if silent_for_ms >= self.stale_ms {
+                self.position_stale = true;
+                ctx.emit(Event::Gnss(GnssEvent::PositionStale { silent_for_ms }));
+            }
         }
         None
     }
@@ -127,6 +195,17 @@ impl Plugin for Gnss {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// Whether a reported fix method is one an autonomy path may steer on.
+/// Dead reckoning is deliberately excluded: it is a position estimate with no
+/// satellite input, which is exactly the case that must stop the machine.
+fn fix_is_steerable(fix: crate::nmea::GNSSFixType) -> bool {
+    use crate::nmea::GNSSFixType as F;
+    matches!(
+        fix,
+        F::GNSSFix | F::DGNSSFix | F::PreciseGNSS | F::RTKFixed | F::RTKFloat | F::SimulateMode
+    )
 }
 
 /// Subscribe the interface's native events into a buffer the plugin drains.

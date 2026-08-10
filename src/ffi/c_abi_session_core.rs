@@ -319,6 +319,14 @@ pub enum MachbusEventKind {
     AutodriveStateChanged = 94,
     /// Combined autodrive controller entered the safe state.
     AutodriveSafeStop = 95,
+    /// No GNSS position inside the staleness window; `u0` is how long it has
+    /// been silent, in milliseconds.
+    GnssPositionStale = 96,
+    /// The receiver reported a method that cannot be steered on; `fmi_or_sub`
+    /// is the NMEA fix type.
+    GnssFixDegraded = 97,
+    /// A steerable fix returned; `fmi_or_sub` is the NMEA fix type.
+    GnssFixRestored = 98,
     Other = 99,
 }
 
@@ -1099,6 +1107,18 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.d0 = d.hdop;
                 out.d1 = d.vdop;
                 out.u0 = (d.tdop * 1000.0) as u32;
+            }
+            GnssEvent::PositionStale { silent_for_ms } => {
+                out.kind = MachbusEventKind::GnssPositionStale;
+                out.u0 = silent_for_ms;
+            }
+            GnssEvent::FixDegraded { fix_type } => {
+                out.kind = MachbusEventKind::GnssFixDegraded;
+                out.fmi_or_sub = fix_type.as_u8();
+            }
+            GnssEvent::FixRestored { fix_type } => {
+                out.kind = MachbusEventKind::GnssFixRestored;
+                out.fmi_or_sub = fix_type.as_u8();
             }
             GnssEvent::SystemTime(t) => {
                 out.kind = MachbusEventKind::GnssSystemTime;

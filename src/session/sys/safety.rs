@@ -38,6 +38,13 @@ pub enum SafeStopTrigger {
     ClockWentBackwards,
     /// A queued safety command was refused by the network layer.
     SendFailed(Pgn),
+    /// No GNSS position within the configured window. The vehicle would
+    /// otherwise keep steering to a curvature computed from a position that
+    /// stopped updating.
+    PositionStale,
+    /// The receiver reported a fix that cannot be steered on — no fix, dead
+    /// reckoning, or an error/unavailable method.
+    FixDegraded,
 }
 
 impl SafeStopTrigger {
@@ -67,6 +74,8 @@ impl SafeStopTrigger {
                 | HeartbeatEvent::SenderError { .. }
                 | HeartbeatEvent::GracefulShutdown { .. },
             ) => Some(Self::HeartbeatError),
+            Event::Gnss(super::GnssEvent::PositionStale { .. }) => Some(Self::PositionStale),
+            Event::Gnss(super::GnssEvent::FixDegraded { .. }) => Some(Self::FixDegraded),
             _ => None,
         }
     }
@@ -86,6 +95,8 @@ impl SafeStopTrigger {
             Self::CommandStale => 9,
             Self::ClockWentBackwards => 10,
             Self::SendFailed(_) => 11,
+            Self::PositionStale => 12,
+            Self::FixDegraded => 13,
         }
     }
 
@@ -104,6 +115,8 @@ impl SafeStopTrigger {
             Self::CommandStale => "command_stale",
             Self::ClockWentBackwards => "clock_went_backwards",
             Self::SendFailed(_) => "send_failed",
+            Self::PositionStale => "position_stale",
+            Self::FixDegraded => "fix_degraded",
         }
     }
 }
@@ -191,6 +204,8 @@ mod tests {
             SafeStopTrigger::CommandStale,
             SafeStopTrigger::ClockWentBackwards,
             SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
+            SafeStopTrigger::PositionStale,
+            SafeStopTrigger::FixDegraded,
         ];
 
         for trigger in all {
@@ -206,6 +221,8 @@ mod tests {
                 SafeStopTrigger::CommandStale => "guidance/autodrive on_tick setpoint watchdog",
                 SafeStopTrigger::ClockWentBackwards => "SafeStopTrigger::from_event, clock fault",
                 SafeStopTrigger::SendFailed(_) => "guidance/autodrive on_event, refused command",
+                SafeStopTrigger::PositionStale => "plugins::gnss on_tick position watchdog",
+                SafeStopTrigger::FixDegraded => "plugins::gnss on_frame fix method check",
             };
             assert!(
                 !producer.is_empty(),
@@ -272,6 +289,25 @@ mod tests {
                 Event::Heartbeat(HeartbeatEvent::Received {
                     source: 0x26,
                     sequence: 3,
+                }),
+                None,
+            ),
+            (
+                Event::Gnss(crate::session::sys::GnssEvent::PositionStale {
+                    silent_for_ms: 1600,
+                }),
+                Some(SafeStopTrigger::PositionStale),
+            ),
+            (
+                Event::Gnss(crate::session::sys::GnssEvent::FixDegraded {
+                    fix_type: crate::nmea::GNSSFixType::DeadReckon,
+                }),
+                Some(SafeStopTrigger::FixDegraded),
+            ),
+            // Recovery is informational: it must not itself be a stop.
+            (
+                Event::Gnss(crate::session::sys::GnssEvent::FixRestored {
+                    fix_type: crate::nmea::GNSSFixType::RTKFixed,
                 }),
                 None,
             ),

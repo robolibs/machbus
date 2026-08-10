@@ -667,6 +667,84 @@ mod tests {
         );
     }
 
+    /// P1.8 — the fix-quality signal was decoded and reached no consumer, so a
+    /// receiver reporting no usable fix left the autonomy path free to steer.
+    /// Here nothing has yet reported a method, which is exactly the state a
+    /// machine must not drive in.
+    #[test]
+    fn an_unusable_gnss_fix_stops_the_autonomy_path() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_RAPID;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::geo::Wgs;
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+        use crate::session::sys::GnssEvent;
+
+        let mut session = Session::builder(test_name(29), 0x80)
+            .plug(AutoDrive::new())
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let pos = GNSSPosition {
+            wgs: Wgs::new(52.0, 5.0, 0.0),
+            ..Default::default()
+        };
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GNSS_POSITION_RAPID,
+                0x1C,
+                BROADCAST_ADDRESS,
+            ),
+            {
+                let mut d = [0xFFu8; 8];
+                d.copy_from_slice(&NMEAInterface::build_position(&pos));
+                d
+            },
+            8,
+        );
+
+        let mut now = Instant::from_millis(10_000);
+        session.feed(0, &frame, now);
+        while session.poll_event().is_some() {}
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(|g| !g.is_position_stale()),
+            "precondition: a fresh position is not stale"
+        );
+
+        // No 129029 has reported a method, so the cached fix is `NoFix`.
+        assert!(
+            session.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "a position with no reported method is not steerable"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "fix quality must reach the autonomy path, not just the event queue"
+        );
+
+        // And the receiver going quiet is reported in its own right.
+        let mut saw_stale = false;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while let Some(ev) = session.poll_event() {
+                if matches!(ev, Event::Gnss(GnssEvent::PositionStale { .. })) {
+                    saw_stale = true;
+                }
+            }
+        }
+        assert!(saw_stale, "a silent receiver must be reported as stale");
+        assert!(session.get::<Gnss>().is_some_and(Gnss::is_position_stale));
+    }
+
     /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
     /// caller plugging both controllers. Both author PGN 0xAD00 from the same
     /// source address, so a safe stop commanded by one is overwritten by the

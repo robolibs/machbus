@@ -785,6 +785,96 @@ mod tests {
         );
     }
 
+    /// B2 — ISO 11783-6 Annex H.2/H.4 byte 8: reserved `FF` up to VT version 5,
+    /// `[TAN | 0xF]` from version 6. The client tested byte 8 for `0xFF`, so on
+    /// a v6 terminal it dropped every activation whose TAN was not 15 — fifteen
+    /// operator key presses in sixteen.
+    #[test]
+    fn vt6_activations_are_delivered_for_every_tan() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        for tan in 0u8..16 {
+            let mut c = VTClient::new(VTClientConfig::default());
+            let seen: Rc<RefCell<Vec<(ObjectID, ActivationCode)>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let sink = seen.clone();
+            c.on_soft_key.subscribe(move |&v| sink.borrow_mut().push(v));
+
+            let mut data =
+                VTServer::build_soft_key_activation(ActivationCode::Pressed, 0xCAFE, 0xBEEF, 7)
+                    .to_vec();
+            data[7] = (tan << 4) | 0x0F;
+            c.handle_vt_message(&vt_msg(data, 0x80));
+
+            assert_eq!(
+                *seen.borrow(),
+                vec![(ObjectID(0xCAFE), ActivationCode::Pressed)],
+                "TAN {tan} activation was dropped"
+            );
+            // TAN 15 encodes as 0xFF, which is exactly the pre-v6 reserved
+            // value — the wire cannot distinguish the two, so it reports None.
+            let expected = if tan == 0x0F { None } else { Some(tan) };
+            assert_eq!(c.last_activation_tan(), expected);
+        }
+    }
+
+    /// A byte 8 that is neither reserved nor a well-formed TAN is still junk.
+    #[test]
+    fn malformed_activation_tail_is_still_rejected() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(ObjectID, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_soft_key.subscribe(move |&v| sink.borrow_mut().push(v));
+
+        let mut data =
+            VTServer::build_soft_key_activation(ActivationCode::Pressed, 0xCAFE, 0xBEEF, 7).to_vec();
+        data[7] = 0x12;
+        c.handle_vt_message(&vt_msg(data, 0x80));
+        assert!(seen.borrow().is_empty());
+    }
+
+    /// Annex H.6: from VT version 6 byte 6 is `[TAN | touch state]` and bytes
+    /// 7-8 carry the parent mask, so reading byte 6 whole yields a nonsense
+    /// activation code on a v6 terminal.
+    #[test]
+    fn vt6_pointing_event_splits_tan_from_touch_state() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(u16, u16, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_pointing_event
+            .subscribe(move |&v| sink.borrow_mut().push(v));
+
+        // x = 0x0102, y = 0x0304, TAN 5, touch = Pressed(1), parent 0xBEEF.
+        let data = vec![0x02, 0x02, 0x01, 0x04, 0x03, 0x51, 0xEF, 0xBE];
+        c.handle_vt_message(&vt_msg(data, 0x80));
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x0102, 0x0304, ActivationCode::Pressed)]
+        );
+        assert_eq!(c.last_activation_tan(), Some(5));
+
+        // The pre-v6 layout still decodes, and reports no TAN.
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(u16, u16, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_pointing_event
+            .subscribe(move |&v| sink.borrow_mut().push(v));
+        let legacy = vec![0x02, 0x02, 0x01, 0x04, 0x03, 0x01, 0xFF, 0xFF];
+        c.handle_vt_message(&vt_msg(legacy, 0x80));
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x0102, 0x0304, ActivationCode::Pressed)]
+        );
+        assert_eq!(c.last_activation_tan(), None);
+    }
+
     #[test]
     fn vt_technical_data_request_builders_match_layout() {
         let mut c = VTClient::new(VTClientConfig::default());

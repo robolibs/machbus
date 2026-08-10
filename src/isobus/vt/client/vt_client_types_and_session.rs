@@ -218,6 +218,10 @@ pub struct VTClient {
     auto_reload_on_language_change: bool,
 
     macros: Vec<VTMacro>,
+    /// TAN from the most recent activation or pointing event on a VT version 6
+    /// terminal (Annex H.2/H.4/H.6), `None` on version 5 and earlier. Needed to
+    /// echo the TAN in a future H.3/H.5 response.
+    last_activation_tan: Option<u8>,
 
     pub on_soft_key: Event<(ObjectID, ActivationCode)>,
     pub on_button: Event<(ObjectID, ActivationCode)>,
@@ -288,6 +292,7 @@ impl VTClient {
             vt_language: LanguageCode::default(),
             auto_reload_on_language_change: true,
             macros: Vec::new(),
+            last_activation_tan: None,
             on_soft_key: Event::new(),
             on_button: Event::new(),
             on_soft_key_detailed: Event::new(),
@@ -350,6 +355,13 @@ impl VTClient {
         self.transition(VTState::Disconnected);
         self.pending_end_of_pool_delay_ms = 0;
         Ok(())
+    }
+
+    /// TAN from the most recent Soft Key / Button activation or Pointing Event,
+    /// `None` if the terminal is VT version 5 or earlier (Annex H.2/H.4/H.6).
+    #[must_use]
+    pub const fn last_activation_tan(&self) -> Option<u8> {
+        self.last_activation_tan
     }
 
     #[inline]
@@ -1556,10 +1568,29 @@ impl VTClient {
         }
     }
 
+    /// Byte 8 of an activation message (Annex H.2/H.4): reserved `FF` up to VT
+    /// version 5, `[TAN | 0xF]` from version 6.
+    ///
+    /// Treating it as a plain reserved byte dropped every v6 activation whose
+    /// TAN was not 15 — fifteen operator key presses in sixteen.
+    const fn reserved_or_tan(value: u8) -> Option<Option<u8>> {
+        if value == 0xFF {
+            Some(None)
+        } else if value & 0x0F == 0x0F {
+            Some(Some(value >> 4))
+        } else {
+            None
+        }
+    }
+
     fn handle_soft_key(&mut self, msg: &Message) {
-        if msg.data.len() != 8 || msg.data[7] != 0xFF {
+        if msg.data.len() != 8 {
             return;
         }
+        let Some(tan) = Self::reserved_or_tan(msg.data[7]) else {
+            return;
+        };
+        self.last_activation_tan = tan;
         let Some(code) = ActivationCode::try_from_u8(msg.data[1]) else {
             return;
         };
@@ -1572,9 +1603,13 @@ impl VTClient {
     }
 
     fn handle_button(&mut self, msg: &Message) {
-        if msg.data.len() != 8 || msg.data[7] != 0xFF {
+        if msg.data.len() != 8 {
             return;
         }
+        let Some(tan) = Self::reserved_or_tan(msg.data[7]) else {
+            return;
+        };
+        self.last_activation_tan = tan;
         let Some(code) = ActivationCode::try_from_u8(msg.data[1]) else {
             return;
         };
@@ -1586,17 +1621,25 @@ impl VTClient {
             .emit(&(btn_id, parent_id, msg.data[6], code));
     }
 
-    /// VT Pointing Event (function 0x02): `[0x02][X u16 LE][Y u16 LE][touch
-    /// state][object-id u16 LE]`. The touch-state byte uses VT v4+
-    /// [`ActivationCode`] values; pre-v4 VTs send `0xFF` there, decoded as
-    /// `Released`.
+    /// VT Pointing Event (function 0x02), ISO 11783-6 Annex H.6.
+    ///
+    /// Two layouts. Up to VT version 5 bytes 7-8 are reserved `FF` and byte 6
+    /// carries the touch state on its own. From version 6 byte 6 is
+    /// `[TAN | touch state]` and bytes 7-8 carry the parent mask Object ID, so
+    /// reading byte 6 whole yields a nonsense activation code on a v6 terminal.
     fn handle_pointing_event(&mut self, msg: &Message) {
         if msg.data.len() != 8 {
             return;
         }
         let x = u16_le(&msg.data[1..]);
         let y = u16_le(&msg.data[3..]);
-        let touch = ActivationCode::from_u8(msg.data[5]);
+        let legacy = msg.data[6] == 0xFF && msg.data[7] == 0xFF;
+        let touch = if legacy {
+            ActivationCode::from_u8(msg.data[5])
+        } else {
+            self.last_activation_tan = Some(msg.data[5] >> 4);
+            ActivationCode::from_u8(msg.data[5] & 0x0F)
+        };
         self.on_pointing_event.emit(&(x, y, touch));
     }
 

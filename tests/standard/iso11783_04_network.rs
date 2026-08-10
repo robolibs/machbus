@@ -420,7 +420,9 @@ fn network_layer_niu_control_messages_ignore_invalid_sources_before_mutation() {
 
 #[test]
 fn network_layer_router_translates_address_claims_and_blocks_spoofed_claims() {
-    let mut router = Router::new(NiuConfig::default());
+    // §7.3.1 blocks claims at a router; these flows exercise the shared
+    // address-space bridge case, which opts in explicitly.
+    let mut router = Router::new(NiuConfig::default()).forward_address_claims(true);
     router.niu_mut().start().unwrap();
     let translated_name = name(0x200);
     router.add_translation(translated_name, 0x10, 0x20).unwrap();
@@ -501,13 +503,31 @@ fn network_layer_router_translates_bidirectional_destination_frames_and_cannot_c
     assert_eq!(reverse.pgn(), PGN_REQUEST);
     assert_eq!(reverse.payload(), [0x00, 0xEE, 0x00]);
 
-    let cannot_claim = router
+    // §7.3.1: "Address claim messages do not cross through a router." Cannot
+    // Claim Address travels on the same PGN, so it is blocked too.
+    assert!(
+        router
+            .process_frame(
+                address_claim(NULL_ADDRESS, tractor_name),
+                Side::Tractor,
+                4_003,
+            )
+            .is_none(),
+        "address claims must not cross a router by default"
+    );
+
+    // A bridge over a single shared address space opts in, and then the frame
+    // crosses unchanged.
+    let mut bridge = Router::new(NiuConfig::default().loop_guard_capacity(8))
+        .forward_address_claims(true);
+    bridge.niu_mut().start().unwrap();
+    let cannot_claim = bridge
         .process_frame(
             address_claim(NULL_ADDRESS, tractor_name),
             Side::Tractor,
             4_003,
         )
-        .expect("Cannot Claim Address must remain visible through a router");
+        .expect("a shared-address-space bridge keeps Cannot Claim visible");
     assert_eq!(cannot_claim.pgn(), PGN_ADDRESS_CLAIMED);
     assert_eq!(cannot_claim.source(), NULL_ADDRESS);
     assert_eq!(cannot_claim.destination(), BROADCAST_ADDRESS);
@@ -516,7 +536,9 @@ fn network_layer_router_translates_bidirectional_destination_frames_and_cannot_c
 
 #[test]
 fn network_layer_router_translation_admission_is_unique_and_claimable() {
-    let mut router = Router::new(NiuConfig::default());
+    // §7.3.1 blocks claims at a router; these flows exercise the shared
+    // address-space bridge case, which opts in explicitly.
+    let mut router = Router::new(NiuConfig::default()).forward_address_claims(true);
     let first = name(0x401);
     let second = name(0x402);
 

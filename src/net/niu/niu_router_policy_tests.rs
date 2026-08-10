@@ -770,6 +770,48 @@ mod tests {
         assert_eq!(niu.filters().len(), 1, "an addressed command is honoured");
     }
 
+    /// H15/H13 — §6.6.2.3.2 makes N.MFDB_Response variable length: byte 2 the
+    /// port pair, byte 3 the filter mode, bytes 4..n the PGN entries. It was
+    /// encoded through the 8-byte AddFilterEntry layout, which put a single PGN
+    /// where the port pair and mode belong and could not carry a second entry.
+    #[test]
+    fn mfdb_response_round_trips_its_variable_length_layout() {
+        let response = NiuFilterDbResponse {
+            from_port: 1,
+            to_port: 2,
+            filter_mode: 0x01,
+            entries: vec![PGN_HEARTBEAT, PGN_DM1, PGN_REQUEST],
+        };
+        let bytes = response.encode().unwrap();
+
+        assert_eq!(bytes[0], NiuFunction::FilterDbResponse as u8);
+        assert_eq!(bytes[1] >> 4, 1, "bits 7-4 are the From port");
+        assert_eq!(bytes[1] & 0x0F, 2, "bits 3-0 are the To port");
+        assert_eq!(bytes[2], 0x01, "byte 3 is the filter mode");
+        assert_eq!(
+            bytes.len(),
+            3 + 3 * 3,
+            "three PGN entries at three bytes each"
+        );
+        assert_eq!(NiuFilterDbResponse::decode(&bytes), Some(response));
+
+        // An empty database is a valid response.
+        let empty = NiuFilterDbResponse {
+            from_port: 0,
+            to_port: 1,
+            filter_mode: 0,
+            entries: Vec::new(),
+        };
+        assert_eq!(
+            NiuFilterDbResponse::decode(&empty.encode().unwrap()),
+            Some(empty)
+        );
+
+        // A truncated entry region is refused rather than silently dropped.
+        assert_eq!(NiuFilterDbResponse::decode(&bytes[..bytes.len() - 1]), None);
+        assert_eq!(NiuFilterDbResponse::decode(&[]), None);
+    }
+
     #[test]
     fn handle_niu_message_ignores_malformed_payloads() {
         let mut niu = Niu::new(NiuConfig::default());

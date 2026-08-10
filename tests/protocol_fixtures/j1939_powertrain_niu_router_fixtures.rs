@@ -1440,7 +1440,9 @@ fn fixture_isobus_niu_router_translates_address_claim_flows() {
     let raw_id =
         |name: &str| parse_hex_u64(parse_named_text_value(ISOBUS_NIU_CONTROL_HEX, name)) as u32;
 
-    let mut router = Router::new(NiuConfig::default());
+    // §7.3.1 blocks address claims at a router by default; this flow is the
+    // shared-address-space bridge case, which opts in explicitly.
+    let mut router = Router::new(NiuConfig::default()).forward_address_claims(true);
     router.niu_mut().start().unwrap();
     let tractor_cf = Name::default().with_identity_number(0x100);
     let implement_cf = Name::default().with_identity_number(0x200);

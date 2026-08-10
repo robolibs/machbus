@@ -506,6 +506,86 @@ impl Default for NiuNetworkMsg {
     }
 }
 
+/// N.MFDB_Response — a copy of one port pair's filter database (§6.6.2.3.2).
+///
+/// This message is **variable length**: byte 2 carries the port pair, byte 3
+/// the filter mode, and bytes 4..n the PGN entries, three bytes each. It was
+/// previously encoded through the 8-byte `AddFilterEntry` layout, which put a
+/// single PGN where the port pair and filter mode belong and could not carry
+/// more than one entry at all — so Table 5's own worked example was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NiuFilterDbResponse {
+    /// Bits 7-4 of byte 2.
+    pub from_port: u8,
+    /// Bits 3-0 of byte 2.
+    pub to_port: u8,
+    /// Filter mode for this port pair (§6.6.2.3.3).
+    pub filter_mode: u8,
+    /// The filtered PGNs, in order.
+    pub entries: Vec<Pgn>,
+}
+
+impl NiuFilterDbResponse {
+    /// Encode to the variable-length wire form.
+    ///
+    /// # Errors
+    /// [`Error::invalid_data`] when a port nibble or an entry PGN is out of
+    /// range.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.from_port > 0x0F || self.to_port > 0x0F {
+            return Err(Error::invalid_data(
+                "NIU port numbers occupy one nibble each",
+            ));
+        }
+        let mut data = Vec::with_capacity(3 + self.entries.len() * 3);
+        data.push(NiuFunction::FilterDbResponse as u8);
+        data.push((self.from_port << 4) | self.to_port);
+        data.push(self.filter_mode);
+        for &pgn in &self.entries {
+            if !pgn_is_valid(pgn) {
+                return Err(Error::invalid_data(format!(
+                    "NIU filter PGN 0x{pgn:X} exceeds the 18-bit J1939/ISOBUS PGN range"
+                )));
+            }
+            data.push((pgn & 0xFF) as u8);
+            data.push(((pgn >> 8) & 0xFF) as u8);
+            data.push(((pgn >> 16) & 0x03) as u8);
+        }
+        Ok(data)
+    }
+
+    /// Decode the variable-length wire form. Returns `None` for a payload that
+    /// is too short, carries the wrong function, or whose entry region is not a
+    /// whole number of 3-byte PGNs.
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 3 || data[0] != NiuFunction::FilterDbResponse as u8 {
+            return None;
+        }
+        let entries_region = &data[3..];
+        if entries_region.len() % 3 != 0 {
+            return None;
+        }
+        let mut entries = Vec::with_capacity(entries_region.len() / 3);
+        for chunk in entries_region.chunks_exact(3) {
+            if chunk[2] & 0xFC != 0 {
+                return None;
+            }
+            let pgn = (chunk[0] as Pgn) | ((chunk[1] as Pgn) << 8) | (((chunk[2] & 0x03) as Pgn) << 16);
+            if !pgn_is_valid(pgn) {
+                return None;
+            }
+            entries.push(pgn);
+        }
+        Some(Self {
+            from_port: data[1] >> 4,
+            to_port: data[1] & 0x0F,
+            filter_mode: data[2],
+            entries,
+        })
+    }
+}
+
 impl NiuNetworkMsg {
     /// Encode to the standard 8-byte wire format (padded with `0xFF`).
     pub fn encode(&self) -> Result<[u8; 8]> {
@@ -513,9 +593,7 @@ impl NiuNetworkMsg {
         data[0] = self.function as u8;
         data[1] = self.port_number;
         match self.function {
-            NiuFunction::AddFilterEntry
-            | NiuFunction::DeleteFilterEntry
-            | NiuFunction::FilterDbResponse => {
+            NiuFunction::AddFilterEntry | NiuFunction::DeleteFilterEntry => {
                 if !pgn_is_valid(self.filter_pgn) {
                     return Err(Error::invalid_data(format!(
                         "NIU filter PGN 0x{:X} exceeds the 18-bit J1939/ISOBUS PGN range",
@@ -553,9 +631,7 @@ impl NiuNetworkMsg {
             ..Default::default()
         };
         match msg.function {
-            NiuFunction::AddFilterEntry
-            | NiuFunction::DeleteFilterEntry
-            | NiuFunction::FilterDbResponse => {
+            NiuFunction::AddFilterEntry | NiuFunction::DeleteFilterEntry => {
                 if (data[4] & 0xFC) != 0 || data[5..].iter().any(|&b| b != 0xFF) {
                     return None;
                 }
@@ -1409,6 +1485,15 @@ fn address_conflict(side: &str, addr: Address, existing: Name, requested: Name) 
 pub struct Router {
     niu: Niu,
     db: AddressTranslationDb,
+    /// §7.3.1: "Address claim messages do not cross through a router", repeated
+    /// in §7.3.3 — a router joins two *separate* address spaces, so a claim
+    /// made on one side says nothing about the other and forwarding it invites
+    /// a spurious contest.
+    ///
+    /// A bridge deployed over a single shared address space is the case where
+    /// claims legitimately cross; that is opt-in via
+    /// [`Router::forward_address_claims`].
+    forward_address_claims: bool,
 }
 
 /// Deterministic router policy snapshot.
@@ -1430,7 +1515,16 @@ impl Router {
         Self {
             niu: Niu::new(config),
             db: AddressTranslationDb::new(),
+            forward_address_claims: false,
         }
+    }
+
+    /// Allow Address Claimed frames to cross, for a bridge sharing one address
+    /// space with both segments. Off by default per §7.3.1.
+    #[must_use]
+    pub const fn forward_address_claims(mut self, forward: bool) -> Self {
+        self.forward_address_claims = forward;
+        self
     }
 
     pub fn add_translation(
@@ -1495,6 +1589,10 @@ impl Router {
         let destination = frame.destination();
         let is_broadcast = frame.is_broadcast();
 
+        if frame.pgn() == PGN_ADDRESS_CLAIMED && !self.forward_address_claims {
+            self.block_translated_frame(frame, origin, "address claims do not cross a router");
+            return None;
+        }
         let translated_source = if frame.pgn() == PGN_ADDRESS_CLAIMED {
             let Some(translated) = self.translate_address_claim_source(&frame, origin) else {
                 self.block_translated_frame(frame, origin, "invalid address-claim translation");

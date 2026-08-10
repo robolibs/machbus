@@ -85,7 +85,11 @@ aftertreatment1_upper_edge=FAFDFFFDFFFEFEFF
 aftertreatment1_clamped_inputs=FAFDFFFDFFFEFEFF
 aftertreatment2_upper_edge=FDFFFAFAFEFEFFFF
 aftertreatment2_clamped_inputs=FDFFFAFAFEFEFFFF
-eec1_default=7D7D7D00000000FF
+# A default-constructed EEC1 has no measurements, so every parameter encodes as
+# its J1939-71 not-available indicator (FF for the one-byte percents, FFFF for
+# engine speed). This previously read 7D7D7D0000... — 0 % torque and 0 rpm,
+# which claims readings the engine never reported.
+eec1_default=FFFFFFFFFF0000FF
 eec2_default=0FFF00FFFFFFFFFF
 eec3_default=7D0000FFFFFFFFFF
 engine_temp1_default=0000201D201D00FF

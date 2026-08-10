@@ -766,19 +766,19 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         "eec1_50_75_45_1500rpm_src10_starter5",
     );
     let expected_eec1 = Eec1 {
-        engine_torque_percent: 50.0,
-        driver_demand_percent: 75.0,
-        actual_engine_percent: 45.0,
-        engine_speed_rpm: 1500.0,
+        engine_torque_percent: machbus::isobus::implement::Signal::Value(50.0),
+        driver_demand_percent: machbus::isobus::implement::Signal::Value(75.0),
+        actual_engine_percent: machbus::isobus::implement::Signal::Value(45.0),
+        engine_speed_rpm: machbus::isobus::implement::Signal::Value(1500.0),
         starter_mode: 0x05,
         source_address: 0x10,
     };
     assert_eq!(expected_eec1.encode(), eec1);
     let decoded_eec1 = Eec1::decode(&eec1).unwrap();
-    assert_eq!(decoded_eec1.engine_torque_percent, 50.0);
-    assert_eq!(decoded_eec1.driver_demand_percent, 75.0);
-    assert_eq!(decoded_eec1.actual_engine_percent, 45.0);
-    assert_eq!(decoded_eec1.engine_speed_rpm, 1500.0);
+    assert_eq!(decoded_eec1.engine_torque_percent.value(), Some(50.0));
+    assert_eq!(decoded_eec1.driver_demand_percent.value(), Some(75.0));
+    assert_eq!(decoded_eec1.actual_engine_percent.value(), Some(45.0));
+    assert_eq!(decoded_eec1.engine_speed_rpm.value(), Some(1500.0));
     assert_eq!(decoded_eec1.starter_mode, 0x05);
     assert_eq!(decoded_eec1.source_address, 0x10);
 

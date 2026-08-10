@@ -493,6 +493,12 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec1`].
+ * EEC1 as flat C doubles.
+ *
+ * A parameter the engine reports as *error* or *not available* is `NaN` here
+ * — the whole PG is no longer discarded when one sub-signal is absent (G4),
+ * so a caller must check. Use the Rust `Signal` API when the distinction
+ * between "faulted" and "not provided" matters.
  */
 typedef struct {
   double engine_torque_percent;

@@ -2,6 +2,7 @@
 //! EngineTemp1, FuelEconomy, EngineHours. Mirrors
 //! `engine_powertrain_demo.cpp`.
 
+use machbus::isobus::implement::Signal;
 use machbus::j1939::{Eec1, EngineHours, EngineTemp1, FuelEconomy};
 
 fn main() {
@@ -9,18 +10,20 @@ fn main() {
 
     // EEC1 — Electronic Engine Controller 1.
     let eec1 = Eec1 {
-        engine_torque_percent: 50.0,
-        driver_demand_percent: 75.0,
-        actual_engine_percent: 45.0,
-        engine_speed_rpm: 1500.0,
+        engine_torque_percent: Signal::Value(50.0),
+        driver_demand_percent: Signal::Value(75.0),
+        actual_engine_percent: Signal::Value(45.0),
+        engine_speed_rpm: Signal::Value(1500.0),
         starter_mode: 1,
         source_address: 0x00,
     };
     let bytes = eec1.encode();
     let d = Eec1::decode(&bytes).unwrap();
     println!(
-        "[EEC1]  rpm={:.1}, torque={:.1}%, driver_demand={:.1}%",
-        d.engine_speed_rpm, d.engine_torque_percent, d.driver_demand_percent
+        "[EEC1]  rpm={:?}, torque={:?}%, driver_demand={:?}%",
+        d.engine_speed_rpm.value(),
+        d.engine_torque_percent.value(),
+        d.driver_demand_percent.value()
     );
 
     // Engine temperature.

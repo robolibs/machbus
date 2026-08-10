@@ -1,3 +1,4 @@
+use machbus::isobus::implement::Signal;
 use machbus::j1939::{
     Aftertreatment1, Aftertreatment2, AmbientConditions, ComponentIdentification, CruiseControl,
     DashDisplay, Eec1, Eec2, Eec3, EngineFluidLp, EngineHours, EngineTemp1, EngineTemp2, Etc1,
@@ -20,23 +21,32 @@ fn assert_close(left: f64, right: f64) {
     );
 }
 
+/// A `Signal` that must carry a value close to `right`. A parameter reported as
+/// error or not-available is a distinct outcome and fails here.
+fn assert_signal_close(left: Signal<f64>, right: f64) {
+    let value = left
+        .value()
+        .unwrap_or_else(|| panic!("expected a measurement close to {right}, got {left:?}"));
+    assert_close(value, right);
+}
+
 #[test]
 fn powertrain_eec1_rejects_non_ff_reserved_tail_and_preserves_scaling() {
     let eec1 = Eec1 {
-        engine_torque_percent: 12.0,
-        driver_demand_percent: -10.0,
-        actual_engine_percent: 20.0,
-        engine_speed_rpm: 1_500.0,
+        engine_torque_percent: Signal::Value(12.0),
+        driver_demand_percent: Signal::Value(-10.0),
+        actual_engine_percent: Signal::Value(20.0),
+        engine_speed_rpm: Signal::Value(1_500.0),
         starter_mode: 3,
         source_address: 0x80,
     };
     let encoded = eec1.encode();
     let decoded = Eec1::decode(&encoded).unwrap();
 
-    assert_close(decoded.engine_torque_percent, 12.0);
-    assert_close(decoded.driver_demand_percent, -10.0);
-    assert_close(decoded.actual_engine_percent, 20.0);
-    assert_close(decoded.engine_speed_rpm, 1_500.0);
+    assert_signal_close(decoded.engine_torque_percent, 12.0);
+    assert_signal_close(decoded.driver_demand_percent, -10.0);
+    assert_signal_close(decoded.actual_engine_percent, 20.0);
+    assert_signal_close(decoded.engine_speed_rpm, 1_500.0);
     assert_eq!(decoded.starter_mode, 3);
     assert_eq!(decoded.source_address, 0x80);
 
@@ -50,36 +60,62 @@ fn powertrain_eec1_rejects_non_ff_reserved_tail_and_preserves_scaling() {
 }
 
 #[test]
-fn powertrain_eec1_rejects_not_available_sentinels_for_required_fields() {
+fn powertrain_eec1_reports_sentinels_as_absent_without_scaling_them() {
     let encoded = Eec1 {
-        engine_torque_percent: 0.0,
-        driver_demand_percent: 1.0,
-        actual_engine_percent: 2.0,
-        engine_speed_rpm: 1_500.0,
+        engine_torque_percent: Signal::Value(0.0),
+        driver_demand_percent: Signal::Value(1.0),
+        actual_engine_percent: Signal::Value(2.0),
+        engine_speed_rpm: Signal::Value(1_500.0),
         starter_mode: 0,
         source_address: 0x80,
     }
     .encode();
     assert!(Eec1::decode(&encoded).is_some());
 
+    // H54 — a sentinel must never be *scaled into a number*, but it must also
+    // not cost the rest of the PG: the other parameters in the same frame are
+    // still perfectly valid, and a faulted sensor has to stay distinguishable
+    // from an unplugged bus (G4).
     for index in [0usize, 1, 2] {
-        let mut bad_percent = encoded;
-        bad_percent[index] = 0xFF;
+        let mut absent = encoded;
+        absent[index] = 0xFF;
+        let decoded = Eec1::decode(&absent)
+            .unwrap_or_else(|| panic!("byte {index} absent must not drop the frame"));
+        let fields = [
+            decoded.engine_torque_percent,
+            decoded.driver_demand_percent,
+            decoded.actual_engine_percent,
+        ];
         assert_eq!(
-            Eec1::decode(&bad_percent),
-            None,
-            "EEC1 percent byte {index} must not accept the not-available sentinel"
+            fields[index],
+            Signal::NotAvailable,
+            "EEC1 percent byte {index} must report absent, not a scaled value"
         );
+        for (other, signal) in fields.iter().enumerate() {
+            if other != index {
+                assert!(
+                    signal.value().is_some(),
+                    "byte {other} was reported and must survive"
+                );
+            }
+        }
+        assert_signal_close(decoded.engine_speed_rpm, 1_500.0);
     }
 
-    let mut bad_speed = encoded;
-    bad_speed[3] = 0xFF;
-    bad_speed[4] = 0xFF;
+    // The error indicator is a distinct outcome from not-available.
+    let mut faulted = encoded;
+    faulted[0] = 0xFE;
     assert_eq!(
-        Eec1::decode(&bad_speed),
-        None,
-        "EEC1 engine-speed field must not accept the not-available sentinel"
+        Eec1::decode(&faulted).unwrap().engine_torque_percent,
+        Signal::Error
     );
+
+    let mut absent_speed = encoded;
+    absent_speed[3] = 0xFF;
+    absent_speed[4] = 0xFF;
+    let decoded = Eec1::decode(&absent_speed).expect("an absent speed keeps the frame");
+    assert_eq!(decoded.engine_speed_rpm, Signal::NotAvailable);
+    assert_signal_close(decoded.driver_demand_percent, 1.0);
 }
 
 #[test]
@@ -174,10 +210,10 @@ fn powertrain_eec3_asymmetry_rejects_reserved_special_values() {
 #[test]
 fn powertrain_engine_full_message_helpers_reject_invalid_envelopes() {
     let eec1 = Eec1 {
-        engine_torque_percent: 10.0,
-        driver_demand_percent: 11.0,
-        actual_engine_percent: 12.0,
-        engine_speed_rpm: 1_450.0,
+        engine_torque_percent: Signal::Value(10.0),
+        driver_demand_percent: Signal::Value(11.0),
+        actual_engine_percent: Signal::Value(12.0),
+        engine_speed_rpm: Signal::Value(1_450.0),
         starter_mode: 2,
         source_address: 0x80,
     };
@@ -616,20 +652,24 @@ fn powertrain_scalar_decoders_reject_not_available_sentinels_for_non_optional_va
 }
 
 #[test]
-fn powertrain_multibyte_error_indicators_are_rejected_before_scaling() {
+fn powertrain_multibyte_error_indicators_are_reported_not_scaled() {
     let eec1 = Eec1 {
-        engine_torque_percent: 10.0,
-        driver_demand_percent: 20.0,
-        actual_engine_percent: 30.0,
-        engine_speed_rpm: 1_800.0,
+        engine_torque_percent: Signal::Value(10.0),
+        driver_demand_percent: Signal::Value(20.0),
+        actual_engine_percent: Signal::Value(30.0),
+        engine_speed_rpm: Signal::Value(1_800.0),
         starter_mode: 1,
         source_address: 0x34,
     };
     let encoded_eec1 = eec1.encode();
     assert!(Eec1::decode(&encoded_eec1).is_some());
-    let mut bad_engine_speed = encoded_eec1;
-    bad_engine_speed[3..5].copy_from_slice(&(u16::MAX - 1).to_le_bytes());
-    assert_eq!(Eec1::decode(&bad_engine_speed), None);
+    // The indicator is reported as absent rather than scaled — and the rest of
+    // the PG survives it (H54/G4).
+    let mut absent_engine_speed = encoded_eec1;
+    absent_engine_speed[3..5].copy_from_slice(&(u16::MAX - 1).to_le_bytes());
+    let decoded = Eec1::decode(&absent_engine_speed).expect("the frame still decodes");
+    assert_eq!(decoded.engine_speed_rpm, Signal::NotAvailable);
+    assert_signal_close(decoded.engine_torque_percent, 10.0);
 
     let hours = EngineHours {
         total_hours: 123.0,
@@ -716,12 +756,12 @@ fn powertrain_multibyte_error_indicators_are_rejected_before_scaling() {
 }
 
 #[test]
-fn powertrain_one_byte_scaled_fields_reject_reserved_special_values_before_scaling() {
+fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
     let eec1 = Eec1 {
-        engine_torque_percent: 10.0,
-        driver_demand_percent: 20.0,
-        actual_engine_percent: 30.0,
-        engine_speed_rpm: 1_800.0,
+        engine_torque_percent: Signal::Value(10.0),
+        driver_demand_percent: Signal::Value(20.0),
+        actual_engine_percent: Signal::Value(30.0),
+        engine_speed_rpm: Signal::Value(1_800.0),
         starter_mode: 1,
         source_address: 0x34,
     };
@@ -732,20 +772,33 @@ fn powertrain_one_byte_scaled_fields_reject_reserved_special_values_before_scali
         (1, "driver-demand"),
         (2, "actual-engine"),
     ] {
-        for reserved in [0xFB, 0xFE, 0xFF] {
-            let mut bad = encoded_eec1;
-            bad[index] = reserved;
+        for (reserved, expected) in [
+            (0xFBu8, Signal::NotAvailable),
+            (0xFE, Signal::Error),
+            (0xFF, Signal::NotAvailable),
+        ] {
+            let mut special = encoded_eec1;
+            special[index] = reserved;
+            let decoded = Eec1::decode(&special).unwrap_or_else(|| {
+                panic!("EEC1 {name} raw 0x{reserved:02X} must not drop the frame")
+            });
+            let field = [
+                decoded.engine_torque_percent,
+                decoded.driver_demand_percent,
+                decoded.actual_engine_percent,
+            ][index];
             assert_eq!(
-                Eec1::decode(&bad),
-                None,
-                "EEC1 {name} must reject special one-byte raw value 0x{reserved:02X}"
+                field, expected,
+                "EEC1 {name} raw 0x{reserved:02X} must be reported, never scaled"
             );
+            // Whatever else the frame carried is untouched.
+            assert_signal_close(decoded.engine_speed_rpm, 1_800.0);
         }
     }
     let saturated_eec1 = Eec1 {
-        engine_torque_percent: 10_000.0,
-        driver_demand_percent: 10_000.0,
-        actual_engine_percent: 10_000.0,
+        engine_torque_percent: Signal::Value(10_000.0),
+        driver_demand_percent: Signal::Value(10_000.0),
+        actual_engine_percent: Signal::Value(10_000.0),
         ..eec1
     }
     .encode();

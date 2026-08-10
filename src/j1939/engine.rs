@@ -8,6 +8,7 @@
 
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 
+use crate::isobus::implement::Signal;
 use crate::net::message::Message;
 use crate::net::pgn_defs::{
     PGN_AMBIENT_CONDITIONS, PGN_AT1, PGN_AT2, PGN_COMPONENT_ID, PGN_DASH_DISPLAY, PGN_EEC1,
@@ -59,6 +60,26 @@ fn offset_scaled_u8_non_na(value: f64, offset: f64, scale: f64) -> u8 {
     scaled_u8_non_na(value + offset, scale)
 }
 
+/// Encode a [`Signal`] into a one-byte SLOT, round-tripping the error and
+/// not-available indicators rather than flattening them to a number.
+fn encode_u8_signal(signal: Signal<f64>, offset: f64) -> u8 {
+    match signal {
+        Signal::Value(v) => offset_scaled_u8_non_na(v, offset, 1.0),
+        Signal::Error => 0xFE,
+        Signal::NotAvailable => 0xFF,
+    }
+}
+
+/// Two-byte equivalent of [`encode_u8_signal`].
+fn encode_u16_signal(signal: Signal<f64>, scale: f64) -> u16 {
+    match signal {
+        Signal::Value(v) => scaled_u16_non_na(v, scale),
+        // Both map onto the same not-available raw: see `u16_signal` for why
+        // the error band is not carved out of the two-byte range here.
+        Signal::Error | Signal::NotAvailable => 0xFFFF,
+    }
+}
+
 fn scaled_u16_non_na(value: f64, scale: f64) -> u16 {
     if !value.is_finite() {
         return 0;
@@ -100,6 +121,41 @@ fn u8_scaled_raw_is_defined(raw: u8) -> bool {
     raw <= 250
 }
 
+/// Decode a one-byte J1939 SLOT into a [`Signal`], keeping "error" and "not
+/// available" distinguishable from a measurement.
+///
+/// J1939-71 reserves `0xFE` for the error indicator and `0xFF` for
+/// not-available, with `0xFB..=0xFD` reserved. Treating any of them as a
+/// whole-PG decode failure — as this module used to — makes a faulted sensor
+/// indistinguishable from an unplugged bus and discards every *other*,
+/// perfectly valid parameter in the same frame (G4).
+#[inline]
+fn u8_signal(raw: u8, resolution: f64, offset: f64) -> Signal<f64> {
+    match raw {
+        0xFF => Signal::NotAvailable,
+        0xFE => Signal::Error,
+        r if r <= 250 => Signal::Value(f64::from(r) * resolution + offset),
+        // 0xFB..=0xFD are reserved; nothing meaningful to report.
+        _ => Signal::NotAvailable,
+    }
+}
+
+/// Two-byte equivalent of [`u8_signal`].
+///
+/// The not-available boundary is the one this crate already used
+/// (`u16_data_is_available`: `raw < 0xFFFE`) rather than the full J1939-71 SLOT
+/// banding. Narrowing the valid range would need the J1939/71 parameter tables,
+/// which are a blocked item (6H) — so this adds the missing *representation* of
+/// "absent" without redefining which raws count as a measurement.
+#[inline]
+fn u16_signal(raw: u16, resolution: f64, offset: f64) -> Signal<f64> {
+    if raw >= u16::MAX - 1 {
+        Signal::NotAvailable
+    } else {
+        Signal::Value(f64::from(raw) * resolution + offset)
+    }
+}
+
 #[inline]
 fn u8_scaled_raw_is_defined_or_status(raw: u8) -> bool {
     raw <= 250 || raw >= 0xFE
@@ -135,13 +191,13 @@ fn u8_status_raw_is_defined(raw: u8) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Eec1 {
     /// SPN 513: −125 to 125 %, offset −125.
-    pub engine_torque_percent: f64,
+    pub engine_torque_percent: Signal<f64>,
     /// SPN 512: −125 to 125 %, offset −125.
-    pub driver_demand_percent: f64,
+    pub driver_demand_percent: Signal<f64>,
     /// SPN 514: −125 to 125 %, offset −125.
-    pub actual_engine_percent: f64,
+    pub actual_engine_percent: Signal<f64>,
     /// SPN 190: 0.125 rpm/bit, 2 bytes.
-    pub engine_speed_rpm: f64,
+    pub engine_speed_rpm: Signal<f64>,
     /// SPN 1675: 4 bits.
     pub starter_mode: u8,
     /// SPN 899: source of engine speed.
@@ -152,10 +208,10 @@ impl Eec1 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = offset_scaled_u8_non_na(self.engine_torque_percent, 125.0, 1.0);
-        data[1] = offset_scaled_u8_non_na(self.driver_demand_percent, 125.0, 1.0);
-        data[2] = offset_scaled_u8_non_na(self.actual_engine_percent, 125.0, 1.0);
-        let rpm = scaled_u16_non_na(self.engine_speed_rpm, 0.125);
+        data[0] = encode_u8_signal(self.engine_torque_percent, 125.0);
+        data[1] = encode_u8_signal(self.driver_demand_percent, 125.0);
+        data[2] = encode_u8_signal(self.actual_engine_percent, 125.0);
+        let rpm = encode_u16_signal(self.engine_speed_rpm, 0.125);
         data[3] = (rpm & 0xFF) as u8;
         data[4] = ((rpm >> 8) & 0xFF) as u8;
         data[5] = self.source_address;
@@ -168,18 +224,13 @@ impl Eec1 {
         if !exact8_with_ff_tail(data, 7) || data[6] & 0xF0 != 0 {
             return None;
         }
-        if !data[0..=2].iter().all(|&raw| u8_scaled_raw_is_defined(raw)) {
-            return None;
-        }
+        // G4: one absent sub-signal must not cost the rest of the PG.
         let rpm = (data[3] as u16) | ((data[4] as u16) << 8);
-        if !u16_data_is_available(rpm) {
-            return None;
-        }
         Some(Self {
-            engine_torque_percent: data[0] as f64 - 125.0,
-            driver_demand_percent: data[1] as f64 - 125.0,
-            actual_engine_percent: data[2] as f64 - 125.0,
-            engine_speed_rpm: rpm as f64 * 0.125,
+            engine_torque_percent: u8_signal(data[0], 1.0, -125.0),
+            driver_demand_percent: u8_signal(data[1], 1.0, -125.0),
+            actual_engine_percent: u8_signal(data[2], 1.0, -125.0),
+            engine_speed_rpm: u16_signal(rpm, 0.125, 0.0),
             source_address: data[5],
             starter_mode: data[6] & 0x0F,
         })
@@ -1224,19 +1275,70 @@ mod tests {
     #[test]
     fn eec1_round_trip() {
         let m = Eec1 {
-            engine_torque_percent: 50.0,
-            driver_demand_percent: 75.0,
-            actual_engine_percent: 45.0,
-            engine_speed_rpm: 1500.0,
+            engine_torque_percent: Signal::Value(50.0),
+            driver_demand_percent: Signal::Value(75.0),
+            actual_engine_percent: Signal::Value(45.0),
+            engine_speed_rpm: Signal::Value(1500.0),
             starter_mode: 0x05,
             source_address: 0x10,
         };
         assert_eq!(m.encode(), [0xAF, 0xC8, 0xAA, 0xE0, 0x2E, 0x10, 0x05, 0xFF]);
         let decoded = Eec1::decode(&m.encode()).unwrap();
-        assert!((decoded.engine_torque_percent - 50.0).abs() < 1.0);
-        assert!((decoded.engine_speed_rpm - 1500.0).abs() < 0.125);
+        assert!(
+            decoded
+                .engine_torque_percent
+                .value()
+                .is_some_and(|v| (v - 50.0).abs() < 1.0)
+        );
+        assert!(
+            decoded
+                .engine_speed_rpm
+                .value()
+                .is_some_and(|v| (v - 1500.0).abs() < 0.125)
+        );
         assert_eq!(decoded.starter_mode, 0x05);
         assert_eq!(decoded.source_address, 0x10);
+    }
+
+    /// H54 — one absent sub-signal used to drop the whole PG, so a single
+    /// faulted sensor made every other parameter in the frame unreadable and a
+    /// faulted sensor was indistinguishable from an unplugged bus (G4).
+    #[test]
+    fn eec1_keeps_the_frame_when_one_parameter_is_absent() {
+        let mut bytes = Eec1 {
+            engine_torque_percent: Signal::Value(50.0),
+            driver_demand_percent: Signal::Value(75.0),
+            actual_engine_percent: Signal::Value(45.0),
+            engine_speed_rpm: Signal::Value(1500.0),
+            starter_mode: 0x05,
+            source_address: 0x10,
+        }
+        .encode();
+
+        // The engine reports torque as *faulted* and speed as not provided.
+        bytes[0] = 0xFE;
+        bytes[3] = 0xFF;
+        bytes[4] = 0xFF;
+
+        let decoded = Eec1::decode(&bytes).expect("the frame still decodes");
+        assert_eq!(decoded.engine_torque_percent, Signal::Error);
+        assert_eq!(decoded.engine_speed_rpm, Signal::NotAvailable);
+        // The parameters that *were* reported survive.
+        assert!(
+            decoded
+                .driver_demand_percent
+                .value()
+                .is_some_and(|v| (v - 75.0).abs() < 1.0)
+        );
+        assert_eq!(decoded.source_address, 0x10);
+
+        // And both indicators round-trip rather than flattening to a number.
+        let reencoded = decoded.encode();
+        assert_eq!(reencoded[0], 0xFE, "error stays error");
+        assert_eq!(
+            Eec1::decode(&reencoded).unwrap().engine_speed_rpm,
+            Signal::NotAvailable
+        );
     }
 
     #[test]

@@ -365,10 +365,10 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "eec1_clamped_inputs",
             Eec1 {
-                engine_torque_percent: 99_999.0,
-                driver_demand_percent: 99_999.0,
-                actual_engine_percent: 99_999.0,
-                engine_speed_rpm: 99_999.0,
+                engine_torque_percent: machbus::isobus::implement::Signal::Value(99_999.0),
+                driver_demand_percent: machbus::isobus::implement::Signal::Value(99_999.0),
+                actual_engine_percent: machbus::isobus::implement::Signal::Value(99_999.0),
+                engine_speed_rpm: machbus::isobus::implement::Signal::Value(99_999.0),
                 starter_mode: 0x0F,
                 source_address: 0xEE,
             }
@@ -534,10 +534,10 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     let eec1_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec1_raw_min");
     assert_eq!(
         Eec1 {
-            engine_torque_percent: -125.0,
-            driver_demand_percent: -125.0,
-            actual_engine_percent: -125.0,
-            engine_speed_rpm: 0.0,
+            engine_torque_percent: machbus::isobus::implement::Signal::Value(-125.0),
+            driver_demand_percent: machbus::isobus::implement::Signal::Value(-125.0),
+            actual_engine_percent: machbus::isobus::implement::Signal::Value(-125.0),
+            engine_speed_rpm: machbus::isobus::implement::Signal::Value(0.0),
             starter_mode: 0,
             source_address: 0,
         }
@@ -545,16 +545,16 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         eec1_min
     );
     let decoded = Eec1::decode(&eec1_min).unwrap();
-    assert_eq!(decoded.engine_torque_percent, -125.0);
-    assert_eq!(decoded.engine_speed_rpm, 0.0);
+    assert_eq!(decoded.engine_torque_percent.value(), Some(-125.0));
+    assert_eq!(decoded.engine_speed_rpm.value(), Some(0.0));
 
     let eec1_upper = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec1_upper_edge");
     assert_eq!(
         Eec1 {
-            engine_torque_percent: 125.0,
-            driver_demand_percent: 125.0,
-            actual_engine_percent: 125.0,
-            engine_speed_rpm: 8191.625,
+            engine_torque_percent: machbus::isobus::implement::Signal::Value(125.0),
+            driver_demand_percent: machbus::isobus::implement::Signal::Value(125.0),
+            actual_engine_percent: machbus::isobus::implement::Signal::Value(125.0),
+            engine_speed_rpm: machbus::isobus::implement::Signal::Value(8191.625),
             starter_mode: 0x0F,
             source_address: 0xFE,
         }
@@ -562,10 +562,10 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         eec1_upper
     );
     let decoded = Eec1::decode(&eec1_upper).unwrap();
-    assert_eq!(decoded.engine_torque_percent, 125.0);
-    assert_eq!(decoded.driver_demand_percent, 125.0);
-    assert_eq!(decoded.actual_engine_percent, 125.0);
-    assert_eq!(decoded.engine_speed_rpm, 8191.625);
+    assert_eq!(decoded.engine_torque_percent.value(), Some(125.0));
+    assert_eq!(decoded.driver_demand_percent.value(), Some(125.0));
+    assert_eq!(decoded.actual_engine_percent.value(), Some(125.0));
+    assert_eq!(decoded.engine_speed_rpm.value(), Some(8191.625));
     assert_eq!(decoded.starter_mode, 0x0F);
 
     let eec2_upper = parse_named_hex_frame(

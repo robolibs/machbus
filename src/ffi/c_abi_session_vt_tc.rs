@@ -152,6 +152,12 @@ pub extern "C" fn machbus_identifier_is_broadcast(raw: u32) -> bool {
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Eec1`].
 #[repr(C)]
+/// EEC1 as flat C doubles.
+///
+/// A parameter the engine reports as *error* or *not available* is `NaN` here
+/// — the whole PG is no longer discarded when one sub-signal is absent (G4),
+/// so a caller must check. Use the Rust `Signal` API when the distinction
+/// between "faulted" and "not provided" matters.
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEec1 {
     pub engine_torque_percent: f64,
@@ -165,10 +171,10 @@ pub struct MachbusEec1 {
 impl From<crate::j1939::Eec1> for MachbusEec1 {
     fn from(e: crate::j1939::Eec1) -> Self {
         Self {
-            engine_torque_percent: e.engine_torque_percent,
-            driver_demand_percent: e.driver_demand_percent,
-            actual_engine_percent: e.actual_engine_percent,
-            engine_speed_rpm: e.engine_speed_rpm,
+            engine_torque_percent: e.engine_torque_percent.value().unwrap_or(f64::NAN),
+            driver_demand_percent: e.driver_demand_percent.value().unwrap_or(f64::NAN),
+            actual_engine_percent: e.actual_engine_percent.value().unwrap_or(f64::NAN),
+            engine_speed_rpm: e.engine_speed_rpm.value().unwrap_or(f64::NAN),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         }
@@ -177,11 +183,19 @@ impl From<crate::j1939::Eec1> for MachbusEec1 {
 
 impl From<MachbusEec1> for crate::j1939::Eec1 {
     fn from(e: MachbusEec1) -> Self {
+        use crate::isobus::implement::Signal;
+        let signal = |v: f64| {
+            if v.is_finite() {
+                Signal::Value(v)
+            } else {
+                Signal::NotAvailable
+            }
+        };
         Self {
-            engine_torque_percent: e.engine_torque_percent,
-            driver_demand_percent: e.driver_demand_percent,
-            actual_engine_percent: e.actual_engine_percent,
-            engine_speed_rpm: e.engine_speed_rpm,
+            engine_torque_percent: signal(e.engine_torque_percent),
+            driver_demand_percent: signal(e.driver_demand_percent),
+            actual_engine_percent: signal(e.actual_engine_percent),
+            engine_speed_rpm: signal(e.engine_speed_rpm),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         }

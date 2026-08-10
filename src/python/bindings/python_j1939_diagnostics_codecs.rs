@@ -1,12 +1,12 @@
 #[pymethods]
 impl PyEec1 {
     #[new]
-    #[pyo3(signature = (engine_speed_rpm=0.0, driver_demand_percent=0.0, actual_engine_percent=0.0, engine_torque_percent=0.0, starter_mode=0, source_address=0))]
+    #[pyo3(signature = (engine_speed_rpm=None, driver_demand_percent=None, actual_engine_percent=None, engine_torque_percent=None, starter_mode=0, source_address=0))]
     fn new(
-        engine_speed_rpm: f64,
-        driver_demand_percent: f64,
-        actual_engine_percent: f64,
-        engine_torque_percent: f64,
+        engine_speed_rpm: Option<f64>,
+        driver_demand_percent: Option<f64>,
+        actual_engine_percent: Option<f64>,
+        engine_torque_percent: Option<f64>,
         starter_mode: u8,
         source_address: u8,
     ) -> Self {
@@ -24,10 +24,10 @@ impl PyEec1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec1::decode(&data).map(|e| Self {
-            engine_torque_percent: e.engine_torque_percent,
-            driver_demand_percent: e.driver_demand_percent,
-            actual_engine_percent: e.actual_engine_percent,
-            engine_speed_rpm: e.engine_speed_rpm,
+            engine_torque_percent: e.engine_torque_percent.value(),
+            driver_demand_percent: e.driver_demand_percent.value(),
+            actual_engine_percent: e.actual_engine_percent.value(),
+            engine_speed_rpm: e.engine_speed_rpm.value(),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         })
@@ -36,10 +36,10 @@ impl PyEec1 {
     /// Encode to the 8-byte wire payload.
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec1 {
-            engine_torque_percent: self.engine_torque_percent,
-            driver_demand_percent: self.driver_demand_percent,
-            actual_engine_percent: self.actual_engine_percent,
-            engine_speed_rpm: self.engine_speed_rpm,
+            engine_torque_percent: py_signal(self.engine_torque_percent),
+            driver_demand_percent: py_signal(self.driver_demand_percent),
+            actual_engine_percent: py_signal(self.actual_engine_percent),
+            engine_speed_rpm: py_signal(self.engine_speed_rpm),
             starter_mode: self.starter_mode,
             source_address: self.source_address,
         }
@@ -49,7 +49,7 @@ impl PyEec1 {
 
     fn __repr__(&self) -> String {
         format!(
-            "Eec1(engine_speed_rpm={:.1}, driver_demand_percent={:.1})",
+            "Eec1(engine_speed_rpm={:?}, driver_demand_percent={:?})",
             self.engine_speed_rpm, self.driver_demand_percent
         )
     }

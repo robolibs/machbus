@@ -688,18 +688,19 @@ fn main() {
 
         // Engine status round-trip.
         let eec1 = Eec1 {
-            engine_torque_percent: 50.0,
-            driver_demand_percent: 75.0,
-            actual_engine_percent: 45.0,
-            engine_speed_rpm: 1500.0,
+            engine_torque_percent: machbus::isobus::implement::Signal::Value(50.0),
+            driver_demand_percent: machbus::isobus::implement::Signal::Value(75.0),
+            actual_engine_percent: machbus::isobus::implement::Signal::Value(45.0),
+            engine_speed_rpm: machbus::isobus::implement::Signal::Value(1500.0),
             starter_mode: 1,
             source_address: 0x10,
         };
         let bytes = eec1.encode();
         let decoded = Eec1::decode(&bytes).unwrap();
         println!(
-            "  EEC1: {} rpm round-trip OK ({:.1} rpm)",
-            eec1.engine_speed_rpm, decoded.engine_speed_rpm
+            "  EEC1: {:?} rpm round-trip OK ({:?} rpm)",
+            eec1.engine_speed_rpm.value(),
+            decoded.engine_speed_rpm.value()
         );
 
         // DTC round-trip.

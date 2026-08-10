@@ -1396,10 +1396,10 @@ impl PySession {
 
     fn powertrain_broadcast_eec1(&mut self, eec1: &PyEec1) -> PyResult<()> {
         let data = crate::j1939::Eec1 {
-            engine_torque_percent: eec1.engine_torque_percent,
-            driver_demand_percent: eec1.driver_demand_percent,
-            actual_engine_percent: eec1.actual_engine_percent,
-            engine_speed_rpm: eec1.engine_speed_rpm,
+            engine_torque_percent: py_signal(eec1.engine_torque_percent),
+            driver_demand_percent: py_signal(eec1.driver_demand_percent),
+            actual_engine_percent: py_signal(eec1.actual_engine_percent),
+            engine_speed_rpm: py_signal(eec1.engine_speed_rpm),
             starter_mode: eec1.starter_mode,
             source_address: eec1.source_address,
         };
@@ -1942,14 +1942,25 @@ impl PyIdentifier {
     }
 }
 
+/// Map an optional Python float onto a [`Signal`]: `None` becomes
+/// "not available" rather than a fabricated zero.
+pub(crate) const fn py_signal(v: Option<f64>) -> crate::isobus::implement::Signal<f64> {
+    match v {
+        Some(value) => crate::isobus::implement::Signal::Value(value),
+        None => crate::isobus::implement::Signal::NotAvailable,
+    }
+}
+
 /// EEC1 — engine speed / torque (PGN 61444).
 #[pyclass(name = "Eec1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec1 {
-    pub engine_torque_percent: f64,
-    pub driver_demand_percent: f64,
-    pub actual_engine_percent: f64,
-    pub engine_speed_rpm: f64,
+    /// `None` when the engine reports the parameter as error or not-available.
+    /// A single absent parameter no longer discards the whole PG (G4).
+    pub engine_torque_percent: Option<f64>,
+    pub driver_demand_percent: Option<f64>,
+    pub actual_engine_percent: Option<f64>,
+    pub engine_speed_rpm: Option<f64>,
     pub starter_mode: u8,
     pub source_address: u8,
 }

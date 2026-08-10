@@ -483,21 +483,23 @@ impl PyTsc1 {
 #[pyclass(name = "Vep1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyVep1 {
-    pub battery_voltage_v: f64,
-    pub alternator_current_a: f64,
-    pub charging_system_voltage_v: f64,
-    pub key_switch_voltage_v: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub battery_voltage_v: Option<f64>,
+    pub alternator_current_a: Option<f64>,
+    pub charging_system_voltage_v: Option<f64>,
+    pub key_switch_voltage_v: Option<f64>,
 }
 
 #[pymethods]
 impl PyVep1 {
     #[new]
-    #[pyo3(signature = (battery_voltage_v=0.0, alternator_current_a=0.0, charging_system_voltage_v=0.0, key_switch_voltage_v=0.0))]
+    #[pyo3(signature = (battery_voltage_v=None, alternator_current_a=None, charging_system_voltage_v=None, key_switch_voltage_v=None))]
     fn new(
-        battery_voltage_v: f64,
-        alternator_current_a: f64,
-        charging_system_voltage_v: f64,
-        key_switch_voltage_v: f64,
+        battery_voltage_v: Option<f64>,
+        alternator_current_a: Option<f64>,
+        charging_system_voltage_v: Option<f64>,
+        key_switch_voltage_v: Option<f64>,
     ) -> Self {
         Self {
             battery_voltage_v,
@@ -509,24 +511,24 @@ impl PyVep1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Vep1::decode(&data).map(|e| Self {
-            battery_voltage_v: e.battery_voltage_v,
-            alternator_current_a: e.alternator_current_a,
-            charging_system_voltage_v: e.charging_system_voltage_v,
-            key_switch_voltage_v: e.key_switch_voltage_v,
+            battery_voltage_v: e.battery_voltage_v.value(),
+            alternator_current_a: e.alternator_current_a.value(),
+            charging_system_voltage_v: e.charging_system_voltage_v.value(),
+            key_switch_voltage_v: e.key_switch_voltage_v.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Vep1 {
-            battery_voltage_v: self.battery_voltage_v,
-            alternator_current_a: self.alternator_current_a,
-            charging_system_voltage_v: self.charging_system_voltage_v,
-            key_switch_voltage_v: self.key_switch_voltage_v,
+            battery_voltage_v: py_signal(self.battery_voltage_v),
+            alternator_current_a: py_signal(self.alternator_current_a),
+            charging_system_voltage_v: py_signal(self.charging_system_voltage_v),
+            key_switch_voltage_v: py_signal(self.key_switch_voltage_v),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("Vep1(battery_voltage_v={:.2})", self.battery_voltage_v)
+        format!("Vep1(battery_voltage_v={:?})", self.battery_voltage_v)
     }
 }
 
@@ -534,21 +536,23 @@ impl PyVep1 {
 #[pyclass(name = "AmbientConditions", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAmbientConditions {
-    pub barometric_pressure_kpa: f64,
-    pub ambient_air_temp_c: f64,
-    pub intake_air_temp_c: f64,
-    pub road_surface_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub barometric_pressure_kpa: Option<f64>,
+    pub ambient_air_temp_c: Option<f64>,
+    pub intake_air_temp_c: Option<f64>,
+    pub road_surface_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyAmbientConditions {
     #[new]
-    #[pyo3(signature = (barometric_pressure_kpa=0.0, ambient_air_temp_c=-40.0, intake_air_temp_c=-40.0, road_surface_temp_c=-40.0))]
+    #[pyo3(signature = (barometric_pressure_kpa=None, ambient_air_temp_c=None, intake_air_temp_c=None, road_surface_temp_c=None))]
     fn new(
-        barometric_pressure_kpa: f64,
-        ambient_air_temp_c: f64,
-        intake_air_temp_c: f64,
-        road_surface_temp_c: f64,
+        barometric_pressure_kpa: Option<f64>,
+        ambient_air_temp_c: Option<f64>,
+        intake_air_temp_c: Option<f64>,
+        road_surface_temp_c: Option<f64>,
     ) -> Self {
         Self {
             barometric_pressure_kpa,
@@ -560,25 +564,25 @@ impl PyAmbientConditions {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::AmbientConditions::decode(&data).map(|e| Self {
-            barometric_pressure_kpa: e.barometric_pressure_kpa,
-            ambient_air_temp_c: e.ambient_air_temp_c,
-            intake_air_temp_c: e.intake_air_temp_c,
-            road_surface_temp_c: e.road_surface_temp_c,
+            barometric_pressure_kpa: e.barometric_pressure_kpa.value(),
+            ambient_air_temp_c: e.ambient_air_temp_c.value(),
+            intake_air_temp_c: e.intake_air_temp_c.value(),
+            road_surface_temp_c: e.road_surface_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::AmbientConditions {
-            barometric_pressure_kpa: self.barometric_pressure_kpa,
-            ambient_air_temp_c: self.ambient_air_temp_c,
-            intake_air_temp_c: self.intake_air_temp_c,
-            road_surface_temp_c: self.road_surface_temp_c,
+            barometric_pressure_kpa: py_signal(self.barometric_pressure_kpa),
+            ambient_air_temp_c: py_signal(self.ambient_air_temp_c),
+            intake_air_temp_c: py_signal(self.intake_air_temp_c),
+            road_surface_temp_c: py_signal(self.road_surface_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "AmbientConditions(barometric_pressure_kpa={:.1})",
+            "AmbientConditions(barometric_pressure_kpa={:?})",
             self.barometric_pressure_kpa
         )
     }

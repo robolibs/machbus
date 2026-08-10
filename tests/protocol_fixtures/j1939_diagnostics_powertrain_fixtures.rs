@@ -995,31 +995,31 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         "vep1_12_5_14_0_12_0_alt50",
     );
     let expected_vep1 = Vep1 {
-        battery_voltage_v: 12.5,
-        alternator_current_a: 50.0,
-        charging_system_voltage_v: 14.0,
-        key_switch_voltage_v: 12.0,
+        battery_voltage_v: sig(12.5),
+        alternator_current_a: sig(50.0),
+        charging_system_voltage_v: sig(14.0),
+        key_switch_voltage_v: sig(12.0),
     };
     assert_eq!(expected_vep1.encode(), vep1);
     let decoded_vep1 = Vep1::decode(&vep1).unwrap();
-    assert!((decoded_vep1.battery_voltage_v - 12.5).abs() < 0.05);
-    assert!((decoded_vep1.charging_system_voltage_v - 14.0).abs() < 0.05);
-    assert!((decoded_vep1.key_switch_voltage_v - 12.0).abs() < 0.05);
-    assert_eq!(decoded_vep1.alternator_current_a, 50.0);
+    assert_sig(decoded_vep1.battery_voltage_v, 12.5, 0.05);
+    assert_sig(decoded_vep1.charging_system_voltage_v, 14.0, 0.05);
+    assert_sig(decoded_vep1.key_switch_voltage_v, 12.0, 0.05);
+    assert_sig(decoded_vep1.alternator_current_a, 50.0, 0.0);
 
     let ambient = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "ambient_101_25_30_22");
     let expected_ambient = AmbientConditions {
-        barometric_pressure_kpa: 101.0,
-        ambient_air_temp_c: 25.0,
-        intake_air_temp_c: 30.0,
-        road_surface_temp_c: 22.0,
+        barometric_pressure_kpa: sig(101.0),
+        ambient_air_temp_c: sig(25.0),
+        intake_air_temp_c: sig(30.0),
+        road_surface_temp_c: sig(22.0),
     };
     assert_eq!(expected_ambient.encode(), ambient);
     let decoded_ambient = AmbientConditions::decode(&ambient).unwrap();
-    assert_eq!(decoded_ambient.barometric_pressure_kpa, 101.0);
-    assert!((decoded_ambient.ambient_air_temp_c - 25.0).abs() < 0.1);
-    assert_eq!(decoded_ambient.intake_air_temp_c, 30.0);
-    assert!((decoded_ambient.road_surface_temp_c - 22.0).abs() < 0.1);
+    assert_sig(decoded_ambient.barometric_pressure_kpa, 101.0, 0.0);
+    assert_sig(decoded_ambient.ambient_air_temp_c, 25.0, 0.1);
+    assert_sig(decoded_ambient.intake_air_temp_c, 30.0, 0.0);
+    assert_sig(decoded_ambient.road_surface_temp_c, 22.0, 0.1);
 
     let dash = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

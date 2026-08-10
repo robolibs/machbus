@@ -459,20 +459,20 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "vep1_clamped_inputs",
             Vep1 {
-                battery_voltage_v: 99_999.0,
-                alternator_current_a: 99_999.0,
-                charging_system_voltage_v: 99_999.0,
-                key_switch_voltage_v: 99_999.0,
+                battery_voltage_v: sig(99_999.0),
+                alternator_current_a: sig(99_999.0),
+                charging_system_voltage_v: sig(99_999.0),
+                key_switch_voltage_v: sig(99_999.0),
             }
             .encode(),
         ),
         (
             "ambient_clamped_inputs",
             AmbientConditions {
-                barometric_pressure_kpa: 99_999.0,
-                ambient_air_temp_c: 99_999.0,
-                intake_air_temp_c: 99_999.0,
-                road_surface_temp_c: 99_999.0,
+                barometric_pressure_kpa: sig(99_999.0),
+                ambient_air_temp_c: sig(99_999.0),
+                intake_air_temp_c: sig(99_999.0),
+                road_surface_temp_c: sig(99_999.0),
             }
             .encode(),
         ),
@@ -792,67 +792,69 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     let vep1_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "vep1_raw_min");
     assert_eq!(
         Vep1 {
-            battery_voltage_v: 0.0,
-            charging_system_voltage_v: 0.0,
-            key_switch_voltage_v: 0.0,
-            alternator_current_a: -125.0,
+            battery_voltage_v: sig(0.0),
+            charging_system_voltage_v: sig(0.0),
+            key_switch_voltage_v: sig(0.0),
+            alternator_current_a: sig(-125.0),
         }
         .encode(),
         vep1_min
     );
-    assert_eq!(
+    assert_sig(
         Vep1::decode(&vep1_min).unwrap().alternator_current_a,
-        -125.0
+        -125.0,
+        0.0,
     );
 
     let vep1_upper = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "vep1_upper_edge");
     assert_eq!(
         Vep1 {
-            battery_voltage_v: 3276.65,
-            charging_system_voltage_v: 3276.65,
-            key_switch_voltage_v: 3276.65,
-            alternator_current_a: 125.0,
+            battery_voltage_v: sig(3276.65),
+            charging_system_voltage_v: sig(3276.65),
+            key_switch_voltage_v: sig(3276.65),
+            alternator_current_a: sig(125.0),
         }
         .encode(),
         vep1_upper
     );
     let decoded = Vep1::decode(&vep1_upper).unwrap();
-    assert!((decoded.battery_voltage_v - 3276.65).abs() < 1e-9);
-    assert_eq!(decoded.alternator_current_a, 125.0);
+    assert_sig(decoded.battery_voltage_v, 3276.65, 1e-9);
+    assert_sig(decoded.alternator_current_a, 125.0, 0.0);
 
     let ambient_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "ambient_raw_min");
     assert_eq!(
         AmbientConditions {
-            barometric_pressure_kpa: 0.0,
-            ambient_air_temp_c: -273.0,
-            intake_air_temp_c: -40.0,
-            road_surface_temp_c: -273.0,
+            barometric_pressure_kpa: sig(0.0),
+            ambient_air_temp_c: sig(-273.0),
+            intake_air_temp_c: sig(-40.0),
+            road_surface_temp_c: sig(-273.0),
         }
         .encode(),
         ambient_min
     );
-    assert_eq!(
+    assert_sig(
         AmbientConditions::decode(&ambient_min)
             .unwrap()
             .ambient_air_temp_c,
-        -273.0
+        -273.0,
+        0.0,
     );
 
     let ambient_upper =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "ambient_upper_edge");
     assert_eq!(
         AmbientConditions {
-            barometric_pressure_kpa: 125.0,
-            ambient_air_temp_c: 1774.90625,
-            intake_air_temp_c: 210.0,
-            road_surface_temp_c: 1774.90625,
+            barometric_pressure_kpa: sig(125.0),
+            ambient_air_temp_c: sig(1774.90625),
+            intake_air_temp_c: sig(210.0),
+            road_surface_temp_c: sig(1774.90625),
         }
         .encode(),
         ambient_upper
     );
     let decoded = AmbientConditions::decode(&ambient_upper).unwrap();
-    assert_eq!(decoded.barometric_pressure_kpa, 125.0);
-    assert_eq!(decoded.road_surface_temp_c, 1774.90625);
+    assert_sig(decoded.barometric_pressure_kpa, 125.0, 0.0);
+    assert_sig(decoded.road_surface_temp_c, 1774.90625, 0.0);
 
     let dash_min =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "dash_display_raw_min");

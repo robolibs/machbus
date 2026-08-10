@@ -417,20 +417,20 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         Vep1,
         PGN_VEP1,
         Vep1 {
-            battery_voltage_v: 12.5,
-            alternator_current_a: 20.0,
-            charging_system_voltage_v: 14.1,
-            key_switch_voltage_v: 12.2,
+            battery_voltage_v: Signal::Value(12.5),
+            alternator_current_a: Signal::Value(20.0),
+            charging_system_voltage_v: Signal::Value(14.1),
+            key_switch_voltage_v: Signal::Value(12.2),
         }
     );
     assert_fixed_helper!(
         AmbientConditions,
         PGN_AMBIENT_CONDITIONS,
         AmbientConditions {
-            barometric_pressure_kpa: 101.0,
-            ambient_air_temp_c: 25.0,
-            intake_air_temp_c: 30.0,
-            road_surface_temp_c: 22.0,
+            barometric_pressure_kpa: Signal::Value(101.0),
+            ambient_air_temp_c: Signal::Value(25.0),
+            intake_air_temp_c: Signal::Value(30.0),
+            road_surface_temp_c: Signal::Value(22.0),
         }
     );
     assert_fixed_helper!(
@@ -901,17 +901,25 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
     assert!(Tsc1::decode(&saturated_tsc1).is_some());
 
     let vep = Vep1 {
-        battery_voltage_v: 12.5,
-        alternator_current_a: 50.0,
-        charging_system_voltage_v: 14.2,
-        key_switch_voltage_v: 12.4,
+        battery_voltage_v: Signal::Value(12.5),
+        alternator_current_a: Signal::Value(50.0),
+        charging_system_voltage_v: Signal::Value(14.2),
+        key_switch_voltage_v: Signal::Value(12.4),
     };
     let encoded_vep = vep.encode();
     assert!(Vep1::decode(&encoded_vep).is_some());
-    for reserved in [0xFB, 0xFE, 0xFF] {
-        let mut bad = encoded_vep;
-        bad[6] = reserved;
-        assert_eq!(Vep1::decode(&bad), None);
+    for (reserved, expected) in [
+        (0xFBu8, Signal::NotAvailable),
+        (0xFE, Signal::Error),
+        (0xFF, Signal::NotAvailable),
+    ] {
+        let mut special = encoded_vep;
+        special[6] = reserved;
+        let decoded = Vep1::decode(&special).unwrap_or_else(|| {
+            panic!("alternator raw 0x{reserved:02X} must not drop the whole PG")
+        });
+        assert_eq!(decoded.alternator_current_a, expected);
+        assert_signal_close(decoded.battery_voltage_v, 12.5);
     }
 }
 
@@ -1021,39 +1029,44 @@ fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
     assert_eq!(Tsc1::decode(&bad_tsc1_torque), None);
 
     let vep = Vep1 {
-        battery_voltage_v: 12.5,
-        alternator_current_a: 50.0,
-        charging_system_voltage_v: 14.2,
-        key_switch_voltage_v: 12.4,
+        battery_voltage_v: Signal::Value(12.5),
+        alternator_current_a: Signal::Value(50.0),
+        charging_system_voltage_v: Signal::Value(14.2),
+        key_switch_voltage_v: Signal::Value(12.4),
     };
     let encoded_vep = vep.encode();
     assert!(Vep1::decode(&encoded_vep).is_some());
     for range in [0..2, 2..4, 4..6] {
-        let mut bad = encoded_vep;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(Vep1::decode(&bad), None);
+        let mut absent = encoded_vep;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = Vep1::decode(&absent).expect("an absent rail keeps the frame");
+        assert_signal_close(decoded.alternator_current_a, 50.0);
     }
-    let mut bad_alternator = encoded_vep;
-    bad_alternator[6] = 0xFF;
-    assert_eq!(Vep1::decode(&bad_alternator), None);
+    let mut absent_alternator = encoded_vep;
+    absent_alternator[6] = 0xFF;
+    let decoded = Vep1::decode(&absent_alternator).expect("the frame still decodes");
+    assert_eq!(decoded.alternator_current_a, Signal::NotAvailable);
+    assert_signal_close(decoded.battery_voltage_v, 12.5);
 
     let ambient = AmbientConditions {
-        barometric_pressure_kpa: 101.0,
-        ambient_air_temp_c: 25.0,
-        intake_air_temp_c: 30.0,
-        road_surface_temp_c: 22.0,
+        barometric_pressure_kpa: Signal::Value(101.0),
+        ambient_air_temp_c: Signal::Value(25.0),
+        intake_air_temp_c: Signal::Value(30.0),
+        road_surface_temp_c: Signal::Value(22.0),
     };
     let encoded_ambient = ambient.encode();
     assert!(AmbientConditions::decode(&encoded_ambient).is_some());
     for index in [0usize, 3] {
-        let mut bad = encoded_ambient;
-        bad[index] = 0xFF;
-        assert_eq!(AmbientConditions::decode(&bad), None);
+        let mut absent = encoded_ambient;
+        absent[index] = 0xFF;
+        let decoded = AmbientConditions::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.ambient_air_temp_c, 25.0);
     }
     for range in [1..3, 4..6] {
-        let mut bad = encoded_ambient;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(AmbientConditions::decode(&bad), None);
+        let mut absent = encoded_ambient;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = AmbientConditions::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.intake_air_temp_c, 30.0);
     }
 
     let dash = DashDisplay {
@@ -1311,10 +1324,10 @@ fn powertrain_aftertreatment1_rejects_reserved_status_bytes_and_ambient_shape() 
     }
 
     let ambient = AmbientConditions {
-        barometric_pressure_kpa: 101.0,
-        ambient_air_temp_c: 25.0,
-        intake_air_temp_c: 30.0,
-        road_surface_temp_c: 22.0,
+        barometric_pressure_kpa: Signal::Value(101.0),
+        ambient_air_temp_c: Signal::Value(25.0),
+        intake_air_temp_c: Signal::Value(30.0),
+        road_surface_temp_c: Signal::Value(22.0),
     };
     let encoded_ambient = ambient.encode();
     assert!(AmbientConditions::decode(&encoded_ambient).is_some());

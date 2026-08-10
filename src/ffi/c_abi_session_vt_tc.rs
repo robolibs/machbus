@@ -715,6 +715,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Vep1`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusVep1 {
@@ -727,10 +729,10 @@ pub struct MachbusVep1 {
 impl From<crate::j1939::Vep1> for MachbusVep1 {
     fn from(e: crate::j1939::Vep1) -> Self {
         Self {
-            battery_voltage_v: e.battery_voltage_v,
-            alternator_current_a: e.alternator_current_a,
-            charging_system_voltage_v: e.charging_system_voltage_v,
-            key_switch_voltage_v: e.key_switch_voltage_v,
+            battery_voltage_v: signal_to_c(e.battery_voltage_v),
+            alternator_current_a: signal_to_c(e.alternator_current_a),
+            charging_system_voltage_v: signal_to_c(e.charging_system_voltage_v),
+            key_switch_voltage_v: signal_to_c(e.key_switch_voltage_v),
         }
     }
 }
@@ -738,10 +740,10 @@ impl From<crate::j1939::Vep1> for MachbusVep1 {
 impl From<MachbusVep1> for crate::j1939::Vep1 {
     fn from(e: MachbusVep1) -> Self {
         Self {
-            battery_voltage_v: e.battery_voltage_v,
-            alternator_current_a: e.alternator_current_a,
-            charging_system_voltage_v: e.charging_system_voltage_v,
-            key_switch_voltage_v: e.key_switch_voltage_v,
+            battery_voltage_v: signal_from_c(e.battery_voltage_v),
+            alternator_current_a: signal_from_c(e.alternator_current_a),
+            charging_system_voltage_v: signal_from_c(e.charging_system_voltage_v),
+            key_switch_voltage_v: signal_from_c(e.key_switch_voltage_v),
         }
     }
 }
@@ -756,6 +758,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::AmbientConditions`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusAmbientConditions {
@@ -768,10 +772,10 @@ pub struct MachbusAmbientConditions {
 impl From<crate::j1939::AmbientConditions> for MachbusAmbientConditions {
     fn from(e: crate::j1939::AmbientConditions) -> Self {
         Self {
-            barometric_pressure_kpa: e.barometric_pressure_kpa,
-            ambient_air_temp_c: e.ambient_air_temp_c,
-            intake_air_temp_c: e.intake_air_temp_c,
-            road_surface_temp_c: e.road_surface_temp_c,
+            barometric_pressure_kpa: signal_to_c(e.barometric_pressure_kpa),
+            ambient_air_temp_c: signal_to_c(e.ambient_air_temp_c),
+            intake_air_temp_c: signal_to_c(e.intake_air_temp_c),
+            road_surface_temp_c: signal_to_c(e.road_surface_temp_c),
         }
     }
 }
@@ -779,10 +783,10 @@ impl From<crate::j1939::AmbientConditions> for MachbusAmbientConditions {
 impl From<MachbusAmbientConditions> for crate::j1939::AmbientConditions {
     fn from(e: MachbusAmbientConditions) -> Self {
         Self {
-            barometric_pressure_kpa: e.barometric_pressure_kpa,
-            ambient_air_temp_c: e.ambient_air_temp_c,
-            intake_air_temp_c: e.intake_air_temp_c,
-            road_surface_temp_c: e.road_surface_temp_c,
+            barometric_pressure_kpa: signal_from_c(e.barometric_pressure_kpa),
+            ambient_air_temp_c: signal_from_c(e.ambient_air_temp_c),
+            intake_air_temp_c: signal_from_c(e.intake_air_temp_c),
+            road_surface_temp_c: signal_from_c(e.road_surface_temp_c),
         }
     }
 }

@@ -602,6 +602,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Vep1`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double battery_voltage_v;
@@ -612,6 +614,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::AmbientConditions`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double barometric_pressure_kpa;

@@ -761,26 +761,26 @@ impl Tsc1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vep1 {
-    pub battery_voltage_v: f64,
-    pub alternator_current_a: f64,
-    pub charging_system_voltage_v: f64,
-    pub key_switch_voltage_v: f64,
+    pub battery_voltage_v: Signal<f64>,
+    pub alternator_current_a: Signal<f64>,
+    pub charging_system_voltage_v: Signal<f64>,
+    pub key_switch_voltage_v: Signal<f64>,
 }
 
 impl Vep1 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let bat = scaled_u16_non_na(self.battery_voltage_v, 0.05);
+        let bat = encode_u16_signal(self.battery_voltage_v, 0.05);
         data[0] = (bat & 0xFF) as u8;
         data[1] = ((bat >> 8) & 0xFF) as u8;
-        let chrg = scaled_u16_non_na(self.charging_system_voltage_v, 0.05);
+        let chrg = encode_u16_signal(self.charging_system_voltage_v, 0.05);
         data[2] = (chrg & 0xFF) as u8;
         data[3] = ((chrg >> 8) & 0xFF) as u8;
-        let key = scaled_u16_non_na(self.key_switch_voltage_v, 0.05);
+        let key = encode_u16_signal(self.key_switch_voltage_v, 0.05);
         data[4] = (key & 0xFF) as u8;
         data[5] = ((key >> 8) & 0xFF) as u8;
-        data[6] = offset_scaled_u8_non_na(self.alternator_current_a, 125.0, 1.0);
+        data[6] = encode_u8_signal(self.alternator_current_a, 125.0);
         data
     }
 
@@ -792,18 +792,11 @@ impl Vep1 {
         let bat = (data[0] as u16) | ((data[1] as u16) << 8);
         let chrg = (data[2] as u16) | ((data[3] as u16) << 8);
         let key = (data[4] as u16) | ((data[5] as u16) << 8);
-        if !u16_data_is_available(bat)
-            || !u16_data_is_available(chrg)
-            || !u16_data_is_available(key)
-            || !u8_scaled_raw_is_defined(data[6])
-        {
-            return None;
-        }
         Some(Self {
-            battery_voltage_v: bat as f64 * 0.05,
-            charging_system_voltage_v: chrg as f64 * 0.05,
-            key_switch_voltage_v: key as f64 * 0.05,
-            alternator_current_a: data[6] as f64 - 125.0,
+            battery_voltage_v: u16_signal(bat, 0.05, 0.0),
+            charging_system_voltage_v: u16_signal(chrg, 0.05, 0.0),
+            key_switch_voltage_v: u16_signal(key, 0.05, 0.0),
+            alternator_current_a: u8_signal(data[6], 1.0, -125.0),
         })
     }
 
@@ -818,35 +811,24 @@ impl Vep1 {
 
 // ─── AmbientConditions (PGN 0x0FEF5) ──────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct AmbientConditions {
-    pub barometric_pressure_kpa: f64,
-    pub ambient_air_temp_c: f64,
-    pub intake_air_temp_c: f64,
-    pub road_surface_temp_c: f64,
-}
-
-impl Default for AmbientConditions {
-    fn default() -> Self {
-        Self {
-            barometric_pressure_kpa: 0.0,
-            ambient_air_temp_c: -40.0,
-            intake_air_temp_c: -40.0,
-            road_surface_temp_c: -40.0,
-        }
-    }
+    pub barometric_pressure_kpa: Signal<f64>,
+    pub ambient_air_temp_c: Signal<f64>,
+    pub intake_air_temp_c: Signal<f64>,
+    pub road_surface_temp_c: Signal<f64>,
 }
 
 impl AmbientConditions {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = scaled_u8_non_na(self.barometric_pressure_kpa, 0.5);
-        let amb = offset_scaled_u16_non_na(self.ambient_air_temp_c, 273.0, 0.03125);
+        data[0] = encode_u8_signal_scaled(self.barometric_pressure_kpa, 0.5);
+        let amb = encode_u16_signal_offset(self.ambient_air_temp_c, 273.0, 0.03125);
         data[1] = (amb & 0xFF) as u8;
         data[2] = ((amb >> 8) & 0xFF) as u8;
-        data[3] = offset_scaled_u8_non_na(self.intake_air_temp_c, 40.0, 1.0);
-        let road = offset_scaled_u16_non_na(self.road_surface_temp_c, 273.0, 0.03125);
+        data[3] = encode_u8_signal(self.intake_air_temp_c, 40.0);
+        let road = encode_u16_signal_offset(self.road_surface_temp_c, 273.0, 0.03125);
         data[4] = (road & 0xFF) as u8;
         data[5] = ((road >> 8) & 0xFF) as u8;
         data
@@ -859,18 +841,11 @@ impl AmbientConditions {
         }
         let amb = (data[1] as u16) | ((data[2] as u16) << 8);
         let road = (data[4] as u16) | ((data[5] as u16) << 8);
-        if !u8_scaled_raw_is_defined(data[0])
-            || !u16_data_is_available(amb)
-            || !u8_scaled_raw_is_defined(data[3])
-            || !u16_data_is_available(road)
-        {
-            return None;
-        }
         Some(Self {
-            barometric_pressure_kpa: data[0] as f64 * 0.5,
-            ambient_air_temp_c: amb as f64 * 0.03125 - 273.0,
-            intake_air_temp_c: data[3] as f64 - 40.0,
-            road_surface_temp_c: road as f64 * 0.03125 - 273.0,
+            barometric_pressure_kpa: u8_signal_scaled(data[0], 0.5),
+            ambient_air_temp_c: u16_signal(amb, 0.03125, -273.0),
+            intake_air_temp_c: u8_signal(data[3], 1.0, -40.0),
+            road_surface_temp_c: u16_signal(road, 0.03125, -273.0),
         })
     }
 
@@ -1462,26 +1437,41 @@ mod tests {
     #[test]
     fn vep1_round_trip() {
         let m = Vep1 {
-            battery_voltage_v: 12.5,
-            alternator_current_a: 50.0,
-            charging_system_voltage_v: 14.2,
-            key_switch_voltage_v: 12.4,
+            battery_voltage_v: Signal::Value(12.5),
+            alternator_current_a: Signal::Value(50.0),
+            charging_system_voltage_v: Signal::Value(14.2),
+            key_switch_voltage_v: Signal::Value(12.4),
         };
         let d = Vep1::decode(&m.encode()).unwrap();
-        assert!((d.battery_voltage_v - 12.5).abs() < 0.05);
-        assert!((d.alternator_current_a - 50.0).abs() < 1.0);
+        assert!((d.battery_voltage_v.value().unwrap() - 12.5).abs() < 0.05);
+        assert!((d.alternator_current_a.value().unwrap() - 50.0).abs() < 1.0);
+
+        // No alternator fitted still leaves a readable battery voltage.
+        let mut absent = m.encode();
+        absent[6] = 0xFF;
+        let d = Vep1::decode(&absent).unwrap();
+        assert_eq!(d.alternator_current_a, Signal::NotAvailable);
+        assert!((d.battery_voltage_v.value().unwrap() - 12.5).abs() < 0.05);
     }
 
     #[test]
     fn ambient_conditions_round_trip() {
         let m = AmbientConditions {
-            barometric_pressure_kpa: 101.3,
-            ambient_air_temp_c: 25.0,
-            intake_air_temp_c: 30.0,
-            road_surface_temp_c: 22.0,
+            barometric_pressure_kpa: Signal::Value(101.3),
+            ambient_air_temp_c: Signal::Value(25.0),
+            intake_air_temp_c: Signal::Value(30.0),
+            road_surface_temp_c: Signal::Value(22.0),
         };
         let d = AmbientConditions::decode(&m.encode()).unwrap();
-        assert!((d.ambient_air_temp_c - 25.0).abs() < 0.1);
+        assert!((d.ambient_air_temp_c.value().unwrap() - 25.0).abs() < 0.1);
+
+        // Road surface temperature is rarely fitted; the rest must survive it.
+        let mut absent = m.encode();
+        absent[4] = 0xFF;
+        absent[5] = 0xFF;
+        let d = AmbientConditions::decode(&absent).unwrap();
+        assert_eq!(d.road_surface_temp_c, Signal::NotAvailable);
+        assert!((d.ambient_air_temp_c.value().unwrap() - 25.0).abs() < 0.1);
     }
 
     #[test]

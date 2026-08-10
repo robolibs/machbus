@@ -1024,6 +1024,17 @@ bool machbus_session_start_address_claim(MachbusSession *h);
 bool machbus_session_tick(MachbusSession *h, uint32_t dt_ms);
 
 /**
+ * Advance the virtual clock by `dt_us` **microseconds** and run
+ * cadences/timers.
+ *
+ * [`machbus_session_tick`] takes whole milliseconds, so a control loop running
+ * faster than 1 kHz passes `0` on every call and the clock never moves — every
+ * protocol timer freezes and no watchdog ever expires. Use this entry point
+ * for any loop that can tick more often than once a millisecond.
+ */
+bool machbus_session_tick_us(MachbusSession *h, uint64_t dt_us);
+
+/**
  * Feed one received CAN frame (extended 29-bit `raw_id`, up to 8 data bytes).
  * `port` identifies the receiving bus.
  */

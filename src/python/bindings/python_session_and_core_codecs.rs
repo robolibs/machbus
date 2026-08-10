@@ -715,6 +715,21 @@ impl PySession {
         self.session.tick(self.now);
     }
 
+    /// Advance the time cursor by `dt_us` **microseconds** and tick the session.
+    ///
+    /// `tick` takes whole milliseconds, so a loop running faster than 1 kHz
+    /// passes `0` every time and the clock never moves — every protocol timer
+    /// freezes and no watchdog expires. Use this for sub-millisecond loops.
+    fn tick_us(&mut self, dt_us: u64) {
+        self.now = self.now.add_micros(dt_us);
+        self.session.tick(self.now);
+    }
+
+    /// Current monotonic time cursor, in microseconds.
+    fn now_us(&self) -> u64 {
+        self.now.as_micros()
+    }
+
     /// Current monotonic time cursor, in milliseconds.
     fn now_ms(&self) -> u64 {
         self.now.as_millis()

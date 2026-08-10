@@ -47,26 +47,29 @@ fn main() {
 
     // Fuel economy.
     let fe = FuelEconomy {
-        fuel_rate_lph: 7.25,
-        instantaneous_lph: 4.8,
-        throttle_position: 35.0,
+        fuel_rate_lph: Signal::Value(7.25),
+        instantaneous_lph: Signal::Value(4.8),
+        throttle_position: Signal::Value(35.0),
     };
     let fbytes = fe.encode();
     let fd = FuelEconomy::decode(&fbytes).unwrap();
     println!(
-        "[LFE]   rate={:.2} L/h, inst={:.1} L/h, throttle={:.1}%",
-        fd.fuel_rate_lph, fd.instantaneous_lph, fd.throttle_position
+        "[LFE]   rate={:?} L/h, inst={:?} L/h, throttle={:?}%",
+        fd.fuel_rate_lph.value(),
+        fd.instantaneous_lph.value(),
+        fd.throttle_position.value()
     );
 
     // Engine hours.
     let hours = EngineHours {
-        total_hours: 1234.75,
-        total_revolutions: 1_000_000.0,
+        total_hours: Signal::Value(1234.75),
+        total_revolutions: Signal::Value(1_000_000.0),
     };
     let hbytes = hours.encode();
     let hd = EngineHours::decode(&hbytes).unwrap();
     println!(
-        "[Hours] total={:.2} h, revs={:.0}",
-        hd.total_hours, hd.total_revolutions
+        "[Hours] total={:?} h, revs={:?}",
+        hd.total_hours.value(),
+        hd.total_revolutions.value()
     );
 }

@@ -549,13 +549,15 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::EngineFluidLp`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEngineFluidLp {
     pub oil_pressure_kpa: f64,
     pub coolant_pressure_kpa: f64,
-    pub oil_level_percent: u8,
-    pub coolant_level_percent: u8,
+    pub oil_level_percent: f64,
+    pub coolant_level_percent: f64,
     pub fuel_delivery_pressure_kpa: f64,
     pub crankcase_pressure_kpa: f64,
 }
@@ -563,12 +565,12 @@ pub struct MachbusEngineFluidLp {
 impl From<crate::j1939::EngineFluidLp> for MachbusEngineFluidLp {
     fn from(e: crate::j1939::EngineFluidLp) -> Self {
         Self {
-            oil_pressure_kpa: e.oil_pressure_kpa,
-            coolant_pressure_kpa: e.coolant_pressure_kpa,
-            oil_level_percent: e.oil_level_percent,
-            coolant_level_percent: e.coolant_level_percent,
-            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: e.crankcase_pressure_kpa,
+            oil_pressure_kpa: signal_to_c(e.oil_pressure_kpa),
+            coolant_pressure_kpa: signal_to_c(e.coolant_pressure_kpa),
+            oil_level_percent: signal_to_c(e.oil_level_percent),
+            coolant_level_percent: signal_to_c(e.coolant_level_percent),
+            fuel_delivery_pressure_kpa: signal_to_c(e.fuel_delivery_pressure_kpa),
+            crankcase_pressure_kpa: signal_to_c(e.crankcase_pressure_kpa),
         }
     }
 }
@@ -576,12 +578,12 @@ impl From<crate::j1939::EngineFluidLp> for MachbusEngineFluidLp {
 impl From<MachbusEngineFluidLp> for crate::j1939::EngineFluidLp {
     fn from(e: MachbusEngineFluidLp) -> Self {
         Self {
-            oil_pressure_kpa: e.oil_pressure_kpa,
-            coolant_pressure_kpa: e.coolant_pressure_kpa,
-            oil_level_percent: e.oil_level_percent,
-            coolant_level_percent: e.coolant_level_percent,
-            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: e.crankcase_pressure_kpa,
+            oil_pressure_kpa: signal_from_c(e.oil_pressure_kpa),
+            coolant_pressure_kpa: signal_from_c(e.coolant_pressure_kpa),
+            oil_level_percent: signal_from_c(e.oil_level_percent),
+            coolant_level_percent: signal_from_c(e.coolant_level_percent),
+            fuel_delivery_pressure_kpa: signal_from_c(e.fuel_delivery_pressure_kpa),
+            crankcase_pressure_kpa: signal_from_c(e.crankcase_pressure_kpa),
         }
     }
 }
@@ -596,6 +598,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::EngineHours`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEngineHours {
@@ -606,8 +610,8 @@ pub struct MachbusEngineHours {
 impl From<crate::j1939::EngineHours> for MachbusEngineHours {
     fn from(e: crate::j1939::EngineHours) -> Self {
         Self {
-            total_hours: e.total_hours,
-            total_revolutions: e.total_revolutions,
+            total_hours: signal_to_c(e.total_hours),
+            total_revolutions: signal_to_c(e.total_revolutions),
         }
     }
 }
@@ -615,8 +619,8 @@ impl From<crate::j1939::EngineHours> for MachbusEngineHours {
 impl From<MachbusEngineHours> for crate::j1939::EngineHours {
     fn from(e: MachbusEngineHours) -> Self {
         Self {
-            total_hours: e.total_hours,
-            total_revolutions: e.total_revolutions,
+            total_hours: signal_from_c(e.total_hours),
+            total_revolutions: signal_from_c(e.total_revolutions),
         }
     }
 }
@@ -631,6 +635,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::FuelEconomy`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusFuelEconomy {
@@ -642,9 +648,9 @@ pub struct MachbusFuelEconomy {
 impl From<crate::j1939::FuelEconomy> for MachbusFuelEconomy {
     fn from(e: crate::j1939::FuelEconomy) -> Self {
         Self {
-            fuel_rate_lph: e.fuel_rate_lph,
-            instantaneous_lph: e.instantaneous_lph,
-            throttle_position: e.throttle_position,
+            fuel_rate_lph: signal_to_c(e.fuel_rate_lph),
+            instantaneous_lph: signal_to_c(e.instantaneous_lph),
+            throttle_position: signal_to_c(e.throttle_position),
         }
     }
 }
@@ -652,9 +658,9 @@ impl From<crate::j1939::FuelEconomy> for MachbusFuelEconomy {
 impl From<MachbusFuelEconomy> for crate::j1939::FuelEconomy {
     fn from(e: MachbusFuelEconomy) -> Self {
         Self {
-            fuel_rate_lph: e.fuel_rate_lph,
-            instantaneous_lph: e.instantaneous_lph,
-            throttle_position: e.throttle_position,
+            fuel_rate_lph: signal_from_c(e.fuel_rate_lph),
+            instantaneous_lph: signal_from_c(e.instantaneous_lph),
+            throttle_position: signal_from_c(e.throttle_position),
         }
     }
 }

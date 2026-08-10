@@ -380,29 +380,29 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         EngineFluidLp,
         PGN_EFLP,
         EngineFluidLp {
-            oil_pressure_kpa: 400.0,
-            coolant_pressure_kpa: 200.0,
-            oil_level_percent: 200,
-            coolant_level_percent: 220,
-            fuel_delivery_pressure_kpa: 300.0,
-            crankcase_pressure_kpa: 0.5,
+            oil_pressure_kpa: Signal::Value(400.0),
+            coolant_pressure_kpa: Signal::Value(200.0),
+            oil_level_percent: Signal::Value(80.0),
+            coolant_level_percent: Signal::Value(88.0),
+            fuel_delivery_pressure_kpa: Signal::Value(300.0),
+            crankcase_pressure_kpa: Signal::Value(0.5),
         }
     );
     assert_fixed_helper!(
         EngineHours,
         PGN_ENGINE_HOURS,
         EngineHours {
-            total_hours: 12_345.7,
-            total_revolutions: 1_000_000_000.0,
+            total_hours: Signal::Value(12_345.7),
+            total_revolutions: Signal::Value(1_000_000_000.0),
         }
     );
     assert_fixed_helper!(
         FuelEconomy,
         PGN_FUEL_ECONOMY,
         FuelEconomy {
-            fuel_rate_lph: 25.0,
-            instantaneous_lph: 6.5,
-            throttle_position: 80.0,
+            fuel_rate_lph: Signal::Value(25.0),
+            instantaneous_lph: Signal::Value(6.5),
+            throttle_position: Signal::Value(80.0),
         }
     );
     assert_fixed_helper!(
@@ -615,15 +615,22 @@ fn powertrain_scalar_decoders_reject_not_available_sentinels_for_non_optional_va
     assert_eq!(Eec3::decode(&bad_eec3_speed), None);
 
     let hours = EngineHours {
-        total_hours: 123.0,
-        total_revolutions: 456_000.0,
+        total_hours: Signal::Value(123.0),
+        total_revolutions: Signal::Value(456_000.0),
     };
     let encoded_hours = hours.encode();
     assert_eq!(EngineHours::decode(&encoded_hours), Some(hours));
     for range in [0..4, 4..8] {
-        let mut bad = encoded_hours;
-        bad[range].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(EngineHours::decode(&bad), None);
+        let mut absent = encoded_hours;
+        absent[range.clone()].copy_from_slice(&u32::MAX.to_le_bytes());
+        let decoded = EngineHours::decode(&absent).expect("an absent counter keeps the frame");
+        let (reported, missing) = if range.start == 0 {
+            (decoded.total_revolutions, decoded.total_hours)
+        } else {
+            (decoded.total_hours, decoded.total_revolutions)
+        };
+        assert_eq!(missing, Signal::NotAvailable);
+        assert!(reported.value().is_some(), "the other counter must survive");
     }
 
     let position = VehiclePosition {
@@ -672,18 +679,20 @@ fn powertrain_multibyte_error_indicators_are_reported_not_scaled() {
     assert_signal_close(decoded.engine_torque_percent, 10.0);
 
     let hours = EngineHours {
-        total_hours: 123.0,
-        total_revolutions: 456_000.0,
+        total_hours: Signal::Value(123.0),
+        total_revolutions: Signal::Value(456_000.0),
     };
     let encoded_hours = hours.encode();
     assert_eq!(EngineHours::decode(&encoded_hours), Some(hours));
     for (range, name) in [(0..4, "total-hours"), (4..8, "total-revolutions")] {
         let mut bad = encoded_hours;
         bad[range].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
-        assert_eq!(
-            EngineHours::decode(&bad),
-            None,
-            "engine-hour field {name} must reject the multibyte error indicator"
+        let decoded = EngineHours::decode(&bad)
+            .unwrap_or_else(|| panic!("field {name} must not drop the whole PG"));
+        assert!(
+            decoded.total_hours == Signal::NotAvailable
+                || decoded.total_revolutions == Signal::NotAvailable,
+            "engine-hour field {name} must report the multibyte indicator"
         );
     }
 
@@ -957,39 +966,45 @@ fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
     assert_signal_close(decoded.engine_oil_temp_c, 95.0);
 
     let fluid = EngineFluidLp {
-        oil_pressure_kpa: 400.0,
-        coolant_pressure_kpa: 200.0,
-        oil_level_percent: 200,
-        coolant_level_percent: 220,
-        fuel_delivery_pressure_kpa: 300.0,
-        crankcase_pressure_kpa: 0.5,
+        oil_pressure_kpa: Signal::Value(400.0),
+        coolant_pressure_kpa: Signal::Value(200.0),
+        oil_level_percent: Signal::Value(80.0),
+        coolant_level_percent: Signal::Value(88.0),
+        fuel_delivery_pressure_kpa: Signal::Value(300.0),
+        crankcase_pressure_kpa: Signal::Value(0.5),
     };
     let encoded_fluid = fluid.encode();
     assert!(EngineFluidLp::decode(&encoded_fluid).is_some());
     for index in [0usize, 1, 2] {
-        let mut bad = encoded_fluid;
-        bad[index] = 0xFF;
-        assert_eq!(EngineFluidLp::decode(&bad), None);
+        let mut absent = encoded_fluid;
+        absent[index] = 0xFF;
+        let decoded = EngineFluidLp::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.oil_level_percent, 80.0);
     }
-    let mut bad_crankcase = encoded_fluid;
-    bad_crankcase[5..7].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(EngineFluidLp::decode(&bad_crankcase), None);
+    let mut absent_crankcase = encoded_fluid;
+    absent_crankcase[5..7].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = EngineFluidLp::decode(&absent_crankcase).expect("the frame still decodes");
+    assert_eq!(decoded.crankcase_pressure_kpa, Signal::NotAvailable);
+    assert_signal_close(decoded.oil_pressure_kpa, 400.0);
 
     let economy = FuelEconomy {
-        fuel_rate_lph: 25.0,
-        instantaneous_lph: 6.5,
-        throttle_position: 80.0,
+        fuel_rate_lph: Signal::Value(25.0),
+        instantaneous_lph: Signal::Value(6.5),
+        throttle_position: Signal::Value(80.0),
     };
     let encoded_economy = economy.encode();
     assert!(FuelEconomy::decode(&encoded_economy).is_some());
     for range in [0..2, 2..4] {
-        let mut bad = encoded_economy;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(FuelEconomy::decode(&bad), None);
+        let mut absent = encoded_economy;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = FuelEconomy::decode(&absent).expect("an absent rate keeps the frame");
+        assert_signal_close(decoded.throttle_position, 80.0);
     }
-    let mut bad_throttle = encoded_economy;
-    bad_throttle[4] = 0xFF;
-    assert_eq!(FuelEconomy::decode(&bad_throttle), None);
+    let mut absent_throttle = encoded_economy;
+    absent_throttle[4] = 0xFF;
+    let decoded = FuelEconomy::decode(&absent_throttle).expect("the frame still decodes");
+    assert_eq!(decoded.throttle_position, Signal::NotAvailable);
+    assert_signal_close(decoded.fuel_rate_lph, 25.0);
 
     let tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedTorqueLimit,
@@ -1098,58 +1113,75 @@ fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
 
 #[test]
 fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_defined_statuses() {
+    // Raw 250 is the top of the SPN 98/111 range: 100 % at 0.4 %/bit.
     let fluid = EngineFluidLp {
-        oil_pressure_kpa: 400.0,
-        coolant_pressure_kpa: 200.0,
-        oil_level_percent: 250,
-        coolant_level_percent: 250,
-        fuel_delivery_pressure_kpa: 300.0,
-        crankcase_pressure_kpa: 0.5,
+        oil_pressure_kpa: Signal::Value(400.0),
+        coolant_pressure_kpa: Signal::Value(200.0),
+        oil_level_percent: Signal::Value(100.0),
+        coolant_level_percent: Signal::Value(100.0),
+        fuel_delivery_pressure_kpa: Signal::Value(300.0),
+        crankcase_pressure_kpa: Signal::Value(0.5),
     };
     let encoded_fluid = fluid.encode();
-    assert_eq!(
+    assert_eq!(encoded_fluid[3], 250);
+    assert_signal_close(
         EngineFluidLp::decode(&encoded_fluid)
             .unwrap()
             .oil_level_percent,
-        250
+        100.0,
     );
-    let mut unavailable_fluid = encoded_fluid;
-    unavailable_fluid[3] = 0xFF;
-    unavailable_fluid[4] = 0xFE;
-    assert_eq!(
-        EngineFluidLp::decode(&unavailable_fluid)
-            .unwrap()
-            .coolant_level_percent,
-        0xFE
-    );
+    // Not-available and error stay distinguishable from each other.
+    let mut special_fluid = encoded_fluid;
+    special_fluid[3] = 0xFF;
+    special_fluid[4] = 0xFE;
+    let decoded = EngineFluidLp::decode(&special_fluid).unwrap();
+    assert_eq!(decoded.oil_level_percent, Signal::NotAvailable);
+    assert_eq!(decoded.coolant_level_percent, Signal::Error);
+    // A reserved raw is reported as absent, never scaled into a percentage.
     for (index, value) in [(3usize, 0xFB), (4, 0xFD)] {
-        let mut bad = encoded_fluid;
-        bad[index] = value;
+        let mut reserved = encoded_fluid;
+        reserved[index] = value;
+        let decoded = EngineFluidLp::decode(&reserved).unwrap_or_else(|| {
+            panic!("reserved raw 0x{value:02X} in byte {index} must not drop the PG")
+        });
+        let field = if index == 3 {
+            decoded.oil_level_percent
+        } else {
+            decoded.coolant_level_percent
+        };
         assert_eq!(
-            EngineFluidLp::decode(&bad),
-            None,
-            "Engine fluid level percentage byte {index} must reject reserved raw value 0x{value:02X}"
+            field,
+            Signal::NotAvailable,
+            "reserved raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.oil_pressure_kpa, 400.0);
     }
 
     let economy = FuelEconomy {
-        fuel_rate_lph: 25.0,
-        instantaneous_lph: 6.5,
-        throttle_position: 100.0,
+        fuel_rate_lph: Signal::Value(25.0),
+        instantaneous_lph: Signal::Value(6.5),
+        throttle_position: Signal::Value(100.0),
     };
     let encoded_economy = economy.encode();
     assert!(FuelEconomy::decode(&encoded_economy).is_some());
     let mut status_economy = encoded_economy;
     status_economy[4] = 0xFE;
-    assert!(FuelEconomy::decode(&status_economy).is_some());
+    assert_eq!(
+        FuelEconomy::decode(&status_economy).unwrap().throttle_position,
+        Signal::Error
+    );
     for value in [0xFB, 0xFD, 0xFF] {
-        let mut bad = encoded_economy;
-        bad[4] = value;
+        let mut special = encoded_economy;
+        special[4] = value;
+        let decoded = FuelEconomy::decode(&special).unwrap_or_else(|| {
+            panic!("throttle raw 0x{value:02X} must not drop the whole PG")
+        });
         assert_eq!(
-            FuelEconomy::decode(&bad),
-            None,
-            "fuel-economy throttle percentage must reject special raw value 0x{value:02X}"
+            decoded.throttle_position,
+            Signal::NotAvailable,
+            "throttle raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.fuel_rate_lph, 25.0);
     }
 
     let dash = DashDisplay {

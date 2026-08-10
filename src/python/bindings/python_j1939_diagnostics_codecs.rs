@@ -283,25 +283,27 @@ impl PyEngineTemp2 {
 #[pyclass(name = "EngineFluidLp", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineFluidLp {
-    pub oil_pressure_kpa: f64,
-    pub coolant_pressure_kpa: f64,
-    pub oil_level_percent: u8,
-    pub coolant_level_percent: u8,
-    pub fuel_delivery_pressure_kpa: f64,
-    pub crankcase_pressure_kpa: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub oil_pressure_kpa: Option<f64>,
+    pub coolant_pressure_kpa: Option<f64>,
+    pub oil_level_percent: Option<f64>,
+    pub coolant_level_percent: Option<f64>,
+    pub fuel_delivery_pressure_kpa: Option<f64>,
+    pub crankcase_pressure_kpa: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineFluidLp {
     #[new]
-    #[pyo3(signature = (oil_pressure_kpa=0.0, coolant_pressure_kpa=0.0, oil_level_percent=0xFF, coolant_level_percent=0xFF, fuel_delivery_pressure_kpa=0.0, crankcase_pressure_kpa=0.0))]
+    #[pyo3(signature = (oil_pressure_kpa=None, coolant_pressure_kpa=None, oil_level_percent=None, coolant_level_percent=None, fuel_delivery_pressure_kpa=None, crankcase_pressure_kpa=None))]
     fn new(
-        oil_pressure_kpa: f64,
-        coolant_pressure_kpa: f64,
-        oil_level_percent: u8,
-        coolant_level_percent: u8,
-        fuel_delivery_pressure_kpa: f64,
-        crankcase_pressure_kpa: f64,
+        oil_pressure_kpa: Option<f64>,
+        coolant_pressure_kpa: Option<f64>,
+        oil_level_percent: Option<f64>,
+        coolant_level_percent: Option<f64>,
+        fuel_delivery_pressure_kpa: Option<f64>,
+        crankcase_pressure_kpa: Option<f64>,
     ) -> Self {
         Self {
             oil_pressure_kpa,
@@ -315,29 +317,29 @@ impl PyEngineFluidLp {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineFluidLp::decode(&data).map(|e| Self {
-            oil_pressure_kpa: e.oil_pressure_kpa,
-            coolant_pressure_kpa: e.coolant_pressure_kpa,
-            oil_level_percent: e.oil_level_percent,
-            coolant_level_percent: e.coolant_level_percent,
-            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: e.crankcase_pressure_kpa,
+            oil_pressure_kpa: e.oil_pressure_kpa.value(),
+            coolant_pressure_kpa: e.coolant_pressure_kpa.value(),
+            oil_level_percent: e.oil_level_percent.value(),
+            coolant_level_percent: e.coolant_level_percent.value(),
+            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa.value(),
+            crankcase_pressure_kpa: e.crankcase_pressure_kpa.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineFluidLp {
-            oil_pressure_kpa: self.oil_pressure_kpa,
-            coolant_pressure_kpa: self.coolant_pressure_kpa,
-            oil_level_percent: self.oil_level_percent,
-            coolant_level_percent: self.coolant_level_percent,
-            fuel_delivery_pressure_kpa: self.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: self.crankcase_pressure_kpa,
+            oil_pressure_kpa: py_signal(self.oil_pressure_kpa),
+            coolant_pressure_kpa: py_signal(self.coolant_pressure_kpa),
+            oil_level_percent: py_signal(self.oil_level_percent),
+            coolant_level_percent: py_signal(self.coolant_level_percent),
+            fuel_delivery_pressure_kpa: py_signal(self.fuel_delivery_pressure_kpa),
+            crankcase_pressure_kpa: py_signal(self.crankcase_pressure_kpa),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "EngineFluidLp(oil_pressure_kpa={:.1})",
+            "EngineFluidLp(oil_pressure_kpa={:?})",
             self.oil_pressure_kpa
         )
     }
@@ -347,15 +349,17 @@ impl PyEngineFluidLp {
 #[pyclass(name = "EngineHours", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineHours {
-    pub total_hours: f64,
-    pub total_revolutions: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub total_hours: Option<f64>,
+    pub total_revolutions: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineHours {
     #[new]
-    #[pyo3(signature = (total_hours=0.0, total_revolutions=0.0))]
-    fn new(total_hours: f64, total_revolutions: f64) -> Self {
+    #[pyo3(signature = (total_hours=None, total_revolutions=None))]
+    fn new(total_hours: Option<f64>, total_revolutions: Option<f64>) -> Self {
         Self {
             total_hours,
             total_revolutions,
@@ -364,20 +368,20 @@ impl PyEngineHours {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineHours::decode(&data).map(|e| Self {
-            total_hours: e.total_hours,
-            total_revolutions: e.total_revolutions,
+            total_hours: e.total_hours.value(),
+            total_revolutions: e.total_revolutions.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineHours {
-            total_hours: self.total_hours,
-            total_revolutions: self.total_revolutions,
+            total_hours: py_signal(self.total_hours),
+            total_revolutions: py_signal(self.total_revolutions),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("EngineHours(total_hours={:.2})", self.total_hours)
+        format!("EngineHours(total_hours={:?})", self.total_hours)
     }
 }
 
@@ -385,16 +389,22 @@ impl PyEngineHours {
 #[pyclass(name = "FuelEconomy", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyFuelEconomy {
-    pub fuel_rate_lph: f64,
-    pub instantaneous_lph: f64,
-    pub throttle_position: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub fuel_rate_lph: Option<f64>,
+    pub instantaneous_lph: Option<f64>,
+    pub throttle_position: Option<f64>,
 }
 
 #[pymethods]
 impl PyFuelEconomy {
     #[new]
-    #[pyo3(signature = (fuel_rate_lph=0.0, instantaneous_lph=0.0, throttle_position=0.0))]
-    fn new(fuel_rate_lph: f64, instantaneous_lph: f64, throttle_position: f64) -> Self {
+    #[pyo3(signature = (fuel_rate_lph=None, instantaneous_lph=None, throttle_position=None))]
+    fn new(
+        fuel_rate_lph: Option<f64>,
+        instantaneous_lph: Option<f64>,
+        throttle_position: Option<f64>,
+    ) -> Self {
         Self {
             fuel_rate_lph,
             instantaneous_lph,
@@ -404,22 +414,22 @@ impl PyFuelEconomy {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::FuelEconomy::decode(&data).map(|e| Self {
-            fuel_rate_lph: e.fuel_rate_lph,
-            instantaneous_lph: e.instantaneous_lph,
-            throttle_position: e.throttle_position,
+            fuel_rate_lph: e.fuel_rate_lph.value(),
+            instantaneous_lph: e.instantaneous_lph.value(),
+            throttle_position: e.throttle_position.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::FuelEconomy {
-            fuel_rate_lph: self.fuel_rate_lph,
-            instantaneous_lph: self.instantaneous_lph,
-            throttle_position: self.throttle_position,
+            fuel_rate_lph: py_signal(self.fuel_rate_lph),
+            instantaneous_lph: py_signal(self.instantaneous_lph),
+            throttle_position: py_signal(self.throttle_position),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("FuelEconomy(fuel_rate_lph={:.2})", self.fuel_rate_lph)
+        format!("FuelEconomy(fuel_rate_lph={:?})", self.fuel_rate_lph)
     }
 }
 

@@ -556,18 +556,22 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineFluidLp`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double oil_pressure_kpa;
   double coolant_pressure_kpa;
-  uint8_t oil_level_percent;
-  uint8_t coolant_level_percent;
+  double oil_level_percent;
+  double coolant_level_percent;
   double fuel_delivery_pressure_kpa;
   double crankcase_pressure_kpa;
 } MachbusEngineFluidLp;
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineHours`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double total_hours;
@@ -576,6 +580,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::FuelEconomy`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double fuel_rate_lph;

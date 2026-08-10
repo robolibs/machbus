@@ -825,26 +825,26 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         "engine_hours_12345_7_1e9rev",
     );
     let expected_hours = EngineHours {
-        total_hours: 12_345.7,
-        total_revolutions: 1_000_000_000.0,
+        total_hours: sig(12_345.7),
+        total_revolutions: sig(1_000_000_000.0),
     };
     assert_eq!(expected_hours.encode(), engine_hours);
     let decoded_hours = EngineHours::decode(&engine_hours).unwrap();
-    assert!((decoded_hours.total_hours - expected_hours.total_hours).abs() < 0.1);
-    assert!((decoded_hours.total_revolutions - expected_hours.total_revolutions).abs() < 1000.0);
+    assert_sig(decoded_hours.total_hours, 12_345.7, 0.1);
+    assert_sig(decoded_hours.total_revolutions, 1_000_000_000.0, 1000.0);
 
     let fuel_economy =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "fuel_economy_25_6_5_80");
     let expected_fuel = FuelEconomy {
-        fuel_rate_lph: 25.0,
-        instantaneous_lph: 6.5,
-        throttle_position: 80.0,
+        fuel_rate_lph: sig(25.0),
+        instantaneous_lph: sig(6.5),
+        throttle_position: sig(80.0),
     };
     assert_eq!(expected_fuel.encode(), fuel_economy);
     let decoded_fuel = FuelEconomy::decode(&fuel_economy).unwrap();
-    assert!((decoded_fuel.fuel_rate_lph - 25.0).abs() < 0.1);
-    assert!((decoded_fuel.instantaneous_lph - 6.5).abs() < 0.01);
-    assert!((decoded_fuel.throttle_position - 80.0).abs() < 0.5);
+    assert_sig(decoded_fuel.fuel_rate_lph, 25.0, 0.1);
+    assert_sig(decoded_fuel.instantaneous_lph, 6.5, 0.01);
+    assert_sig(decoded_fuel.throttle_position, 80.0, 0.5);
 
     let tsc1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -970,22 +970,25 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "engine_fluid_lp_400_200_levels_crank",
     );
+    // The level fields are now the percentage their names promise, at the
+    // SPN 98/111 resolution of 0.4 %/bit — raw 200/220 is 80 %/88 %, so the
+    // golden bytes are unchanged.
     let expected_fluid = EngineFluidLp {
-        oil_pressure_kpa: 400.0,
-        coolant_pressure_kpa: 200.0,
-        oil_level_percent: 200,
-        coolant_level_percent: 220,
-        fuel_delivery_pressure_kpa: 300.0,
-        crankcase_pressure_kpa: 0.5,
+        oil_pressure_kpa: sig(400.0),
+        coolant_pressure_kpa: sig(200.0),
+        oil_level_percent: sig(80.0),
+        coolant_level_percent: sig(88.0),
+        fuel_delivery_pressure_kpa: sig(300.0),
+        crankcase_pressure_kpa: sig(0.5),
     };
     assert_eq!(expected_fluid.encode(), fluid);
     let decoded_fluid = EngineFluidLp::decode(&fluid).unwrap();
-    assert_eq!(decoded_fluid.oil_level_percent, 200);
-    assert_eq!(decoded_fluid.coolant_level_percent, 220);
-    assert!((decoded_fluid.fuel_delivery_pressure_kpa - 300.0).abs() < 4.0);
-    assert!((decoded_fluid.oil_pressure_kpa - 400.0).abs() < 4.0);
-    assert!((decoded_fluid.coolant_pressure_kpa - 200.0).abs() < 2.0);
-    assert!((decoded_fluid.crankcase_pressure_kpa - 0.5).abs() < 0.05);
+    assert_sig(decoded_fluid.oil_level_percent, 80.0, 0.4);
+    assert_sig(decoded_fluid.coolant_level_percent, 88.0, 0.4);
+    assert_sig(decoded_fluid.fuel_delivery_pressure_kpa, 300.0, 4.0);
+    assert_sig(decoded_fluid.oil_pressure_kpa, 400.0, 4.0);
+    assert_sig(decoded_fluid.coolant_pressure_kpa, 200.0, 2.0);
+    assert_sig(decoded_fluid.crankcase_pressure_kpa, 0.5, 0.05);
 
     let vep1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

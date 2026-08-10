@@ -48,15 +48,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "engine_hours_raw_min");
     assert_eq!(
         EngineHours {
-            total_hours: 0.0,
-            total_revolutions: 0.0,
+            total_hours: sig(0.0),
+            total_revolutions: sig(0.0),
         }
         .encode(),
         engine_hours_min
     );
     let decoded = EngineHours::decode(&engine_hours_min).unwrap();
-    assert_eq!(decoded.total_hours, 0.0);
-    assert_eq!(decoded.total_revolutions, 0.0);
+    assert_sig(decoded.total_hours, 0.0, 0.0);
+    assert_sig(decoded.total_revolutions, 0.0, 0.0);
 
     let engine_hours_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -64,15 +64,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         EngineHours {
-            total_hours: 214_748_364.65,
-            total_revolutions: 4_294_967_293_000.0,
+            total_hours: sig(214_748_364.65),
+            total_revolutions: sig(4_294_967_293_000.0),
         }
         .encode(),
         engine_hours_upper
     );
     let decoded = EngineHours::decode(&engine_hours_upper).unwrap();
-    assert!((decoded.total_hours - 214_748_364.65).abs() < 0.001);
-    assert_eq!(decoded.total_revolutions, 4_294_967_293_000.0);
+    assert_sig(decoded.total_hours, 214_748_364.65, 0.001);
+    assert_sig(decoded.total_revolutions, 4_294_967_293_000.0, 0.0);
 
     let position_min = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -418,29 +418,32 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "engine_fluid_lp_clamped_inputs",
             EngineFluidLp {
-                oil_pressure_kpa: 99_999.0,
-                coolant_pressure_kpa: 99_999.0,
-                oil_level_percent: 0xFE,
-                coolant_level_percent: 0xFE,
-                fuel_delivery_pressure_kpa: 99_999.0,
-                crankcase_pressure_kpa: 99_999.0,
+                oil_pressure_kpa: sig(99_999.0),
+                coolant_pressure_kpa: sig(99_999.0),
+                // The levels used to take a raw byte, so this vector fed the
+                // error indicator through a field named "percent". Clamping is
+                // what it is meant to exercise, so it now feeds a value.
+                oil_level_percent: sig(99_999.0),
+                coolant_level_percent: sig(99_999.0),
+                fuel_delivery_pressure_kpa: sig(99_999.0),
+                crankcase_pressure_kpa: sig(99_999.0),
             }
             .encode(),
         ),
         (
             "engine_hours_clamped_inputs",
             EngineHours {
-                total_hours: 999_999_999_999.0,
-                total_revolutions: 999_999_999_999_999.0,
+                total_hours: sig(999_999_999_999.0),
+                total_revolutions: sig(999_999_999_999_999.0),
             }
             .encode(),
         ),
         (
             "fuel_economy_clamped_inputs",
             FuelEconomy {
-                fuel_rate_lph: 99_999.0,
-                instantaneous_lph: 99_999.0,
-                throttle_position: 99_999.0,
+                fuel_rate_lph: sig(99_999.0),
+                instantaneous_lph: sig(99_999.0),
+                throttle_position: sig(99_999.0),
             }
             .encode(),
         ),
@@ -711,21 +714,22 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         EngineFluidLp {
-            fuel_delivery_pressure_kpa: 0.0,
-            oil_pressure_kpa: 0.0,
-            coolant_pressure_kpa: 0.0,
-            oil_level_percent: 0,
-            coolant_level_percent: 0,
-            crankcase_pressure_kpa: -250.0,
+            fuel_delivery_pressure_kpa: sig(0.0),
+            oil_pressure_kpa: sig(0.0),
+            coolant_pressure_kpa: sig(0.0),
+            oil_level_percent: sig(0.0),
+            coolant_level_percent: sig(0.0),
+            crankcase_pressure_kpa: sig(-250.0),
         }
         .encode(),
         fluid_min
     );
-    assert_eq!(
+    assert_sig(
         EngineFluidLp::decode(&fluid_min)
             .unwrap()
             .crankcase_pressure_kpa,
-        -250.0
+        -250.0,
+        0.0,
     );
 
     let fluid_upper = parse_named_hex_frame(
@@ -734,19 +738,21 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         EngineFluidLp {
-            fuel_delivery_pressure_kpa: 1000.0,
-            oil_pressure_kpa: 1000.0,
-            coolant_pressure_kpa: 500.0,
-            oil_level_percent: 0xFE,
-            coolant_level_percent: 0xFE,
-            crankcase_pressure_kpa: 3026.65,
+            fuel_delivery_pressure_kpa: sig(1000.0),
+            oil_pressure_kpa: sig(1000.0),
+            coolant_pressure_kpa: sig(500.0),
+            // Raw 250 (100 %) is the top of the SPN 98/111 measuring range;
+            // the 0xFE this used to carry was the error indicator, not an edge.
+            oil_level_percent: sig(100.0),
+            coolant_level_percent: sig(100.0),
+            crankcase_pressure_kpa: sig(3026.65),
         }
         .encode(),
         fluid_upper
     );
     let decoded = EngineFluidLp::decode(&fluid_upper).unwrap();
-    assert_eq!(decoded.fuel_delivery_pressure_kpa, 1000.0);
-    assert!((decoded.crankcase_pressure_kpa - 3026.65).abs() < 1e-9);
+    assert_sig(decoded.fuel_delivery_pressure_kpa, 1000.0, 0.0);
+    assert_sig(decoded.crankcase_pressure_kpa, 3026.65, 1e-9);
 
     let tsc1_min = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -891,16 +897,16 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         FuelEconomy {
-            fuel_rate_lph: 3276.65,
-            instantaneous_lph: 127.994140625,
-            throttle_position: 100.0,
+            fuel_rate_lph: sig(3_276.65),
+            instantaneous_lph: sig(127.994_140_625),
+            throttle_position: sig(100.0),
         }
         .encode(),
         fuel_economy_upper
     );
     let decoded = FuelEconomy::decode(&fuel_economy_upper).unwrap();
-    assert!((decoded.fuel_rate_lph - 3276.65).abs() < 1e-9);
-    assert!((decoded.instantaneous_lph - 127.994140625).abs() < 1e-12);
+    assert_sig(decoded.fuel_rate_lph, 3_276.65, 1e-9);
+    assert_sig(decoded.instantaneous_lph, 127.994_140_625, 1e-12);
 
     let at1_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

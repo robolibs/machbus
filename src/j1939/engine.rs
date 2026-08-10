@@ -80,6 +80,39 @@ fn encode_u16_signal(signal: Signal<f64>, scale: f64) -> u16 {
     }
 }
 
+/// Four-byte equivalent of [`u8_signal`].
+#[inline]
+fn u32_signal(raw: u32, resolution: f64) -> Signal<f64> {
+    if raw >= u32::MAX - 1 {
+        Signal::NotAvailable
+    } else {
+        Signal::Value(f64::from(raw) * resolution)
+    }
+}
+
+/// Four-byte equivalent of [`encode_u16_signal`].
+fn encode_u32_signal(signal: Signal<f64>, scale: f64) -> u32 {
+    match signal {
+        Signal::Value(v) => scaled_u32_non_na(v, scale),
+        Signal::Error | Signal::NotAvailable => u32::MAX,
+    }
+}
+
+/// [`encode_u8_signal`] for a SLOT whose resolution is not 1 per bit.
+fn encode_u8_signal_scaled(signal: Signal<f64>, scale: f64) -> u8 {
+    match signal {
+        Signal::Value(v) => scaled_u8_non_na(v, scale),
+        Signal::Error => 0xFE,
+        Signal::NotAvailable => 0xFF,
+    }
+}
+
+/// [`u8_signal`] for a SLOT whose resolution is not 1 per bit.
+#[inline]
+fn u8_signal_scaled(raw: u8, resolution: f64) -> Signal<f64> {
+    u8_signal(raw, resolution, 0.0)
+}
+
 /// [`encode_u16_signal`] for a SLOT that carries an offset.
 fn encode_u16_signal_offset(signal: Signal<f64>, offset: f64, scale: f64) -> u16 {
     match signal {
@@ -494,39 +527,29 @@ impl EngineTemp2 {
 
 // ─── EngineFluidLP (PGN 0x0FEEF) ──────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EngineFluidLp {
-    pub oil_pressure_kpa: f64,
-    pub coolant_pressure_kpa: f64,
-    pub oil_level_percent: u8,
-    pub coolant_level_percent: u8,
-    pub fuel_delivery_pressure_kpa: f64,
-    pub crankcase_pressure_kpa: f64,
-}
-
-impl Default for EngineFluidLp {
-    fn default() -> Self {
-        Self {
-            oil_pressure_kpa: 0.0,
-            coolant_pressure_kpa: 0.0,
-            oil_level_percent: 0xFF,
-            coolant_level_percent: 0xFF,
-            fuel_delivery_pressure_kpa: 0.0,
-            crankcase_pressure_kpa: 0.0,
-        }
-    }
+    pub oil_pressure_kpa: Signal<f64>,
+    pub coolant_pressure_kpa: Signal<f64>,
+    /// SPN 98: 0.4 %/bit. This used to be the raw wire byte; it is now the
+    /// percentage the field name promises, with absence made explicit.
+    pub oil_level_percent: Signal<f64>,
+    /// SPN 111: 0.4 %/bit.
+    pub coolant_level_percent: Signal<f64>,
+    pub fuel_delivery_pressure_kpa: Signal<f64>,
+    pub crankcase_pressure_kpa: Signal<f64>,
 }
 
 impl EngineFluidLp {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = scaled_u8_non_na(self.fuel_delivery_pressure_kpa, 4.0);
-        data[1] = scaled_u8_non_na(self.oil_pressure_kpa, 4.0);
-        data[2] = scaled_u8_non_na(self.coolant_pressure_kpa, 2.0);
-        data[3] = self.oil_level_percent;
-        data[4] = self.coolant_level_percent;
-        let crank = offset_scaled_u16_non_na(self.crankcase_pressure_kpa, 250.0, 0.05);
+        data[0] = encode_u8_signal_scaled(self.fuel_delivery_pressure_kpa, 4.0);
+        data[1] = encode_u8_signal_scaled(self.oil_pressure_kpa, 4.0);
+        data[2] = encode_u8_signal_scaled(self.coolant_pressure_kpa, 2.0);
+        data[3] = encode_u8_signal_scaled(self.oil_level_percent, 0.4);
+        data[4] = encode_u8_signal_scaled(self.coolant_level_percent, 0.4);
+        let crank = encode_u16_signal_offset(self.crankcase_pressure_kpa, 250.0, 0.05);
         data[5] = (crank & 0xFF) as u8;
         data[6] = ((crank >> 8) & 0xFF) as u8;
         data
@@ -538,22 +561,13 @@ impl EngineFluidLp {
             return None;
         }
         let crank = (data[5] as u16) | ((data[6] as u16) << 8);
-        if !u8_scaled_raw_is_defined(data[0])
-            || !u8_scaled_raw_is_defined(data[1])
-            || !u8_scaled_raw_is_defined(data[2])
-            || !u8_percent_raw_is_defined_or_not_available(data[3])
-            || !u8_percent_raw_is_defined_or_not_available(data[4])
-            || !u16_data_is_available(crank)
-        {
-            return None;
-        }
         Some(Self {
-            fuel_delivery_pressure_kpa: data[0] as f64 * 4.0,
-            oil_pressure_kpa: data[1] as f64 * 4.0,
-            coolant_pressure_kpa: data[2] as f64 * 2.0,
-            oil_level_percent: data[3],
-            coolant_level_percent: data[4],
-            crankcase_pressure_kpa: crank as f64 * 0.05 - 250.0,
+            fuel_delivery_pressure_kpa: u8_signal_scaled(data[0], 4.0),
+            oil_pressure_kpa: u8_signal_scaled(data[1], 4.0),
+            coolant_pressure_kpa: u8_signal_scaled(data[2], 2.0),
+            oil_level_percent: u8_signal_scaled(data[3], 0.4),
+            coolant_level_percent: u8_signal_scaled(data[4], 0.4),
+            crankcase_pressure_kpa: u16_signal(crank, 0.05, -250.0),
         })
     }
 
@@ -571,18 +585,18 @@ impl EngineFluidLp {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EngineHours {
     /// SPN 247: 0.05 hr/bit, 4 bytes.
-    pub total_hours: f64,
+    pub total_hours: Signal<f64>,
     /// SPN 249: 1000 rev/bit, 4 bytes.
-    pub total_revolutions: f64,
+    pub total_revolutions: Signal<f64>,
 }
 
 impl EngineHours {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let hrs = scaled_u32_non_na(self.total_hours, 0.05);
+        let hrs = encode_u32_signal(self.total_hours, 0.05);
         data[0..4].copy_from_slice(&hrs.to_le_bytes());
-        let revs = scaled_u32_non_na(self.total_revolutions, 1000.0);
+        let revs = encode_u32_signal(self.total_revolutions, 1000.0);
         data[4..8].copy_from_slice(&revs.to_le_bytes());
         data
     }
@@ -594,12 +608,9 @@ impl EngineHours {
         }
         let hrs = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let revs = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if !u32_data_is_available(hrs) || !u32_data_is_available(revs) {
-            return None;
-        }
         Some(Self {
-            total_hours: hrs as f64 * 0.05,
-            total_revolutions: revs as f64 * 1000.0,
+            total_hours: u32_signal(hrs, 0.05),
+            total_revolutions: u32_signal(revs, 1000.0),
         })
     }
 
@@ -616,22 +627,22 @@ impl EngineHours {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FuelEconomy {
-    pub fuel_rate_lph: f64,
-    pub instantaneous_lph: f64,
-    pub throttle_position: f64,
+    pub fuel_rate_lph: Signal<f64>,
+    pub instantaneous_lph: Signal<f64>,
+    pub throttle_position: Signal<f64>,
 }
 
 impl FuelEconomy {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let rate = scaled_u16_non_na(self.fuel_rate_lph, 0.05);
+        let rate = encode_u16_signal(self.fuel_rate_lph, 0.05);
         data[0] = (rate & 0xFF) as u8;
         data[1] = ((rate >> 8) & 0xFF) as u8;
-        let inst = scaled_u16_non_na(self.instantaneous_lph, 1.0 / 512.0);
+        let inst = encode_u16_signal(self.instantaneous_lph, 1.0 / 512.0);
         data[2] = (inst & 0xFF) as u8;
         data[3] = ((inst >> 8) & 0xFF) as u8;
-        data[4] = scaled_u8_non_na(self.throttle_position, 0.4);
+        data[4] = encode_u8_signal_scaled(self.throttle_position, 0.4);
         data
     }
 
@@ -642,16 +653,10 @@ impl FuelEconomy {
         }
         let rate = (data[0] as u16) | ((data[1] as u16) << 8);
         let inst = (data[2] as u16) | ((data[3] as u16) << 8);
-        if !u16_data_is_available(rate)
-            || !u16_data_is_available(inst)
-            || !u8_percent_raw_is_defined(data[4])
-        {
-            return None;
-        }
         Some(Self {
-            fuel_rate_lph: rate as f64 * 0.05,
-            instantaneous_lph: inst as f64 / 512.0,
-            throttle_position: data[4] as f64 * 0.4,
+            fuel_rate_lph: u16_signal(rate, 0.05, 0.0),
+            instantaneous_lph: u16_signal(inst, 1.0 / 512.0, 0.0),
+            throttle_position: u8_signal_scaled(data[4], 0.4),
         })
     }
 
@@ -1377,41 +1382,56 @@ mod tests {
     #[test]
     fn engine_fluid_lp_round_trip() {
         let m = EngineFluidLp {
-            oil_pressure_kpa: 400.0,
-            coolant_pressure_kpa: 200.0,
-            oil_level_percent: 200,
-            coolant_level_percent: 220,
-            fuel_delivery_pressure_kpa: 300.0,
-            crankcase_pressure_kpa: 0.5,
+            oil_pressure_kpa: Signal::Value(400.0),
+            coolant_pressure_kpa: Signal::Value(200.0),
+            oil_level_percent: Signal::Value(80.0),
+            coolant_level_percent: Signal::Value(88.0),
+            fuel_delivery_pressure_kpa: Signal::Value(300.0),
+            crankcase_pressure_kpa: Signal::Value(0.5),
         };
         let d = EngineFluidLp::decode(&m.encode()).unwrap();
-        assert_eq!(d.oil_level_percent, 200);
-        assert!((d.oil_pressure_kpa - 400.0).abs() < 4.0);
+        assert!((d.oil_level_percent.value().unwrap() - 80.0).abs() < 0.4);
+        assert!((d.oil_pressure_kpa.value().unwrap() - 400.0).abs() < 4.0);
+
+        // An engine without a crankcase pressure sensor still reports oil.
+        let mut absent = m.encode();
+        absent[5] = 0xFF;
+        absent[6] = 0xFF;
+        let d = EngineFluidLp::decode(&absent).unwrap();
+        assert_eq!(d.crankcase_pressure_kpa, Signal::NotAvailable);
+        assert!((d.oil_pressure_kpa.value().unwrap() - 400.0).abs() < 4.0);
     }
 
     #[test]
     fn engine_hours_round_trip() {
         let m = EngineHours {
-            total_hours: 12_345.7,
-            total_revolutions: 1_000_000_000.0,
+            total_hours: Signal::Value(12_345.7),
+            total_revolutions: Signal::Value(1_000_000_000.0),
         };
         assert_eq!(m.encode(), [0x82, 0xC4, 0x03, 0x00, 0x40, 0x42, 0x0F, 0x00]);
         let d = EngineHours::decode(&m.encode()).unwrap();
-        assert!((d.total_hours - 12_345.7).abs() < 0.1);
-        assert!((d.total_revolutions - 1_000_000_000.0).abs() < 1000.0);
+        assert!((d.total_hours.value().unwrap() - 12_345.7).abs() < 0.1);
+        assert!((d.total_revolutions.value().unwrap() - 1_000_000_000.0).abs() < 1000.0);
+
+        // An ECU that counts hours but not revolutions is a valid frame.
+        let mut absent = m.encode();
+        absent[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        let d = EngineHours::decode(&absent).unwrap();
+        assert_eq!(d.total_revolutions, Signal::NotAvailable);
+        assert!((d.total_hours.value().unwrap() - 12_345.7).abs() < 0.1);
     }
 
     #[test]
     fn fuel_economy_round_trip() {
         let m = FuelEconomy {
-            fuel_rate_lph: 25.0,
-            instantaneous_lph: 6.5,
-            throttle_position: 80.0,
+            fuel_rate_lph: Signal::Value(25.0),
+            instantaneous_lph: Signal::Value(6.5),
+            throttle_position: Signal::Value(80.0),
         };
         assert_eq!(m.encode(), [0xF4, 0x01, 0x00, 0x0D, 0xC8, 0xFF, 0xFF, 0xFF]);
         let d = FuelEconomy::decode(&m.encode()).unwrap();
-        assert!((d.fuel_rate_lph - 25.0).abs() < 0.1);
-        assert!((d.throttle_position - 80.0).abs() < 0.5);
+        assert!((d.fuel_rate_lph.value().unwrap() - 25.0).abs() < 0.1);
+        assert!((d.throttle_position.value().unwrap() - 80.0).abs() < 0.5);
     }
 
     #[test]

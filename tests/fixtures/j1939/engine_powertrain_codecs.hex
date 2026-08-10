@@ -62,8 +62,11 @@ engine_temp2_raw_min=00000000000000FF
 engine_temp2_upper_edge=FDFFFDFFFAFDFFFF
 engine_temp2_clamped_inputs=FDFFFDFFFAFDFFFF
 engine_fluid_lp_raw_min=00000000000000FF
-engine_fluid_lp_upper_edge=FAFAFAFEFEFDFFFF
-engine_fluid_lp_clamped_inputs=FAFAFAFEFEFDFFFF
+# Bytes 3-4 were FE FE: the error indicator, reached because the level fields
+# used to pass a raw byte straight through. The top of the SPN 98/111 range is
+# raw 250 (100 % at 0.4 %/bit), which is what an upper-edge vector should hold.
+engine_fluid_lp_upper_edge=FAFAFAFAFAFDFFFF
+engine_fluid_lp_clamped_inputs=FAFAFAFAFAFDFFFF
 engine_hours_clamped_inputs=FDFFFFFFFDFFFFFF
 tsc1_no_override_raw_min=00000000FFFFFFFF
 tsc1_speed_torque_upper=03FDFFFAFFFFFFFF
@@ -97,9 +100,11 @@ eec3_default=7D0000FFFFFFFFFF
 # engine may not even have fitted. A default now reports nothing.
 engine_temp1_default=FFFFFFFFFFFFFFFF
 engine_temp2_default=FFFFFFFFFFFFFFFF
-engine_fluid_lp_default=000000FFFF8813FF
-engine_hours_default=0000000000000000
-fuel_economy_default=0000000000FFFFFF
+# EFLP and engine-hours defaults, same reasoning: 0 kPa oil pressure and a
+# 0-hour engine are claims, not the absence of a reading.
+engine_fluid_lp_default=FFFFFFFFFFFFFFFF
+engine_hours_default=FFFFFFFFFFFFFFFF
+fuel_economy_default=FFFFFFFFFFFFFFFF
 tsc1_default=0000007DFFFFFFFF
 vep1_default=0000000000007DFF
 ambient_default=00201D00201DFFFF

@@ -224,6 +224,12 @@ pub struct AssignmentTable {
     supported: Vec<TimFunctionId>,
     /// A request is being processed; further ones get `ServerBusy` (§5.5.3).
     busy: bool,
+    /// Clients that have completed mutual authentication.
+    ///
+    /// AEF §4.3 makes successful mutual authentication the precondition for TIM
+    /// automation. Without this the table handed out External Guidance and
+    /// Vehicle Speed — steering and throttle — to any address that asked.
+    authenticated: Vec<u8>,
 }
 
 impl AssignmentTable {
@@ -233,7 +239,27 @@ impl AssignmentTable {
             owners: Vec::new(),
             supported: supported.to_vec(),
             busy: false,
+            authenticated: Vec::new(),
         }
+    }
+
+    /// Record that `client` completed mutual authentication (AEF §4.3).
+    pub fn set_authenticated(&mut self, client: u8, authenticated: bool) {
+        if authenticated {
+            if !self.authenticated.contains(&client) {
+                self.authenticated.push(client);
+            }
+        } else {
+            self.authenticated.retain(|a| *a != client);
+            // Losing authentication also loses everything it authorised.
+            self.release_all(client);
+        }
+    }
+
+    /// `true` when `client` has completed mutual authentication.
+    #[must_use]
+    pub fn is_authenticated(&self, client: u8) -> bool {
+        self.authenticated.contains(&client)
     }
 
     /// Who owns `function`, if anyone.
@@ -280,6 +306,15 @@ impl AssignmentTable {
                 (
                     AssignmentStatus::NotSuccessful,
                     AssignmentReason::FunctionNotSupported,
+                )
+            } else if !self.is_authenticated(client)
+                && !matches!(request_type, RequestType::Release)
+            {
+                // §4.3: authentication gates automation. A *release* is always
+                // honoured — refusing to let go is never the safe answer.
+                (
+                    AssignmentStatus::NotSuccessful,
+                    AssignmentReason::ClientNotCertified,
                 )
             } else {
                 match request_type {
@@ -345,13 +380,83 @@ mod tests {
     const CLIENT_A: u8 = 0x80;
     const CLIENT_B: u8 = 0x81;
 
+    /// A server with both test clients already authenticated, since AEF §4.3
+    /// makes that the precondition for any assignment. The gate itself is
+    /// covered by `an_unauthenticated_client_is_refused_every_function`.
     fn server() -> AssignmentTable {
-        AssignmentTable::new(&[
+        let mut table = AssignmentTable::new(&[
             TimFunctionId::ExternalGuidance,
             TimFunctionId::VehicleSpeed,
             TimFunctionId::RearHitch,
             TimFunctionId::AuxValve(1),
-        ])
+        ]);
+        table.set_authenticated(CLIENT_A, true);
+        table.set_authenticated(CLIENT_B, true);
+        table
+    }
+
+    /// H69 — §4.3 makes successful mutual authentication the precondition for
+    /// TIM automation. The table handed out External Guidance and Vehicle Speed
+    /// — steering and throttle — to any address that asked.
+    #[test]
+    fn an_unauthenticated_client_is_refused_every_function() {
+        let mut table = AssignmentTable::new(&[
+            TimFunctionId::ExternalGuidance,
+            TimFunctionId::VehicleSpeed,
+        ]);
+
+        for function in [TimFunctionId::ExternalGuidance, TimFunctionId::VehicleSpeed] {
+            let response = table.apply(
+                &AssignmentRequest {
+                    entries: vec![(function, RequestType::Assign)],
+                },
+                CLIENT_A,
+            );
+            assert_eq!(response.entries[0].1, AssignmentStatus::NotSuccessful);
+            assert_eq!(response.entries[0].2, AssignmentReason::ClientNotCertified);
+            assert!(table.owner(function).is_none());
+        }
+
+        // Authenticate, and the same request succeeds.
+        table.set_authenticated(CLIENT_A, true);
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+
+        // Losing authentication takes the assignment with it.
+        table.set_authenticated(CLIENT_A, false);
+        assert!(
+            table.owner(TimFunctionId::ExternalGuidance).is_none(),
+            "authority cannot outlive the authentication that granted it"
+        );
+    }
+
+    /// A release is always honoured: refusing to let go is never the safe
+    /// answer, even from a client whose authentication has lapsed.
+    #[test]
+    fn a_release_is_honoured_without_authentication() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(table.owner(TimFunctionId::RearHitch), Some(CLIENT_A));
+
+        table.authenticated.retain(|a| *a != CLIENT_A);
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Release)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::NotAssignedToRequester);
+        assert!(table.owner(TimFunctionId::RearHitch).is_none());
     }
 
     #[test]

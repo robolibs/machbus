@@ -630,10 +630,12 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::DashDisplay`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
-  uint8_t fuel_level_percent;
-  uint8_t washer_fluid_level;
+  double fuel_level_percent;
+  double washer_fluid_level;
   double fuel_filter_diff_kpa;
   double oil_filter_diff_kpa;
   double cargo_ambient_temp_c;
@@ -641,6 +643,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::VehiclePosition`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double latitude_deg;
@@ -649,6 +653,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::FuelConsumption`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double trip_fuel_l;
@@ -657,6 +663,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment1`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double def_tank_level;
@@ -668,6 +676,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment2`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double dpf_differential_pressure_kpa;

@@ -1028,62 +1028,62 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         "dash_display_levels_filters_temp",
     );
     let expected_dash = DashDisplay {
-        fuel_level_percent: 200,
-        washer_fluid_level: 180,
-        fuel_filter_diff_kpa: 50.0,
-        oil_filter_diff_kpa: 25.0,
-        cargo_ambient_temp_c: 20.0,
+        fuel_level_percent: sig(80.0),
+        washer_fluid_level: sig(72.0),
+        fuel_filter_diff_kpa: sig(50.0),
+        oil_filter_diff_kpa: sig(25.0),
+        cargo_ambient_temp_c: sig(20.0),
     };
     assert_eq!(expected_dash.encode(), dash);
     let decoded_dash = DashDisplay::decode(&dash).unwrap();
-    assert_eq!(decoded_dash.fuel_level_percent, 200);
-    assert_eq!(decoded_dash.washer_fluid_level, 180);
-    assert_eq!(decoded_dash.fuel_filter_diff_kpa, 50.0);
-    assert_eq!(decoded_dash.oil_filter_diff_kpa, 25.0);
-    assert!((decoded_dash.cargo_ambient_temp_c - 20.0).abs() < 0.1);
+    assert_sig(decoded_dash.fuel_level_percent, 80.0, 0.4);
+    assert_sig(decoded_dash.washer_fluid_level, 72.0, 0.4);
+    assert_sig(decoded_dash.fuel_filter_diff_kpa, 50.0, 0.0);
+    assert_sig(decoded_dash.oil_filter_diff_kpa, 25.0, 0.0);
+    assert_sig(decoded_dash.cargo_ambient_temp_c, 20.0, 0.1);
 
     let position = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "vehicle_position_zero_zero",
     );
     let expected_position = VehiclePosition {
-        latitude_deg: 0.0,
-        longitude_deg: 0.0,
+        latitude_deg: sig(0.0),
+        longitude_deg: sig(0.0),
     };
     assert_eq!(expected_position.encode(), position);
     let decoded_position = VehiclePosition::decode(&position).unwrap();
-    assert!((decoded_position.latitude_deg - 0.0).abs() < 1e-6);
-    assert!((decoded_position.longitude_deg - 0.0).abs() < 1e-6);
+    assert_sig(decoded_position.latitude_deg, 0.0, 1e-6);
+    assert_sig(decoded_position.longitude_deg, 0.0, 1e-6);
 
     let fuel_consumption = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "fuel_consumption_250_5_12345",
     );
     let expected_consumption = FuelConsumption {
-        trip_fuel_l: 250.5,
-        total_fuel_l: 12_345.0,
+        trip_fuel_l: sig(250.5),
+        total_fuel_l: sig(12_345.0),
     };
     assert_eq!(expected_consumption.encode(), fuel_consumption);
     let decoded_consumption = FuelConsumption::decode(&fuel_consumption).unwrap();
-    assert!((decoded_consumption.trip_fuel_l - 250.5).abs() < 0.5);
-    assert!((decoded_consumption.total_fuel_l - 12_345.0).abs() < 0.5);
+    assert_sig(decoded_consumption.trip_fuel_l, 250.5, 0.5);
+    assert_sig(decoded_consumption.total_fuel_l, 12_345.0, 0.5);
 
     let aftertreatment1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "aftertreatment1_def75_nox",
     );
     let expected_at1 = Aftertreatment1 {
-        def_tank_level: 75.0,
-        intake_nox_ppm: 1500.0,
-        outlet_nox_ppm: 50.0,
+        def_tank_level: sig(75.0),
+        intake_nox_ppm: sig(1500.0),
+        outlet_nox_ppm: sig(50.0),
         intake_nox_reading_status: 1,
         outlet_nox_reading_status: 1,
     };
     assert_eq!(expected_at1.encode(), aftertreatment1);
     let decoded_at1 = Aftertreatment1::decode(&aftertreatment1).unwrap();
-    assert!((decoded_at1.def_tank_level - 75.0).abs() < 0.5);
-    assert!((decoded_at1.intake_nox_ppm - 1500.0).abs() < 0.05);
-    assert!((decoded_at1.outlet_nox_ppm - 50.0).abs() < 0.05);
+    assert_sig(decoded_at1.def_tank_level, 75.0, 0.5);
+    assert_sig(decoded_at1.intake_nox_ppm, 1500.0, 0.05);
+    assert_sig(decoded_at1.outlet_nox_ppm, 50.0, 0.05);
     assert_eq!(decoded_at1.intake_nox_reading_status, 1);
     assert_eq!(decoded_at1.outlet_nox_reading_status, 1);
 
@@ -1092,17 +1092,17 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         "aftertreatment2_diff5_5_def32_5_soot75",
     );
     let expected_at2 = Aftertreatment2 {
-        dpf_differential_pressure_kpa: 5.5,
-        def_concentration: 32.5,
-        dpf_soot_load_percent: 75.0,
+        dpf_differential_pressure_kpa: sig(5.5),
+        def_concentration: sig(32.5),
+        dpf_soot_load_percent: sig(75.0),
         dpf_active_regeneration_status: 2,
         dpf_passive_regeneration_status: 1,
     };
     assert_eq!(expected_at2.encode(), aftertreatment2);
     let decoded_at2 = Aftertreatment2::decode(&aftertreatment2).unwrap();
-    assert!((decoded_at2.dpf_differential_pressure_kpa - 5.5).abs() < 0.1);
-    assert!((decoded_at2.def_concentration - 32.4).abs() < 0.1);
-    assert!((decoded_at2.dpf_soot_load_percent - 74.8).abs() < 0.5);
+    assert_sig(decoded_at2.dpf_differential_pressure_kpa, 5.5, 0.1);
+    assert_sig(decoded_at2.def_concentration, 32.4, 0.1);
+    assert_sig(decoded_at2.dpf_soot_load_percent, 74.8, 0.5);
     assert_eq!(decoded_at2.dpf_active_regeneration_status, 2);
     assert_eq!(decoded_at2.dpf_passive_regeneration_status, 1);
 

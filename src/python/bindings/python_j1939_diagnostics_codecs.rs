@@ -602,23 +602,25 @@ impl PyAmbientConditions {
 #[pyclass(name = "DashDisplay", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyDashDisplay {
-    pub fuel_level_percent: u8,
-    pub washer_fluid_level: u8,
-    pub fuel_filter_diff_kpa: f64,
-    pub oil_filter_diff_kpa: f64,
-    pub cargo_ambient_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub fuel_level_percent: Option<f64>,
+    pub washer_fluid_level: Option<f64>,
+    pub fuel_filter_diff_kpa: Option<f64>,
+    pub oil_filter_diff_kpa: Option<f64>,
+    pub cargo_ambient_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyDashDisplay {
     #[new]
-    #[pyo3(signature = (fuel_level_percent=0xFF, washer_fluid_level=0xFF, fuel_filter_diff_kpa=0.0, oil_filter_diff_kpa=0.0, cargo_ambient_temp_c=-40.0))]
+    #[pyo3(signature = (fuel_level_percent=None, washer_fluid_level=None, fuel_filter_diff_kpa=None, oil_filter_diff_kpa=None, cargo_ambient_temp_c=None))]
     fn new(
-        fuel_level_percent: u8,
-        washer_fluid_level: u8,
-        fuel_filter_diff_kpa: f64,
-        oil_filter_diff_kpa: f64,
-        cargo_ambient_temp_c: f64,
+        fuel_level_percent: Option<f64>,
+        washer_fluid_level: Option<f64>,
+        fuel_filter_diff_kpa: Option<f64>,
+        oil_filter_diff_kpa: Option<f64>,
+        cargo_ambient_temp_c: Option<f64>,
     ) -> Self {
         Self {
             fuel_level_percent,
@@ -631,27 +633,27 @@ impl PyDashDisplay {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::DashDisplay::decode(&data).map(|e| Self {
-            fuel_level_percent: e.fuel_level_percent,
-            washer_fluid_level: e.washer_fluid_level,
-            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: e.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: e.cargo_ambient_temp_c,
+            fuel_level_percent: e.fuel_level_percent.value(),
+            washer_fluid_level: e.washer_fluid_level.value(),
+            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa.value(),
+            oil_filter_diff_kpa: e.oil_filter_diff_kpa.value(),
+            cargo_ambient_temp_c: e.cargo_ambient_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::DashDisplay {
-            fuel_level_percent: self.fuel_level_percent,
-            washer_fluid_level: self.washer_fluid_level,
-            fuel_filter_diff_kpa: self.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: self.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: self.cargo_ambient_temp_c,
+            fuel_level_percent: py_signal(self.fuel_level_percent),
+            washer_fluid_level: py_signal(self.washer_fluid_level),
+            fuel_filter_diff_kpa: py_signal(self.fuel_filter_diff_kpa),
+            oil_filter_diff_kpa: py_signal(self.oil_filter_diff_kpa),
+            cargo_ambient_temp_c: py_signal(self.cargo_ambient_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "DashDisplay(fuel_level_percent={})",
+            "DashDisplay(fuel_level_percent={:?})",
             self.fuel_level_percent
         )
     }
@@ -661,15 +663,17 @@ impl PyDashDisplay {
 #[pyclass(name = "VehiclePosition", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyVehiclePosition {
-    pub latitude_deg: f64,
-    pub longitude_deg: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub latitude_deg: Option<f64>,
+    pub longitude_deg: Option<f64>,
 }
 
 #[pymethods]
 impl PyVehiclePosition {
     #[new]
-    #[pyo3(signature = (latitude_deg=0.0, longitude_deg=0.0))]
-    fn new(latitude_deg: f64, longitude_deg: f64) -> Self {
+    #[pyo3(signature = (latitude_deg=None, longitude_deg=None))]
+    fn new(latitude_deg: Option<f64>, longitude_deg: Option<f64>) -> Self {
         Self {
             latitude_deg,
             longitude_deg,
@@ -678,21 +682,21 @@ impl PyVehiclePosition {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::VehiclePosition::decode(&data).map(|e| Self {
-            latitude_deg: e.latitude_deg,
-            longitude_deg: e.longitude_deg,
+            latitude_deg: e.latitude_deg.value(),
+            longitude_deg: e.longitude_deg.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::VehiclePosition {
-            latitude_deg: self.latitude_deg,
-            longitude_deg: self.longitude_deg,
+            latitude_deg: py_signal(self.latitude_deg),
+            longitude_deg: py_signal(self.longitude_deg),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "VehiclePosition(latitude_deg={:.6}, longitude_deg={:.6})",
+            "VehiclePosition(latitude_deg={:?}, longitude_deg={:?})",
             self.latitude_deg, self.longitude_deg
         )
     }
@@ -702,15 +706,17 @@ impl PyVehiclePosition {
 #[pyclass(name = "FuelConsumption", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyFuelConsumption {
-    pub trip_fuel_l: f64,
-    pub total_fuel_l: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub trip_fuel_l: Option<f64>,
+    pub total_fuel_l: Option<f64>,
 }
 
 #[pymethods]
 impl PyFuelConsumption {
     #[new]
-    #[pyo3(signature = (trip_fuel_l=0.0, total_fuel_l=0.0))]
-    fn new(trip_fuel_l: f64, total_fuel_l: f64) -> Self {
+    #[pyo3(signature = (trip_fuel_l=None, total_fuel_l=None))]
+    fn new(trip_fuel_l: Option<f64>, total_fuel_l: Option<f64>) -> Self {
         Self {
             trip_fuel_l,
             total_fuel_l,
@@ -719,20 +725,20 @@ impl PyFuelConsumption {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::FuelConsumption::decode(&data).map(|e| Self {
-            trip_fuel_l: e.trip_fuel_l,
-            total_fuel_l: e.total_fuel_l,
+            trip_fuel_l: e.trip_fuel_l.value(),
+            total_fuel_l: e.total_fuel_l.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::FuelConsumption {
-            trip_fuel_l: self.trip_fuel_l,
-            total_fuel_l: self.total_fuel_l,
+            trip_fuel_l: py_signal(self.trip_fuel_l),
+            total_fuel_l: py_signal(self.total_fuel_l),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("FuelConsumption(total_fuel_l={:.1})", self.total_fuel_l)
+        format!("FuelConsumption(total_fuel_l={:?})", self.total_fuel_l)
     }
 }
 
@@ -740,9 +746,11 @@ impl PyFuelConsumption {
 #[pyclass(name = "Aftertreatment1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAftertreatment1 {
-    pub def_tank_level: f64,
-    pub intake_nox_ppm: f64,
-    pub outlet_nox_ppm: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub def_tank_level: Option<f64>,
+    pub intake_nox_ppm: Option<f64>,
+    pub outlet_nox_ppm: Option<f64>,
     pub intake_nox_reading_status: u8,
     pub outlet_nox_reading_status: u8,
 }
@@ -750,11 +758,11 @@ pub struct PyAftertreatment1 {
 #[pymethods]
 impl PyAftertreatment1 {
     #[new]
-    #[pyo3(signature = (def_tank_level=0.0, intake_nox_ppm=0.0, outlet_nox_ppm=0.0, intake_nox_reading_status=0, outlet_nox_reading_status=0))]
+    #[pyo3(signature = (def_tank_level=None, intake_nox_ppm=None, outlet_nox_ppm=None, intake_nox_reading_status=0, outlet_nox_reading_status=0))]
     fn new(
-        def_tank_level: f64,
-        intake_nox_ppm: f64,
-        outlet_nox_ppm: f64,
+        def_tank_level: Option<f64>,
+        intake_nox_ppm: Option<f64>,
+        outlet_nox_ppm: Option<f64>,
         intake_nox_reading_status: u8,
         outlet_nox_reading_status: u8,
     ) -> Self {
@@ -769,18 +777,18 @@ impl PyAftertreatment1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Aftertreatment1::decode(&data).map(|e| Self {
-            def_tank_level: e.def_tank_level,
-            intake_nox_ppm: e.intake_nox_ppm,
-            outlet_nox_ppm: e.outlet_nox_ppm,
+            def_tank_level: e.def_tank_level.value(),
+            intake_nox_ppm: e.intake_nox_ppm.value(),
+            outlet_nox_ppm: e.outlet_nox_ppm.value(),
             intake_nox_reading_status: e.intake_nox_reading_status,
             outlet_nox_reading_status: e.outlet_nox_reading_status,
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Aftertreatment1 {
-            def_tank_level: self.def_tank_level,
-            intake_nox_ppm: self.intake_nox_ppm,
-            outlet_nox_ppm: self.outlet_nox_ppm,
+            def_tank_level: py_signal(self.def_tank_level),
+            intake_nox_ppm: py_signal(self.intake_nox_ppm),
+            outlet_nox_ppm: py_signal(self.outlet_nox_ppm),
             intake_nox_reading_status: self.intake_nox_reading_status,
             outlet_nox_reading_status: self.outlet_nox_reading_status,
         }
@@ -788,7 +796,7 @@ impl PyAftertreatment1 {
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("Aftertreatment1(def_tank_level={:.1})", self.def_tank_level)
+        format!("Aftertreatment1(def_tank_level={:?})", self.def_tank_level)
     }
 }
 
@@ -796,9 +804,11 @@ impl PyAftertreatment1 {
 #[pyclass(name = "Aftertreatment2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAftertreatment2 {
-    pub dpf_differential_pressure_kpa: f64,
-    pub def_concentration: f64,
-    pub dpf_soot_load_percent: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub dpf_differential_pressure_kpa: Option<f64>,
+    pub def_concentration: Option<f64>,
+    pub dpf_soot_load_percent: Option<f64>,
     pub dpf_active_regeneration_status: u8,
     pub dpf_passive_regeneration_status: u8,
 }
@@ -806,11 +816,11 @@ pub struct PyAftertreatment2 {
 #[pymethods]
 impl PyAftertreatment2 {
     #[new]
-    #[pyo3(signature = (dpf_differential_pressure_kpa=0.0, def_concentration=0.0, dpf_soot_load_percent=0.0, dpf_active_regeneration_status=0, dpf_passive_regeneration_status=0))]
+    #[pyo3(signature = (dpf_differential_pressure_kpa=None, def_concentration=None, dpf_soot_load_percent=None, dpf_active_regeneration_status=0, dpf_passive_regeneration_status=0))]
     fn new(
-        dpf_differential_pressure_kpa: f64,
-        def_concentration: f64,
-        dpf_soot_load_percent: f64,
+        dpf_differential_pressure_kpa: Option<f64>,
+        def_concentration: Option<f64>,
+        dpf_soot_load_percent: Option<f64>,
         dpf_active_regeneration_status: u8,
         dpf_passive_regeneration_status: u8,
     ) -> Self {
@@ -825,18 +835,18 @@ impl PyAftertreatment2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Aftertreatment2::decode(&data).map(|e| Self {
-            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa,
-            def_concentration: e.def_concentration,
-            dpf_soot_load_percent: e.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa.value(),
+            def_concentration: e.def_concentration.value(),
+            dpf_soot_load_percent: e.dpf_soot_load_percent.value(),
             dpf_active_regeneration_status: e.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: e.dpf_passive_regeneration_status,
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Aftertreatment2 {
-            dpf_differential_pressure_kpa: self.dpf_differential_pressure_kpa,
-            def_concentration: self.def_concentration,
-            dpf_soot_load_percent: self.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: py_signal(self.dpf_differential_pressure_kpa),
+            def_concentration: py_signal(self.def_concentration),
+            dpf_soot_load_percent: py_signal(self.dpf_soot_load_percent),
             dpf_active_regeneration_status: self.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: self.dpf_passive_regeneration_status,
         }
@@ -845,7 +855,7 @@ impl PyAftertreatment2 {
     }
     fn __repr__(&self) -> String {
         format!(
-            "Aftertreatment2(dpf_soot_load_percent={:.1})",
+            "Aftertreatment2(dpf_soot_load_percent={:?})",
             self.dpf_soot_load_percent
         )
     }

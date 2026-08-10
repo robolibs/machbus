@@ -112,11 +112,15 @@ tsc1_default=00FFFFFFFFFFFFFF
 # readings the ECU never took. A default reports nothing.
 vep1_default=FFFFFFFFFFFFFFFF
 ambient_default=FFFFFFFFFFFFFFFF
-dash_display_default=FFFF0000201DFFFF
-vehicle_position_default=00752B7D00752B7D
-fuel_consumption_default=0000000000000000
-aftertreatment1_default=00000000000000FF
-aftertreatment2_default=000000000000FFFF
+# Dash, position, fuel totals and aftertreatment: the old defaults claimed
+# 0 kPa filter drop, latitude/longitude 0,0 (a real place off West Africa),
+# 0 L consumed and an empty DEF tank. A default reports nothing measured; the
+# AT1/AT2 regeneration and reading statuses keep their own enumerated codes.
+dash_display_default=FFFFFFFFFFFFFFFF
+vehicle_position_default=FFFFFFFFFFFFFFFF
+fuel_consumption_default=FFFFFFFFFFFFFFFF
+aftertreatment1_default=FFFFFFFFFF0000FF
+aftertreatment2_default=FFFFFFFF0000FFFF
 etc1_default=0F00000000FFFFFF
 transmission_oil_default=201DFFFFFFFFFFFF
 cruise_control_default=0000000000FFFFFF

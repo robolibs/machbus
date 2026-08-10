@@ -80,15 +80,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         VehiclePosition {
-            latitude_deg: -210.0,
-            longitude_deg: -210.0,
+            latitude_deg: sig(-210.0),
+            longitude_deg: sig(-210.0),
         }
         .encode(),
         position_min
     );
     let decoded = VehiclePosition::decode(&position_min).unwrap();
-    assert_eq!(decoded.latitude_deg, -210.0);
-    assert_eq!(decoded.longitude_deg, -210.0);
+    assert_sig(decoded.latitude_deg, -210.0, 0.0);
+    assert_sig(decoded.longitude_deg, -210.0, 0.0);
 
     let position_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -96,15 +96,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         VehiclePosition {
-            latitude_deg: 219.496_729_3,
-            longitude_deg: 219.496_729_3,
+            latitude_deg: sig(219.496_729_3),
+            longitude_deg: sig(219.496_729_3),
         }
         .encode(),
         position_upper
     );
     let decoded = VehiclePosition::decode(&position_upper).unwrap();
-    assert!((decoded.latitude_deg - 219.496_729_3).abs() < 1e-9);
-    assert!((decoded.longitude_deg - 219.496_729_3).abs() < 1e-9);
+    assert_sig(decoded.latitude_deg, 219.496_729_3, 1e-9);
+    assert_sig(decoded.longitude_deg, 219.496_729_3, 1e-9);
 
     let fuel_consumption_min = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -112,15 +112,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         FuelConsumption {
-            trip_fuel_l: 0.0,
-            total_fuel_l: 0.0,
+            trip_fuel_l: sig(0.0),
+            total_fuel_l: sig(0.0),
         }
         .encode(),
         fuel_consumption_min
     );
     let decoded = FuelConsumption::decode(&fuel_consumption_min).unwrap();
-    assert_eq!(decoded.trip_fuel_l, 0.0);
-    assert_eq!(decoded.total_fuel_l, 0.0);
+    assert_sig(decoded.trip_fuel_l, 0.0, 0.0);
+    assert_sig(decoded.total_fuel_l, 0.0, 0.0);
 
     let fuel_consumption_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -128,15 +128,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         FuelConsumption {
-            trip_fuel_l: 2_147_483_646.5,
-            total_fuel_l: 2_147_483_646.5,
+            trip_fuel_l: sig(2_147_483_646.5),
+            total_fuel_l: sig(2_147_483_646.5),
         }
         .encode(),
         fuel_consumption_upper
     );
     let decoded = FuelConsumption::decode(&fuel_consumption_upper).unwrap();
-    assert_eq!(decoded.trip_fuel_l, 2_147_483_646.5);
-    assert_eq!(decoded.total_fuel_l, 2_147_483_646.5);
+    assert_sig(decoded.trip_fuel_l, 2_147_483_646.5, 0.0);
+    assert_sig(decoded.total_fuel_l, 2_147_483_646.5, 0.0);
 
     let etc1_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "etc1_min_gears_zero");
     assert_eq!(
@@ -479,36 +479,36 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "dash_display_clamped_inputs",
             DashDisplay {
-                fuel_level_percent: 0xFE,
-                washer_fluid_level: 0xFE,
-                fuel_filter_diff_kpa: 99_999.0,
-                oil_filter_diff_kpa: 99_999.0,
-                cargo_ambient_temp_c: 99_999.0,
+                fuel_level_percent: Signal::Error,
+                washer_fluid_level: Signal::Error,
+                fuel_filter_diff_kpa: sig(99_999.0),
+                oil_filter_diff_kpa: sig(99_999.0),
+                cargo_ambient_temp_c: sig(99_999.0),
             }
             .encode(),
         ),
         (
             "vehicle_position_clamped_inputs",
             VehiclePosition {
-                latitude_deg: 1_000.0,
-                longitude_deg: 1_000.0,
+                latitude_deg: sig(1_000.0),
+                longitude_deg: sig(1_000.0),
             }
             .encode(),
         ),
         (
             "fuel_consumption_clamped_inputs",
             FuelConsumption {
-                trip_fuel_l: 9_999_999_999.0,
-                total_fuel_l: 9_999_999_999.0,
+                trip_fuel_l: sig(9_999_999_999.0),
+                total_fuel_l: sig(9_999_999_999.0),
             }
             .encode(),
         ),
         (
             "aftertreatment1_clamped_inputs",
             Aftertreatment1 {
-                def_tank_level: 99_999.0,
-                intake_nox_ppm: 99_999.0,
-                outlet_nox_ppm: 99_999.0,
+                def_tank_level: sig(99_999.0),
+                intake_nox_ppm: sig(99_999.0),
+                outlet_nox_ppm: sig(99_999.0),
                 intake_nox_reading_status: 0xFE,
                 outlet_nox_reading_status: 0xFE,
             }
@@ -517,9 +517,9 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "aftertreatment2_clamped_inputs",
             Aftertreatment2 {
-                dpf_differential_pressure_kpa: 99_999.0,
-                def_concentration: 99_999.0,
-                dpf_soot_load_percent: 99_999.0,
+                dpf_differential_pressure_kpa: sig(99_999.0),
+                def_concentration: sig(99_999.0),
+                dpf_soot_load_percent: sig(99_999.0),
                 dpf_active_regeneration_status: 0xFE,
                 dpf_passive_regeneration_status: 0xFE,
             }
@@ -862,18 +862,19 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "dash_display_raw_min");
     assert_eq!(
         DashDisplay {
-            washer_fluid_level: 0,
-            fuel_level_percent: 0,
-            fuel_filter_diff_kpa: 0.0,
-            oil_filter_diff_kpa: 0.0,
-            cargo_ambient_temp_c: -273.0,
+            washer_fluid_level: sig(0.0),
+            fuel_level_percent: sig(0.0),
+            fuel_filter_diff_kpa: sig(0.0),
+            oil_filter_diff_kpa: sig(0.0),
+            cargo_ambient_temp_c: sig(-273.0),
         }
         .encode(),
         dash_min
     );
-    assert_eq!(
+    assert_sig(
         DashDisplay::decode(&dash_min).unwrap().cargo_ambient_temp_c,
-        -273.0
+        -273.0,
+        0.0,
     );
 
     let dash_upper = parse_named_hex_frame(
@@ -882,18 +883,18 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         DashDisplay {
-            washer_fluid_level: 0xFE,
-            fuel_level_percent: 0xFE,
-            fuel_filter_diff_kpa: 500.0,
-            oil_filter_diff_kpa: 125.0,
-            cargo_ambient_temp_c: 1774.90625,
+            washer_fluid_level: Signal::Error,
+            fuel_level_percent: Signal::Error,
+            fuel_filter_diff_kpa: sig(500.0),
+            oil_filter_diff_kpa: sig(125.0),
+            cargo_ambient_temp_c: sig(1_774.906_25),
         }
         .encode(),
         dash_upper
     );
     let decoded = DashDisplay::decode(&dash_upper).unwrap();
-    assert_eq!(decoded.fuel_filter_diff_kpa, 500.0);
-    assert_eq!(decoded.cargo_ambient_temp_c, 1774.90625);
+    assert_sig(decoded.fuel_filter_diff_kpa, 500.0, 0.0);
+    assert_sig(decoded.cargo_ambient_temp_c, 1774.90625, 0.0);
 
     let fuel_economy_upper = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -918,9 +919,9 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         Aftertreatment1 {
-            def_tank_level: 100.0,
-            intake_nox_ppm: 3276.65,
-            outlet_nox_ppm: 3276.65,
+            def_tank_level: sig(100.0),
+            intake_nox_ppm: sig(3276.65),
+            outlet_nox_ppm: sig(3276.65),
             intake_nox_reading_status: 0xFE,
             outlet_nox_reading_status: 0xFE,
         }
@@ -928,7 +929,7 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         at1_upper
     );
     let decoded = Aftertreatment1::decode(&at1_upper).unwrap();
-    assert!((decoded.def_tank_level - 100.0).abs() < 1e-9);
+    assert_sig(decoded.def_tank_level, 100.0, 1e-9);
     assert_eq!(decoded.outlet_nox_reading_status, 0xFE);
 
     let at2_upper = parse_named_hex_frame(
@@ -937,9 +938,9 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         Aftertreatment2 {
-            dpf_differential_pressure_kpa: 6553.3,
-            def_concentration: 100.0,
-            dpf_soot_load_percent: 100.0,
+            dpf_differential_pressure_kpa: sig(6553.3),
+            def_concentration: sig(100.0),
+            dpf_soot_load_percent: sig(100.0),
             dpf_active_regeneration_status: 0xFE,
             dpf_passive_regeneration_status: 0xFE,
         }
@@ -947,7 +948,7 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         at2_upper
     );
     let decoded = Aftertreatment2::decode(&at2_upper).unwrap();
-    assert!((decoded.dpf_differential_pressure_kpa - 6553.3).abs() < 1e-9);
+    assert_sig(decoded.dpf_differential_pressure_kpa, 6553.3, 1e-9);
     assert_eq!(decoded.dpf_passive_regeneration_status, 0xFE);
 
     let short = parse_named_hex_bytes(

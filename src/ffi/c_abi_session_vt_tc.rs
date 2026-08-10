@@ -805,11 +805,13 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::DashDisplay`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusDashDisplay {
-    pub fuel_level_percent: u8,
-    pub washer_fluid_level: u8,
+    pub fuel_level_percent: f64,
+    pub washer_fluid_level: f64,
     pub fuel_filter_diff_kpa: f64,
     pub oil_filter_diff_kpa: f64,
     pub cargo_ambient_temp_c: f64,
@@ -818,11 +820,11 @@ pub struct MachbusDashDisplay {
 impl From<crate::j1939::DashDisplay> for MachbusDashDisplay {
     fn from(e: crate::j1939::DashDisplay) -> Self {
         Self {
-            fuel_level_percent: e.fuel_level_percent,
-            washer_fluid_level: e.washer_fluid_level,
-            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: e.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: e.cargo_ambient_temp_c,
+            fuel_level_percent: signal_to_c(e.fuel_level_percent),
+            washer_fluid_level: signal_to_c(e.washer_fluid_level),
+            fuel_filter_diff_kpa: signal_to_c(e.fuel_filter_diff_kpa),
+            oil_filter_diff_kpa: signal_to_c(e.oil_filter_diff_kpa),
+            cargo_ambient_temp_c: signal_to_c(e.cargo_ambient_temp_c),
         }
     }
 }
@@ -830,11 +832,11 @@ impl From<crate::j1939::DashDisplay> for MachbusDashDisplay {
 impl From<MachbusDashDisplay> for crate::j1939::DashDisplay {
     fn from(e: MachbusDashDisplay) -> Self {
         Self {
-            fuel_level_percent: e.fuel_level_percent,
-            washer_fluid_level: e.washer_fluid_level,
-            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: e.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: e.cargo_ambient_temp_c,
+            fuel_level_percent: signal_from_c(e.fuel_level_percent),
+            washer_fluid_level: signal_from_c(e.washer_fluid_level),
+            fuel_filter_diff_kpa: signal_from_c(e.fuel_filter_diff_kpa),
+            oil_filter_diff_kpa: signal_from_c(e.oil_filter_diff_kpa),
+            cargo_ambient_temp_c: signal_from_c(e.cargo_ambient_temp_c),
         }
     }
 }
@@ -849,6 +851,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::VehiclePosition`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusVehiclePosition {
@@ -859,8 +863,8 @@ pub struct MachbusVehiclePosition {
 impl From<crate::j1939::VehiclePosition> for MachbusVehiclePosition {
     fn from(e: crate::j1939::VehiclePosition) -> Self {
         Self {
-            latitude_deg: e.latitude_deg,
-            longitude_deg: e.longitude_deg,
+            latitude_deg: signal_to_c(e.latitude_deg),
+            longitude_deg: signal_to_c(e.longitude_deg),
         }
     }
 }
@@ -868,8 +872,8 @@ impl From<crate::j1939::VehiclePosition> for MachbusVehiclePosition {
 impl From<MachbusVehiclePosition> for crate::j1939::VehiclePosition {
     fn from(e: MachbusVehiclePosition) -> Self {
         Self {
-            latitude_deg: e.latitude_deg,
-            longitude_deg: e.longitude_deg,
+            latitude_deg: signal_from_c(e.latitude_deg),
+            longitude_deg: signal_from_c(e.longitude_deg),
         }
     }
 }
@@ -884,6 +888,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::FuelConsumption`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusFuelConsumption {
@@ -894,8 +900,8 @@ pub struct MachbusFuelConsumption {
 impl From<crate::j1939::FuelConsumption> for MachbusFuelConsumption {
     fn from(e: crate::j1939::FuelConsumption) -> Self {
         Self {
-            trip_fuel_l: e.trip_fuel_l,
-            total_fuel_l: e.total_fuel_l,
+            trip_fuel_l: signal_to_c(e.trip_fuel_l),
+            total_fuel_l: signal_to_c(e.total_fuel_l),
         }
     }
 }
@@ -903,8 +909,8 @@ impl From<crate::j1939::FuelConsumption> for MachbusFuelConsumption {
 impl From<MachbusFuelConsumption> for crate::j1939::FuelConsumption {
     fn from(e: MachbusFuelConsumption) -> Self {
         Self {
-            trip_fuel_l: e.trip_fuel_l,
-            total_fuel_l: e.total_fuel_l,
+            trip_fuel_l: signal_from_c(e.trip_fuel_l),
+            total_fuel_l: signal_from_c(e.total_fuel_l),
         }
     }
 }
@@ -919,6 +925,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment1`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusAftertreatment1 {
@@ -932,9 +940,9 @@ pub struct MachbusAftertreatment1 {
 impl From<crate::j1939::Aftertreatment1> for MachbusAftertreatment1 {
     fn from(e: crate::j1939::Aftertreatment1) -> Self {
         Self {
-            def_tank_level: e.def_tank_level,
-            intake_nox_ppm: e.intake_nox_ppm,
-            outlet_nox_ppm: e.outlet_nox_ppm,
+            def_tank_level: signal_to_c(e.def_tank_level),
+            intake_nox_ppm: signal_to_c(e.intake_nox_ppm),
+            outlet_nox_ppm: signal_to_c(e.outlet_nox_ppm),
             intake_nox_reading_status: e.intake_nox_reading_status,
             outlet_nox_reading_status: e.outlet_nox_reading_status,
         }
@@ -944,9 +952,9 @@ impl From<crate::j1939::Aftertreatment1> for MachbusAftertreatment1 {
 impl From<MachbusAftertreatment1> for crate::j1939::Aftertreatment1 {
     fn from(e: MachbusAftertreatment1) -> Self {
         Self {
-            def_tank_level: e.def_tank_level,
-            intake_nox_ppm: e.intake_nox_ppm,
-            outlet_nox_ppm: e.outlet_nox_ppm,
+            def_tank_level: signal_from_c(e.def_tank_level),
+            intake_nox_ppm: signal_from_c(e.intake_nox_ppm),
+            outlet_nox_ppm: signal_from_c(e.outlet_nox_ppm),
             intake_nox_reading_status: e.intake_nox_reading_status,
             outlet_nox_reading_status: e.outlet_nox_reading_status,
         }
@@ -963,6 +971,8 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment2`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusAftertreatment2 {
@@ -976,9 +986,9 @@ pub struct MachbusAftertreatment2 {
 impl From<crate::j1939::Aftertreatment2> for MachbusAftertreatment2 {
     fn from(e: crate::j1939::Aftertreatment2) -> Self {
         Self {
-            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa,
-            def_concentration: e.def_concentration,
-            dpf_soot_load_percent: e.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: signal_to_c(e.dpf_differential_pressure_kpa),
+            def_concentration: signal_to_c(e.def_concentration),
+            dpf_soot_load_percent: signal_to_c(e.dpf_soot_load_percent),
             dpf_active_regeneration_status: e.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: e.dpf_passive_regeneration_status,
         }
@@ -988,9 +998,9 @@ impl From<crate::j1939::Aftertreatment2> for MachbusAftertreatment2 {
 impl From<MachbusAftertreatment2> for crate::j1939::Aftertreatment2 {
     fn from(e: MachbusAftertreatment2) -> Self {
         Self {
-            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa,
-            def_concentration: e.def_concentration,
-            dpf_soot_load_percent: e.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: signal_from_c(e.dpf_differential_pressure_kpa),
+            def_concentration: signal_from_c(e.def_concentration),
+            dpf_soot_load_percent: signal_from_c(e.dpf_soot_load_percent),
             dpf_active_regeneration_status: e.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: e.dpf_passive_regeneration_status,
         }

@@ -90,6 +90,24 @@ fn u32_signal(raw: u32, resolution: f64) -> Signal<f64> {
     }
 }
 
+/// [`u32_signal`] for a SLOT that carries an offset.
+#[inline]
+fn u32_signal_offset(raw: u32, resolution: f64, offset: f64) -> Signal<f64> {
+    if raw >= u32::MAX - 1 {
+        Signal::NotAvailable
+    } else {
+        Signal::Value(f64::from(raw) * resolution + offset)
+    }
+}
+
+/// [`encode_u32_signal`] for a SLOT that carries an offset.
+fn encode_u32_signal_offset(signal: Signal<f64>, offset: f64, scale: f64) -> u32 {
+    match signal {
+        Signal::Value(v) => offset_scaled_u32_non_na(v, offset, scale),
+        Signal::Error | Signal::NotAvailable => u32::MAX,
+    }
+}
+
 /// Four-byte equivalent of [`encode_u16_signal`].
 fn encode_u32_signal(signal: Signal<f64>, scale: f64) -> u32 {
     match signal {
@@ -157,11 +175,6 @@ fn offset_scaled_u32_non_na(value: f64, offset: f64, scale: f64) -> u32 {
     scaled_u32_non_na(value + offset, scale)
 }
 
-#[inline]
-fn u8_scaled_raw_is_defined(raw: u8) -> bool {
-    raw <= 250
-}
-
 /// Decode a one-byte J1939 SLOT into a [`Signal`], keeping "error" and "not
 /// available" distinguishable from a measurement.
 ///
@@ -195,26 +208,6 @@ fn u16_signal(raw: u16, resolution: f64, offset: f64) -> Signal<f64> {
     } else {
         Signal::Value(f64::from(raw) * resolution + offset)
     }
-}
-
-#[inline]
-fn u16_data_is_available(raw: u16) -> bool {
-    raw < u16::MAX - 1
-}
-
-#[inline]
-fn u32_data_is_available(raw: u32) -> bool {
-    raw < u32::MAX - 1
-}
-
-#[inline]
-fn u8_percent_raw_is_defined(raw: u8) -> bool {
-    raw <= 250 || raw == 0xFE
-}
-
-#[inline]
-fn u8_percent_raw_is_defined_or_not_available(raw: u8) -> bool {
-    raw <= 250 || raw >= 0xFE
 }
 
 #[inline]
@@ -835,36 +828,27 @@ impl AmbientConditions {
 
 // ─── DashDisplay (PGN 0x0FEFC) ────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct DashDisplay {
-    pub fuel_level_percent: u8,
-    pub washer_fluid_level: u8,
-    pub fuel_filter_diff_kpa: f64,
-    pub oil_filter_diff_kpa: f64,
-    pub cargo_ambient_temp_c: f64,
-}
-
-impl Default for DashDisplay {
-    fn default() -> Self {
-        Self {
-            fuel_level_percent: 0xFF,
-            washer_fluid_level: 0xFF,
-            fuel_filter_diff_kpa: 0.0,
-            oil_filter_diff_kpa: 0.0,
-            cargo_ambient_temp_c: -40.0,
-        }
-    }
+    /// SPN 96: 0.4 %/bit. This used to be the raw wire byte; it is now the
+    /// percentage the field name promises, with absence made explicit.
+    pub fuel_level_percent: Signal<f64>,
+    /// SPN 80: 0.4 %/bit.
+    pub washer_fluid_level: Signal<f64>,
+    pub fuel_filter_diff_kpa: Signal<f64>,
+    pub oil_filter_diff_kpa: Signal<f64>,
+    pub cargo_ambient_temp_c: Signal<f64>,
 }
 
 impl DashDisplay {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = self.washer_fluid_level;
-        data[1] = self.fuel_level_percent;
-        data[2] = scaled_u8_non_na(self.fuel_filter_diff_kpa, 2.0);
-        data[3] = scaled_u8_non_na(self.oil_filter_diff_kpa, 0.5);
-        let temp = offset_scaled_u16_non_na(self.cargo_ambient_temp_c, 273.0, 0.03125);
+        data[0] = encode_u8_signal_scaled(self.washer_fluid_level, 0.4);
+        data[1] = encode_u8_signal_scaled(self.fuel_level_percent, 0.4);
+        data[2] = encode_u8_signal_scaled(self.fuel_filter_diff_kpa, 2.0);
+        data[3] = encode_u8_signal_scaled(self.oil_filter_diff_kpa, 0.5);
+        let temp = encode_u16_signal_offset(self.cargo_ambient_temp_c, 273.0, 0.03125);
         data[4] = (temp & 0xFF) as u8;
         data[5] = ((temp >> 8) & 0xFF) as u8;
         data
@@ -876,20 +860,12 @@ impl DashDisplay {
             return None;
         }
         let temp = (data[4] as u16) | ((data[5] as u16) << 8);
-        if !u8_scaled_raw_is_defined(data[2])
-            || !u8_scaled_raw_is_defined(data[3])
-            || !u8_percent_raw_is_defined_or_not_available(data[0])
-            || !u8_percent_raw_is_defined_or_not_available(data[1])
-            || !u16_data_is_available(temp)
-        {
-            return None;
-        }
         Some(Self {
-            washer_fluid_level: data[0],
-            fuel_level_percent: data[1],
-            fuel_filter_diff_kpa: data[2] as f64 * 2.0,
-            oil_filter_diff_kpa: data[3] as f64 * 0.5,
-            cargo_ambient_temp_c: temp as f64 * 0.03125 - 273.0,
+            washer_fluid_level: u8_signal_scaled(data[0], 0.4),
+            fuel_level_percent: u8_signal_scaled(data[1], 0.4),
+            fuel_filter_diff_kpa: u8_signal_scaled(data[2], 2.0),
+            oil_filter_diff_kpa: u8_signal_scaled(data[3], 0.5),
+            cargo_ambient_temp_c: u16_signal(temp, 0.03125, -273.0),
         })
     }
 
@@ -907,18 +883,18 @@ impl DashDisplay {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct VehiclePosition {
     /// SPN 584: 1e-7 deg/bit, offset −210, 4 bytes.
-    pub latitude_deg: f64,
+    pub latitude_deg: Signal<f64>,
     /// SPN 585: 1e-7 deg/bit, offset −210, 4 bytes.
-    pub longitude_deg: f64,
+    pub longitude_deg: Signal<f64>,
 }
 
 impl VehiclePosition {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let lat = offset_scaled_u32_non_na(self.latitude_deg, 210.0, 1e-7);
+        let lat = encode_u32_signal_offset(self.latitude_deg, 210.0, 1e-7);
         data[0..4].copy_from_slice(&lat.to_le_bytes());
-        let lon = offset_scaled_u32_non_na(self.longitude_deg, 210.0, 1e-7);
+        let lon = encode_u32_signal_offset(self.longitude_deg, 210.0, 1e-7);
         data[4..8].copy_from_slice(&lon.to_le_bytes());
         data
     }
@@ -930,12 +906,9 @@ impl VehiclePosition {
         }
         let lat = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let lon = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if !u32_data_is_available(lat) || !u32_data_is_available(lon) {
-            return None;
-        }
         Some(Self {
-            latitude_deg: lat as f64 * 1e-7 - 210.0,
-            longitude_deg: lon as f64 * 1e-7 - 210.0,
+            latitude_deg: u32_signal_offset(lat, 1e-7, -210.0),
+            longitude_deg: u32_signal_offset(lon, 1e-7, -210.0),
         })
     }
 
@@ -952,17 +925,17 @@ impl VehiclePosition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FuelConsumption {
-    pub trip_fuel_l: f64,
-    pub total_fuel_l: f64,
+    pub trip_fuel_l: Signal<f64>,
+    pub total_fuel_l: Signal<f64>,
 }
 
 impl FuelConsumption {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let trip = scaled_u32_non_na(self.trip_fuel_l, 0.5);
+        let trip = encode_u32_signal(self.trip_fuel_l, 0.5);
         data[0..4].copy_from_slice(&trip.to_le_bytes());
-        let total = scaled_u32_non_na(self.total_fuel_l, 0.5);
+        let total = encode_u32_signal(self.total_fuel_l, 0.5);
         data[4..8].copy_from_slice(&total.to_le_bytes());
         data
     }
@@ -974,12 +947,9 @@ impl FuelConsumption {
         }
         let trip = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let total = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if !u32_data_is_available(trip) || !u32_data_is_available(total) {
-            return None;
-        }
         Some(Self {
-            trip_fuel_l: trip as f64 * 0.5,
-            total_fuel_l: total as f64 * 0.5,
+            trip_fuel_l: u32_signal(trip, 0.5),
+            total_fuel_l: u32_signal(total, 0.5),
         })
     }
 
@@ -999,11 +969,11 @@ impl FuelConsumption {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Aftertreatment1 {
     /// SPN 1761: 0.4 % per bit.
-    pub def_tank_level: f64,
+    pub def_tank_level: Signal<f64>,
     /// SPN 3216: 0.05 ppm per bit, 2 bytes.
-    pub intake_nox_ppm: f64,
+    pub intake_nox_ppm: Signal<f64>,
     /// SPN 3226: 0.05 ppm per bit, 2 bytes.
-    pub outlet_nox_ppm: f64,
+    pub outlet_nox_ppm: Signal<f64>,
     pub intake_nox_reading_status: u8,
     pub outlet_nox_reading_status: u8,
 }
@@ -1012,11 +982,11 @@ impl Aftertreatment1 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = scaled_u8_non_na(self.def_tank_level, 0.4);
-        let intake = scaled_u16_non_na(self.intake_nox_ppm, 0.05);
+        data[0] = encode_u8_signal_scaled(self.def_tank_level, 0.4);
+        let intake = encode_u16_signal(self.intake_nox_ppm, 0.05);
         data[1] = (intake & 0xFF) as u8;
         data[2] = ((intake >> 8) & 0xFF) as u8;
-        let outlet = scaled_u16_non_na(self.outlet_nox_ppm, 0.05);
+        let outlet = encode_u16_signal(self.outlet_nox_ppm, 0.05);
         data[3] = (outlet & 0xFF) as u8;
         data[4] = ((outlet >> 8) & 0xFF) as u8;
         data[5] = self.intake_nox_reading_status;
@@ -1031,18 +1001,15 @@ impl Aftertreatment1 {
         }
         let intake = (data[1] as u16) | ((data[2] as u16) << 8);
         let outlet = (data[3] as u16) | ((data[4] as u16) << 8);
-        if !u8_percent_raw_is_defined(data[0])
-            || !u16_data_is_available(intake)
-            || !u16_data_is_available(outlet)
-            || !u8_status_raw_is_defined(data[5])
-            || !u8_status_raw_is_defined(data[6])
-        {
+        // The two reading statuses are enumerations, not measurements: an
+        // out-of-range code has no defined meaning, so it stays a hard reject.
+        if !u8_status_raw_is_defined(data[5]) || !u8_status_raw_is_defined(data[6]) {
             return None;
         }
         Some(Self {
-            def_tank_level: data[0] as f64 * 0.4,
-            intake_nox_ppm: intake as f64 * 0.05,
-            outlet_nox_ppm: outlet as f64 * 0.05,
+            def_tank_level: u8_signal_scaled(data[0], 0.4),
+            intake_nox_ppm: u16_signal(intake, 0.05, 0.0),
+            outlet_nox_ppm: u16_signal(outlet, 0.05, 0.0),
             intake_nox_reading_status: data[5],
             outlet_nox_reading_status: data[6],
         })
@@ -1061,9 +1028,9 @@ impl Aftertreatment1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Aftertreatment2 {
-    pub dpf_differential_pressure_kpa: f64,
-    pub def_concentration: f64,
-    pub dpf_soot_load_percent: f64,
+    pub dpf_differential_pressure_kpa: Signal<f64>,
+    pub def_concentration: Signal<f64>,
+    pub dpf_soot_load_percent: Signal<f64>,
     pub dpf_active_regeneration_status: u8,
     pub dpf_passive_regeneration_status: u8,
 }
@@ -1072,11 +1039,11 @@ impl Aftertreatment2 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let diff = scaled_u16_non_na(self.dpf_differential_pressure_kpa, 0.1);
+        let diff = encode_u16_signal(self.dpf_differential_pressure_kpa, 0.1);
         data[0] = (diff & 0xFF) as u8;
         data[1] = ((diff >> 8) & 0xFF) as u8;
-        data[2] = scaled_u8_non_na(self.def_concentration, 0.4);
-        data[3] = scaled_u8_non_na(self.dpf_soot_load_percent, 0.4);
+        data[2] = encode_u8_signal_scaled(self.def_concentration, 0.4);
+        data[3] = encode_u8_signal_scaled(self.dpf_soot_load_percent, 0.4);
         data[4] = self.dpf_active_regeneration_status;
         data[5] = self.dpf_passive_regeneration_status;
         data
@@ -1088,16 +1055,10 @@ impl Aftertreatment2 {
             return None;
         }
         let diff = (data[0] as u16) | ((data[1] as u16) << 8);
-        if !u16_data_is_available(diff)
-            || !u8_percent_raw_is_defined(data[2])
-            || !u8_percent_raw_is_defined(data[3])
-        {
-            return None;
-        }
         Some(Self {
-            dpf_differential_pressure_kpa: diff as f64 * 0.1,
-            def_concentration: data[2] as f64 * 0.4,
-            dpf_soot_load_percent: data[3] as f64 * 0.4,
+            dpf_differential_pressure_kpa: u16_signal(diff, 0.1, 0.0),
+            def_concentration: u8_signal_scaled(data[2], 0.4),
+            dpf_soot_load_percent: u8_signal_scaled(data[3], 0.4),
             dpf_active_regeneration_status: data[4],
             dpf_passive_regeneration_status: data[5],
         })
@@ -1470,65 +1431,82 @@ mod tests {
 
     #[test]
     fn dash_display_round_trip() {
+        // Raw 200/180 at the SPN 96/80 resolution of 0.4 %/bit is 80 %/72 %.
         let m = DashDisplay {
-            fuel_level_percent: 200,
-            washer_fluid_level: 180,
-            fuel_filter_diff_kpa: 50.0,
-            oil_filter_diff_kpa: 25.0,
-            cargo_ambient_temp_c: 20.0,
+            fuel_level_percent: Signal::Value(80.0),
+            washer_fluid_level: Signal::Value(72.0),
+            fuel_filter_diff_kpa: Signal::Value(50.0),
+            oil_filter_diff_kpa: Signal::Value(25.0),
+            cargo_ambient_temp_c: Signal::Value(20.0),
         };
+        assert_eq!(m.encode()[1], 200);
         let d = DashDisplay::decode(&m.encode()).unwrap();
-        assert_eq!(d.fuel_level_percent, 200);
-        assert!((d.cargo_ambient_temp_c - 20.0).abs() < 0.1);
+        assert!((d.fuel_level_percent.value().unwrap() - 80.0).abs() < 0.4);
+        assert!((d.cargo_ambient_temp_c.value().unwrap() - 20.0).abs() < 0.1);
+
+        // No washer-fluid sensor still leaves a readable fuel level.
+        let mut absent = m.encode();
+        absent[0] = 0xFF;
+        let d = DashDisplay::decode(&absent).unwrap();
+        assert_eq!(d.washer_fluid_level, Signal::NotAvailable);
+        assert!((d.fuel_level_percent.value().unwrap() - 80.0).abs() < 0.4);
     }
 
     #[test]
     fn vehicle_position_round_trip() {
         let m = VehiclePosition {
-            latitude_deg: 52.3676,
-            longitude_deg: 4.9041,
+            latitude_deg: Signal::Value(52.3676),
+            longitude_deg: Signal::Value(4.9041),
         };
         let d = VehiclePosition::decode(&m.encode()).unwrap();
-        assert!((d.latitude_deg - 52.3676).abs() < 1e-6);
-        assert!((d.longitude_deg - 4.9041).abs() < 1e-6);
+        assert!((d.latitude_deg.value().unwrap() - 52.3676).abs() < 1e-6);
+        assert!((d.longitude_deg.value().unwrap() - 4.9041).abs() < 1e-6);
     }
 
     #[test]
     fn fuel_consumption_round_trip() {
         let m = FuelConsumption {
-            trip_fuel_l: 250.5,
-            total_fuel_l: 12_345.0,
+            trip_fuel_l: Signal::Value(250.5),
+            total_fuel_l: Signal::Value(12_345.0),
         };
         let d = FuelConsumption::decode(&m.encode()).unwrap();
-        assert!((d.trip_fuel_l - 250.5).abs() < 0.5);
-        assert!((d.total_fuel_l - 12_345.0).abs() < 0.5);
+        assert!((d.trip_fuel_l.value().unwrap() - 250.5).abs() < 0.5);
+        assert!((d.total_fuel_l.value().unwrap() - 12_345.0).abs() < 0.5);
     }
 
     #[test]
     fn aftertreatment1_round_trip() {
         let m = Aftertreatment1 {
-            def_tank_level: 75.0,
-            intake_nox_ppm: 1500.0,
-            outlet_nox_ppm: 50.0,
+            def_tank_level: Signal::Value(75.0),
+            intake_nox_ppm: Signal::Value(1500.0),
+            outlet_nox_ppm: Signal::Value(50.0),
             intake_nox_reading_status: 1,
             outlet_nox_reading_status: 1,
         };
         let d = Aftertreatment1::decode(&m.encode()).unwrap();
-        assert!((d.def_tank_level - 75.0).abs() < 0.5);
-        assert!((d.intake_nox_ppm - 1500.0).abs() < 0.05);
+        assert!((d.def_tank_level.value().unwrap() - 75.0).abs() < 0.5);
+        assert!((d.intake_nox_ppm.value().unwrap() - 1500.0).abs() < 0.05);
+
+        // No outlet NOx sensor still leaves a readable DEF tank level.
+        let mut absent = m.encode();
+        absent[3] = 0xFF;
+        absent[4] = 0xFF;
+        let d = Aftertreatment1::decode(&absent).unwrap();
+        assert_eq!(d.outlet_nox_ppm, Signal::NotAvailable);
+        assert!((d.def_tank_level.value().unwrap() - 75.0).abs() < 0.5);
     }
 
     #[test]
     fn aftertreatment2_round_trip() {
         let m = Aftertreatment2 {
-            dpf_differential_pressure_kpa: 5.5,
-            def_concentration: 32.5,
-            dpf_soot_load_percent: 75.0,
+            dpf_differential_pressure_kpa: Signal::Value(5.5),
+            def_concentration: Signal::Value(32.5),
+            dpf_soot_load_percent: Signal::Value(75.0),
             dpf_active_regeneration_status: 2,
             dpf_passive_regeneration_status: 1,
         };
         let d = Aftertreatment2::decode(&m.encode()).unwrap();
-        assert!((d.dpf_differential_pressure_kpa - 5.5).abs() < 0.1);
+        assert!((d.dpf_differential_pressure_kpa.value().unwrap() - 5.5).abs() < 0.1);
         assert_eq!(d.dpf_active_regeneration_status, 2);
     }
 

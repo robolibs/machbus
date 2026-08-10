@@ -427,8 +427,8 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         FuelConsumption,
         PGN_FUEL_CONSUMPTION,
         FuelConsumption {
-            trip_fuel_l: 250.5,
-            total_fuel_l: 12_345.0,
+            trip_fuel_l: Signal::Value(250.5),
+            total_fuel_l: Signal::Value(12_345.0),
         }
     );
     assert_fixed_helper!(
@@ -455,28 +455,28 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         DashDisplay,
         PGN_DASH_DISPLAY,
         DashDisplay {
-            fuel_level_percent: 200,
-            washer_fluid_level: 180,
-            fuel_filter_diff_kpa: 50.0,
-            oil_filter_diff_kpa: 25.0,
-            cargo_ambient_temp_c: 20.0,
+            fuel_level_percent: Signal::Value(80.0),
+            washer_fluid_level: Signal::Value(72.0),
+            fuel_filter_diff_kpa: Signal::Value(50.0),
+            oil_filter_diff_kpa: Signal::Value(25.0),
+            cargo_ambient_temp_c: Signal::Value(20.0),
         }
     );
     assert_fixed_helper!(
         VehiclePosition,
         PGN_VEHICLE_POSITION,
         VehiclePosition {
-            latitude_deg: 52.0,
-            longitude_deg: 4.0,
+            latitude_deg: Signal::Value(52.0),
+            longitude_deg: Signal::Value(4.0),
         }
     );
     assert_fixed_helper!(
         Aftertreatment1,
         PGN_AT1,
         Aftertreatment1 {
-            def_tank_level: 75.0,
-            intake_nox_ppm: 1_500.0,
-            outlet_nox_ppm: 50.0,
+            def_tank_level: Signal::Value(75.0),
+            intake_nox_ppm: Signal::Value(1_500.0),
+            outlet_nox_ppm: Signal::Value(50.0),
             intake_nox_reading_status: 1,
             outlet_nox_reading_status: 2,
         }
@@ -485,9 +485,9 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         Aftertreatment2,
         PGN_AT2,
         Aftertreatment2 {
-            dpf_differential_pressure_kpa: 5.5,
-            def_concentration: 32.5,
-            dpf_soot_load_percent: 75.0,
+            dpf_differential_pressure_kpa: Signal::Value(5.5),
+            def_concentration: Signal::Value(32.5),
+            dpf_soot_load_percent: Signal::Value(75.0),
             dpf_active_regeneration_status: 2,
             dpf_passive_regeneration_status: 1,
         }
@@ -656,27 +656,41 @@ fn powertrain_scalar_decoders_reject_not_available_sentinels_for_non_optional_va
     }
 
     let position = VehiclePosition {
-        latitude_deg: 52.0,
-        longitude_deg: 5.0,
+        latitude_deg: Signal::Value(52.0),
+        longitude_deg: Signal::Value(5.0),
     };
     let encoded_position = position.encode();
     assert_eq!(VehiclePosition::decode(&encoded_position), Some(position));
     for range in [0..4, 4..8] {
-        let mut bad = encoded_position;
-        bad[range].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(VehiclePosition::decode(&bad), None);
+        let mut absent = encoded_position;
+        absent[range.clone()].copy_from_slice(&u32::MAX.to_le_bytes());
+        let decoded = VehiclePosition::decode(&absent).expect("the frame still decodes");
+        if range.start == 0 {
+            assert_eq!(decoded.latitude_deg, Signal::NotAvailable);
+            assert_signal_close(decoded.longitude_deg, 5.0);
+        } else {
+            assert_eq!(decoded.longitude_deg, Signal::NotAvailable);
+            assert_signal_close(decoded.latitude_deg, 52.0);
+        }
     }
 
     let fuel = FuelConsumption {
-        trip_fuel_l: 100.0,
-        total_fuel_l: 2_500.0,
+        trip_fuel_l: Signal::Value(100.0),
+        total_fuel_l: Signal::Value(2_500.0),
     };
     let encoded_fuel = fuel.encode();
     assert_eq!(FuelConsumption::decode(&encoded_fuel), Some(fuel));
     for range in [0..4, 4..8] {
-        let mut bad = encoded_fuel;
-        bad[range].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(FuelConsumption::decode(&bad), None);
+        let mut absent = encoded_fuel;
+        absent[range.clone()].copy_from_slice(&u32::MAX.to_le_bytes());
+        let decoded = FuelConsumption::decode(&absent).expect("the frame still decodes");
+        if range.start == 0 {
+            assert_eq!(decoded.trip_fuel_l, Signal::NotAvailable);
+            assert_signal_close(decoded.total_fuel_l, 2_500.0);
+        } else {
+            assert_eq!(decoded.total_fuel_l, Signal::NotAvailable);
+            assert_signal_close(decoded.trip_fuel_l, 100.0);
+        }
     }
 }
 
@@ -1119,57 +1133,68 @@ fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
     }
 
     let dash = DashDisplay {
-        fuel_level_percent: 200,
-        washer_fluid_level: 180,
-        fuel_filter_diff_kpa: 50.0,
-        oil_filter_diff_kpa: 25.0,
-        cargo_ambient_temp_c: 20.0,
+        fuel_level_percent: Signal::Value(80.0),
+        washer_fluid_level: Signal::Value(72.0),
+        fuel_filter_diff_kpa: Signal::Value(50.0),
+        oil_filter_diff_kpa: Signal::Value(25.0),
+        cargo_ambient_temp_c: Signal::Value(20.0),
     };
     let encoded_dash = dash.encode();
     assert!(DashDisplay::decode(&encoded_dash).is_some());
     for index in [2usize, 3] {
-        let mut bad = encoded_dash;
-        bad[index] = 0xFF;
-        assert_eq!(DashDisplay::decode(&bad), None);
+        let mut absent = encoded_dash;
+        absent[index] = 0xFF;
+        let decoded = DashDisplay::decode(&absent).expect("an absent filter keeps the frame");
+        assert_signal_close(decoded.cargo_ambient_temp_c, 20.0);
     }
-    let mut bad_cargo_temp = encoded_dash;
-    bad_cargo_temp[4..6].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(DashDisplay::decode(&bad_cargo_temp), None);
+    let mut absent_cargo_temp = encoded_dash;
+    absent_cargo_temp[4..6].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = DashDisplay::decode(&absent_cargo_temp).expect("the frame still decodes");
+    assert_eq!(decoded.cargo_ambient_temp_c, Signal::NotAvailable);
+    assert_signal_close(decoded.fuel_filter_diff_kpa, 50.0);
 
     let aftertreatment1 = Aftertreatment1 {
-        def_tank_level: 75.0,
-        intake_nox_ppm: 1_500.0,
-        outlet_nox_ppm: 50.0,
+        def_tank_level: Signal::Value(75.0),
+        intake_nox_ppm: Signal::Value(1_500.0),
+        outlet_nox_ppm: Signal::Value(50.0),
         intake_nox_reading_status: 1,
         outlet_nox_reading_status: 1,
     };
     let encoded_at1 = aftertreatment1.encode();
     assert!(Aftertreatment1::decode(&encoded_at1).is_some());
-    let mut bad_def_level = encoded_at1;
-    bad_def_level[0] = 0xFF;
-    assert_eq!(Aftertreatment1::decode(&bad_def_level), None);
+    let mut absent_def_level = encoded_at1;
+    absent_def_level[0] = 0xFF;
+    let decoded = Aftertreatment1::decode(&absent_def_level).expect("the frame still decodes");
+    assert_eq!(decoded.def_tank_level, Signal::NotAvailable);
+    assert_signal_close(decoded.intake_nox_ppm, 1_500.0);
     for range in [1..3, 3..5] {
-        let mut bad = encoded_at1;
-        bad[range].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(Aftertreatment1::decode(&bad), None);
+        let mut absent = encoded_at1;
+        absent[range].copy_from_slice(&u16::MAX.to_le_bytes());
+        let decoded = Aftertreatment1::decode(&absent).expect("an absent sensor keeps the frame");
+        // 0.4 %/bit does not land exactly on 75 %.
+        assert!((decoded.def_tank_level.value().unwrap() - 75.0).abs() < 0.4);
     }
 
     let aftertreatment2 = Aftertreatment2 {
-        dpf_differential_pressure_kpa: 5.5,
-        def_concentration: 32.5,
-        dpf_soot_load_percent: 75.0,
+        dpf_differential_pressure_kpa: Signal::Value(5.5),
+        def_concentration: Signal::Value(32.5),
+        dpf_soot_load_percent: Signal::Value(75.0),
         dpf_active_regeneration_status: 2,
         dpf_passive_regeneration_status: 1,
     };
     let encoded_at2 = aftertreatment2.encode();
     assert!(Aftertreatment2::decode(&encoded_at2).is_some());
-    let mut bad_diff = encoded_at2;
-    bad_diff[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(Aftertreatment2::decode(&bad_diff), None);
+    let mut absent_diff = encoded_at2;
+    absent_diff[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = Aftertreatment2::decode(&absent_diff).expect("the frame still decodes");
+    assert_eq!(decoded.dpf_differential_pressure_kpa, Signal::NotAvailable);
+    // 0.4 %/bit does not land exactly on 32.5 %.
+    assert!((decoded.def_concentration.value().unwrap() - 32.5).abs() < 0.4);
     for index in [2usize, 3] {
-        let mut bad = encoded_at2;
-        bad[index] = 0xFF;
-        assert_eq!(Aftertreatment2::decode(&bad), None);
+        let mut absent = encoded_at2;
+        absent[index] = 0xFF;
+        let decoded = Aftertreatment2::decode(&absent).expect("an absent sensor keeps the frame");
+        assert_signal_close(decoded.dpf_differential_pressure_kpa, 5.5);
     }
 }
 
@@ -1246,49 +1271,52 @@ fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_de
         assert_signal_close(decoded.fuel_rate_lph, 25.0);
     }
 
+    // Raw 250 is the top of the SPN 96/80 range: 100 % at 0.4 %/bit.
     let dash = DashDisplay {
-        fuel_level_percent: 250,
-        washer_fluid_level: 250,
-        fuel_filter_diff_kpa: 50.0,
-        oil_filter_diff_kpa: 25.0,
-        cargo_ambient_temp_c: 20.0,
+        fuel_level_percent: Signal::Value(100.0),
+        washer_fluid_level: Signal::Value(100.0),
+        fuel_filter_diff_kpa: Signal::Value(50.0),
+        oil_filter_diff_kpa: Signal::Value(25.0),
+        cargo_ambient_temp_c: Signal::Value(20.0),
     };
     let encoded_dash = dash.encode();
-    assert_eq!(
+    assert_eq!(encoded_dash[1], 250);
+    assert_signal_close(
         DashDisplay::decode(&encoded_dash)
             .unwrap()
             .fuel_level_percent,
-        250
+        100.0,
     );
-    let mut unavailable_dash = encoded_dash;
-    unavailable_dash[0] = 0xFF;
-    unavailable_dash[1] = 0xFE;
-    assert_eq!(
-        DashDisplay::decode(&unavailable_dash)
-            .unwrap()
-            .washer_fluid_level,
-        0xFF
-    );
-    assert_eq!(
-        DashDisplay::decode(&unavailable_dash)
-            .unwrap()
-            .fuel_level_percent,
-        0xFE
-    );
+    let mut special_dash = encoded_dash;
+    special_dash[0] = 0xFF;
+    special_dash[1] = 0xFE;
+    let decoded = DashDisplay::decode(&special_dash).unwrap();
+    assert_eq!(decoded.washer_fluid_level, Signal::NotAvailable);
+    assert_eq!(decoded.fuel_level_percent, Signal::Error);
+    assert_signal_close(decoded.fuel_filter_diff_kpa, 50.0);
     for (index, value) in [(0usize, 0xFB), (1, 0xFD)] {
-        let mut bad = encoded_dash;
-        bad[index] = value;
+        let mut reserved = encoded_dash;
+        reserved[index] = value;
+        let decoded = DashDisplay::decode(&reserved).unwrap_or_else(|| {
+            panic!("reserved raw 0x{value:02X} in byte {index} must not drop the PG")
+        });
+        let field = if index == 0 {
+            decoded.washer_fluid_level
+        } else {
+            decoded.fuel_level_percent
+        };
         assert_eq!(
-            DashDisplay::decode(&bad),
-            None,
-            "dash level percentage byte {index} must reject reserved raw value 0x{value:02X}"
+            field,
+            Signal::NotAvailable,
+            "dash level raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.oil_filter_diff_kpa, 25.0);
     }
 
     let aftertreatment1 = Aftertreatment1 {
-        def_tank_level: 100.0,
-        intake_nox_ppm: 1_500.0,
-        outlet_nox_ppm: 50.0,
+        def_tank_level: Signal::Value(100.0),
+        intake_nox_ppm: Signal::Value(1_500.0),
+        outlet_nox_ppm: Signal::Value(50.0),
         intake_nox_reading_status: 1,
         outlet_nox_reading_status: 1,
     };
@@ -1296,21 +1324,28 @@ fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_de
     assert!(Aftertreatment1::decode(&encoded_at1).is_some());
     let mut status_at1 = encoded_at1;
     status_at1[0] = 0xFE;
-    assert!(Aftertreatment1::decode(&status_at1).is_some());
+    assert_eq!(
+        Aftertreatment1::decode(&status_at1).unwrap().def_tank_level,
+        Signal::Error
+    );
     for value in [0xFB, 0xFD, 0xFF] {
-        let mut bad = encoded_at1;
-        bad[0] = value;
+        let mut special = encoded_at1;
+        special[0] = value;
+        let decoded = Aftertreatment1::decode(&special).unwrap_or_else(|| {
+            panic!("DEF tank raw 0x{value:02X} must not drop the whole PG")
+        });
         assert_eq!(
-            Aftertreatment1::decode(&bad),
-            None,
-            "aftertreatment DEF tank percentage must reject special raw value 0x{value:02X}"
+            decoded.def_tank_level,
+            Signal::NotAvailable,
+            "DEF tank raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.intake_nox_ppm, 1_500.0);
     }
 
     let aftertreatment2 = Aftertreatment2 {
-        dpf_differential_pressure_kpa: 5.5,
-        def_concentration: 100.0,
-        dpf_soot_load_percent: 100.0,
+        dpf_differential_pressure_kpa: Signal::Value(5.5),
+        def_concentration: Signal::Value(100.0),
+        dpf_soot_load_percent: Signal::Value(100.0),
         dpf_active_regeneration_status: 2,
         dpf_passive_regeneration_status: 1,
     };
@@ -1319,24 +1354,35 @@ fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_de
     let mut status_at2 = encoded_at2;
     status_at2[2] = 0xFE;
     status_at2[3] = 0xFE;
-    assert!(Aftertreatment2::decode(&status_at2).is_some());
+    let decoded = Aftertreatment2::decode(&status_at2).unwrap();
+    assert_eq!(decoded.def_concentration, Signal::Error);
+    assert_eq!(decoded.dpf_soot_load_percent, Signal::Error);
     for (index, value) in [(2usize, 0xFB), (3, 0xFD), (2, 0xFF)] {
-        let mut bad = encoded_at2;
-        bad[index] = value;
+        let mut special = encoded_at2;
+        special[index] = value;
+        let decoded = Aftertreatment2::decode(&special).unwrap_or_else(|| {
+            panic!("raw 0x{value:02X} in byte {index} must not drop the whole PG")
+        });
+        let field = if index == 2 {
+            decoded.def_concentration
+        } else {
+            decoded.dpf_soot_load_percent
+        };
         assert_eq!(
-            Aftertreatment2::decode(&bad),
-            None,
-            "aftertreatment percentage byte {index} must reject special raw value 0x{value:02X}"
+            field,
+            Signal::NotAvailable,
+            "aftertreatment raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.dpf_differential_pressure_kpa, 5.5);
     }
 }
 
 #[test]
 fn powertrain_aftertreatment1_rejects_reserved_status_bytes_and_ambient_shape() {
     let aftertreatment1 = Aftertreatment1 {
-        def_tank_level: 75.0,
-        intake_nox_ppm: 1_500.0,
-        outlet_nox_ppm: 50.0,
+        def_tank_level: Signal::Value(75.0),
+        intake_nox_ppm: Signal::Value(1_500.0),
+        outlet_nox_ppm: Signal::Value(50.0),
         intake_nox_reading_status: 1,
         outlet_nox_reading_status: 2,
     };

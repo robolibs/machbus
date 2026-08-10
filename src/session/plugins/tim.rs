@@ -18,7 +18,9 @@ use crate::net::pgn_defs::{
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
 use crate::safety::{SafeModeTrigger, TecuSafeMode};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::session::sys::{Event, Hitch, Pto, TimEvent};
+use crate::j1939::PowerState;
+use crate::safety::SafeStopTrigger;
+use crate::session::sys::{Event, Hitch, MaintainPowerEvent, Pto, TimEvent};
 use crate::time::Instant;
 use core::any::Any;
 
@@ -378,6 +380,42 @@ impl Plugin for Tim {
         self.drain_pending(ctx);
     }
 
+    /// C4/C5 — ISO 11783-9 §4.7.1: "Upon loss of power or communication with
+    /// the tractor, the implement shall assume a condition of fail-safe
+    /// operation."
+    ///
+    /// `TecuSafeMode` is the crate's implementation of that obligation and it
+    /// gates every guarded hitch / PTO / aux engage command — but nothing
+    /// entered it: the only caller of `enter_safe_mode` was a unit test. The
+    /// session already detects all three conditions §4.7.1 names; this is the
+    /// wire between them.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let trigger = match event {
+            Event::MaintainPower(
+                MaintainPowerEvent::PowerOff
+                | MaintainPowerEvent::StateChanged(PowerState::PowerOff),
+            ) => Some(SafeModeTrigger::EcuPowerLoss),
+            // Reuse the mapping the stop latch already agrees on rather than
+            // writing a second one that can drift from it.
+            _ => match SafeStopTrigger::from_event(event) {
+                Some(SafeStopTrigger::BusOff) => Some(SafeModeTrigger::CanBusFail),
+                Some(SafeStopTrigger::AddressClaimLost | SafeStopTrigger::HeartbeatError) => {
+                    Some(SafeModeTrigger::TecuCommLoss)
+                }
+                Some(SafeStopTrigger::KeySwitchOff) => Some(SafeModeTrigger::PowerLoss),
+                _ => None,
+            },
+        };
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if !self.safe_mode.is_active() {
+            self.safe_mode.enter(trigger);
+            self.pending_events.push(TimEvent::SafeModeEntered(trigger));
+            self.drain_pending(ctx);
+        }
+    }
+
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
 
@@ -469,6 +507,47 @@ mod tests {
     /// unexpected start", "must allow stop") in full and was consulted by
     /// nothing outside its own unit test. Wiring it into the guarded-command
     /// path is what makes it able to stop anything.
+    /// C4/C5 — ISO 11783-9 §4.7.1 safe mode must be reachable in production.
+    ///
+    /// `TecuSafeMode` gates every guarded engage command, but the only caller of
+    /// `enter_safe_mode` was a unit test: an implement that lost the CAN bus,
+    /// its address claim, or ECU power kept accepting engage commands. This is
+    /// a G9 test — it drives the real `Session` and asserts the machine-visible
+    /// outcome, not the component's internals.
+    #[test]
+    fn losing_the_bus_arms_iso_11783_9_safe_mode() {
+        use crate::net::fault_confinement::FaultConfinementAction;
+        use crate::session::sys::BusEvent;
+
+        let mut s = node();
+        assert!(
+            !s.get::<Tim>().unwrap().is_safe_mode_active(),
+            "a healthy node is not in safe mode"
+        );
+
+        // The CAN controller reaches bus-off — §4.7.1's "loss of communication".
+        s.push_event(Event::Bus(BusEvent::ConfinementChanged {
+            port: 0,
+            action: FaultConfinementAction::FailSafe,
+        }));
+        s.tick(Instant::from_millis(10_000));
+
+        let tim = s.get::<Tim>().unwrap();
+        assert!(
+            tim.is_safe_mode_active(),
+            "loss of communication must arm §4.7 safe mode"
+        );
+        assert!(
+            !tim.safe_mode.allows(crate::safety::TecuCommandKind::Engage),
+            "an engage command must be refused in safe mode"
+        );
+        assert!(
+            tim.safe_mode
+                .allows(crate::safety::TecuCommandKind::Disengage),
+            "§4.7 must never block a stop"
+        );
+    }
+
     #[test]
     fn safe_mode_blocks_engagement_but_never_a_stop() {
         let mut s = node();

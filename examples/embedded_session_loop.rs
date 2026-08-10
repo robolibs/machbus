@@ -140,7 +140,7 @@ fn main() -> machbus::net::Result<()> {
     );
 
     let guidance = GuidanceSystemCmd {
-        commanded_curvature: 0.25,
+        commanded_curvature: Signal::Value(0.25),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     assert_eq!(guidance.encode().len(), 8);

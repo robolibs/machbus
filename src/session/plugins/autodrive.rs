@@ -32,6 +32,7 @@ use crate::net::pgn_defs::{
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
+use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
@@ -329,7 +330,10 @@ impl AutoDrive {
 
     fn system_command(&self) -> GuidanceSystemCmd {
         GuidanceSystemCmd {
-            commanded_curvature: self.setpoint.curvature_km_inv.unwrap_or(0.0),
+            commanded_curvature: self
+                .setpoint
+                .curvature_km_inv
+                .map_or(Signal::NotAvailable, Signal::Value),
             status: if self.status.is_active() {
                 CurvatureCommandStatus::IntendedToSteer
             } else {
@@ -666,7 +670,7 @@ mod tests {
         }
         let steer = steer.expect("a steering command reaches the bus");
         assert_eq!(steer.status, CurvatureCommandStatus::IntendedToSteer);
-        assert!((steer.commanded_curvature - 20.0).abs() < 0.25);
+        assert!((steer.commanded_curvature.value().unwrap() - 20.0).abs() < 0.25);
         assert!(saw_speed, "both axes travel together");
 
         // The steering ECU goes silent: one safe state, both axes zeroed.
@@ -692,7 +696,7 @@ mod tests {
 
         let cmd = last_command(&mut s).expect("the safe state reaches the bus");
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
-        assert_eq!(cmd.commanded_curvature, 0.0);
+        assert_eq!(cmd.commanded_curvature, Signal::Value(0.0));
 
         // Recovery is explicit: a returning link does not re-engage by itself.
         feed_info(&mut s, 7, Instant::from_millis(base + 600));

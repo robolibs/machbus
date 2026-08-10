@@ -209,8 +209,13 @@ fn decode_curvature(raw: u16) -> Option<f64> {
     }
 }
 
+/// A fixed 8-byte payload. The trailing undefined bytes are deliberately *not*
+/// checked: ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+/// receive so they can be assigned in a later revision without breaking
+/// deployed receivers. `used` is kept for documentation of the defined width.
 fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
-    data.len() == 8 && data[used..].iter().all(|&byte| byte == 0xFF)
+    let _ = used;
+    data.len() == 8
 }
 
 /// Agricultural guidance machine info (PGN 0xAC00) — steering ECU broadcast.
@@ -389,8 +394,10 @@ mod tests {
             remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
         }
         .encode();
+        // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are "don't care"
+        // on receive. This used to assert rejection.
         machine_bad_tail[5] = 0x00;
-        assert!(GuidanceMachineInfo::decode(&machine_bad_tail).is_none());
+        assert!(GuidanceMachineInfo::decode(&machine_bad_tail).is_some());
 
         // Reserved bits in byte 3 set to 1 (as conformant ECUs transmit them)
         // must be ignored, not rejected — the frame still decodes.

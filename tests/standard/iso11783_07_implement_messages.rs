@@ -666,31 +666,33 @@ fn implement_drive_strategy_preserves_upper_edge_values_and_rejects_reserved_mod
         "reserved drive-strategy mode values must be rejected without changing field edges"
     );
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(
-        DriveStrategyCmd::decode(&bad_tail),
-        None,
-        "fixed-width Drive Strategy commands must keep unused bytes canonical"
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(
+        DriveStrategyCmd::decode(&future_tail).is_some(),
+        "a later revision may define the unused Drive Strategy bytes"
     );
 }
 
 #[test]
 fn implement_guidance_system_command_rejects_reserved_bits_and_curvature_sentinel_band() {
     let command = GuidanceSystemCmd {
-        commanded_curvature: 12.5,
+        commanded_curvature: Signal::Value(12.5),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let encoded = command.encode();
     let decoded = GuidanceSystemCmd::decode(&encoded).unwrap();
     assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
-    assert!((decoded.commanded_curvature - 12.5).abs() < 0.25);
+    assert!((decoded.commanded_curvature.value().unwrap() - 12.5).abs() < 0.25);
 
     let low_edge = [0x00, 0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         (GuidanceSystemCmd::decode(&low_edge)
             .unwrap()
             .commanded_curvature
+            .value()
+            .unwrap()
             - -8032.0)
             .abs()
             < f64::EPSILON
@@ -701,28 +703,43 @@ fn implement_guidance_system_command_rejects_reserved_bits_and_curvature_sentine
         (GuidanceSystemCmd::decode(&high_edge)
             .unwrap()
             .commanded_curvature
+            .value()
+            .unwrap()
             - 8031.75)
             .abs()
             < f64::EPSILON
     );
 
-    for invalid_raw in [0xFB00_u16, 0xFFFE, 0xFFFF] {
-        let mut bad_curvature = encoded;
-        bad_curvature[0..2].copy_from_slice(&invalid_raw.to_le_bytes());
-        assert_eq!(
-            GuidanceSystemCmd::decode(&bad_curvature),
-            None,
-            "curvature raw value 0x{invalid_raw:04X} must stay outside the accepted range"
-        );
+    // B6 — the indicator bands are reported, not fatal. A peer that is not
+    // commanding a curvature legally sends the not-requested band, and dropping
+    // the frame took the Curvature Command Status with it: the one field that
+    // says whether that peer intends to steer at all (ISO 11783-7 Table 1, G4).
+    for (raw, expected) in [
+        (0xFE00_u16, Signal::Error),
+        (0xFFFE, Signal::NotAvailable),
+        (0xFFFF, Signal::NotAvailable),
+    ] {
+        let mut banded = encoded;
+        banded[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = GuidanceSystemCmd::decode(&banded)
+            .unwrap_or_else(|| panic!("curvature raw 0x{raw:04X} must not drop the PG"));
+        assert_eq!(decoded.commanded_curvature, expected);
+        assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
     }
 
-    let mut bad_reserved_status_bits = encoded;
-    bad_reserved_status_bits[2] &= 0x03;
-    assert_eq!(GuidanceSystemCmd::decode(&bad_reserved_status_bits), None);
+    // Only a reserved raw is a genuine decode failure.
+    let mut reserved_curvature = encoded;
+    reserved_curvature[0..2].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(GuidanceSystemCmd::decode(&reserved_curvature), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(GuidanceSystemCmd::decode(&bad_tail), None);
+    // Byte 2 bits 2..7 are undefined: don't care on receive (§5.4).
+    let mut reserved_status_bits = encoded;
+    reserved_status_bits[2] &= 0x03;
+    assert!(GuidanceSystemCmd::decode(&reserved_status_bits).is_some());
+
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(GuidanceSystemCmd::decode(&future_tail).is_some());
 }
 
 #[test]
@@ -745,7 +762,7 @@ fn implement_guidance_command_public_status_decoder_rejects_noncanonical_bytes()
     }
 
     let command = GuidanceSystemCmd {
-        commanded_curvature: -1.0,
+        commanded_curvature: Signal::Value(-1.0),
         status: CurvatureCommandStatus::ErrorIndication,
     };
     assert_eq!(
@@ -770,9 +787,10 @@ fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls
     bad_combined_controls[4] |= 0x10;
     assert_eq!(HitchPtoCombinedCmd::decode(&bad_combined_controls), None);
 
-    let mut bad_combined_tail = combined_bytes;
-    bad_combined_tail[5] = 0x00;
-    assert_eq!(HitchPtoCombinedCmd::decode(&bad_combined_tail), None);
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut combined_future_tail = combined_bytes;
+    combined_future_tail[5] = 0x00;
+    assert!(HitchPtoCombinedCmd::decode(&combined_future_tail).is_some());
 
     let front_roll_pitch = HitchRollPitchCmd {
         roll_position: 20_000,
@@ -796,9 +814,10 @@ fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls
         Some(rear_roll_pitch)
     );
 
-    let mut bad_roll_pitch_tail = roll_pitch_bytes;
-    bad_roll_pitch_tail[4] = 0x00;
-    assert_eq!(HitchRollPitchCmd::decode(&bad_roll_pitch_tail, true), None);
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut roll_pitch_future_tail = roll_pitch_bytes;
+    roll_pitch_future_tail[4] = 0x00;
+    assert!(HitchRollPitchCmd::decode(&roll_pitch_future_tail, true).is_some());
 }
 
 #[test]
@@ -953,9 +972,10 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     bad_lower_reserved_bits[3] |= 0x01;
     assert!(GuidanceMachineInfo::decode(&bad_lower_reserved_bits).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[5] = 0x00;
-    assert_eq!(GuidanceMachineInfo::decode(&bad_tail), None);
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut future_tail = encoded;
+    future_tail[5] = 0x00;
+    assert!(GuidanceMachineInfo::decode(&future_tail).is_some());
 }
 
 #[test]

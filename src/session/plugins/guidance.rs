@@ -33,6 +33,7 @@ use crate::net::pgn_defs::{
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
+use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
@@ -130,7 +131,7 @@ impl Guidance {
     /// The Guidance System Command (PGN 0xAD00) for the current setpoint.
     fn system_command(&self) -> GuidanceSystemCmd {
         GuidanceSystemCmd {
-            commanded_curvature: self.commanded_curvature,
+            commanded_curvature: Signal::Value(self.commanded_curvature),
             status: if self.engaged {
                 CurvatureCommandStatus::IntendedToSteer
             } else {
@@ -826,7 +827,7 @@ mod tests {
         s.tick(now);
         let cmd = last_system_cmd(&mut s);
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
-        assert!((cmd.commanded_curvature - 20.0).abs() < 0.25);
+        assert!((cmd.commanded_curvature.value().unwrap() - 20.0).abs() < 0.25);
 
         // engage() re-sends the last curvature with the intend-to-steer flag,
         // no sooner than the minimum transmit interval.
@@ -837,7 +838,7 @@ mod tests {
         s.tick(now);
         let cmd = last_system_cmd(&mut s);
         assert_eq!(cmd.status, CurvatureCommandStatus::IntendedToSteer);
-        assert!((cmd.commanded_curvature - 20.0).abs() < 0.25);
+        assert!((cmd.commanded_curvature.value().unwrap() - 20.0).abs() < 0.25);
 
         // disengage() drops the request and commands straight.
         s.get_mut::<Guidance>().unwrap().disengage();
@@ -846,7 +847,7 @@ mod tests {
         s.tick(now);
         let cmd = last_system_cmd(&mut s);
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
-        assert_eq!(cmd.commanded_curvature, 0.0);
+        assert_eq!(cmd.commanded_curvature, Signal::Value(0.0));
     }
 
     /// S1.8 — the command is a heartbeat, not a one-shot. The plugin used to
@@ -1071,7 +1072,7 @@ mod tests {
         }
         let cmd = cmd.expect("the safe state must reach the bus");
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
-        assert_eq!(cmd.commanded_curvature, 0.0);
+        assert_eq!(cmd.commanded_curvature, Signal::Value(0.0));
     }
 
     /// S1.4 — the ISB is the operator's stop-all button. It was decoded and
@@ -1137,7 +1138,7 @@ mod tests {
         }
         let cmd = cmd.expect("the safe state reaches the bus");
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
-        assert_eq!(cmd.commanded_curvature, 0.0);
+        assert_eq!(cmd.commanded_curvature, Signal::Value(0.0));
 
         // Clearing is refused while the button is still held: doing it there
         // opened a window of commanded motion against a held-down stop.
@@ -1293,7 +1294,7 @@ mod tests {
         }
         assert_eq!(
             curvature,
-            Some(0.0),
+            Some(Signal::Value(0.0)),
             "a speed below the physical threshold must command straight"
         );
     }

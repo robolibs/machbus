@@ -12,6 +12,7 @@
 //! The C++ `DriveStrategyInterface` is intentionally not ported.
 
 use crate::net::pgn_defs::{PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_REAR_HITCH_ROLL_PITCH_CMD};
+use crate::isobus::implement::Signal;
 use crate::net::types::Pgn;
 
 /// `PGN_DRIVE_STRATEGY_CMD` mode byte.
@@ -57,8 +58,13 @@ impl DriveStrategyMode {
     }
 }
 
+/// A fixed 8-byte payload. The trailing undefined bytes are deliberately *not*
+/// checked: ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+/// receive so they can be assigned in a later revision without breaking
+/// deployed receivers. `used` is kept for documentation of the defined width.
 fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
-    data.len() == 8 && data[used..].iter().all(|&byte| byte == 0xFF)
+    let _ = used;
+    data.len() == 8
 }
 
 const GUIDANCE_SYSTEM_CURVATURE_MIN_PER_KM: f64 = -8032.0;
@@ -208,7 +214,12 @@ impl CurvatureCommandStatus {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuidanceSystemCmd {
     /// 1/km, 0.25/km per bit, offset −8032.
-    pub commanded_curvature: f64,
+    /// SPN 5238, 0.25 km⁻¹/bit offset −8032.
+    ///
+    /// A peer that is not commanding a curvature legally transmits the
+    /// not-requested band (`0xFF00..=0xFFFF`) alongside a Curvature Command
+    /// Status of "not intended to steer", so this cannot be a plain `f64`.
+    pub commanded_curvature: Signal<f64>,
     /// Bits 0..1 of byte 2. Bits 2..7 are reserved and transmitted as one.
     pub status: CurvatureCommandStatus,
 }
@@ -216,7 +227,9 @@ pub struct GuidanceSystemCmd {
 impl Default for GuidanceSystemCmd {
     fn default() -> Self {
         Self {
-            commanded_curvature: 0.0,
+            // A default command asks for nothing: 0.0 was a straight-ahead
+            // request, which is a command, not the absence of one.
+            commanded_curvature: Signal::NotAvailable,
             status: CurvatureCommandStatus::NotAvailable,
         }
     }
@@ -226,7 +239,11 @@ impl GuidanceSystemCmd {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let raw = encode_guidance_system_curvature(self.commanded_curvature);
+        let raw = match self.commanded_curvature {
+            Signal::Value(v) => encode_guidance_system_curvature(v),
+            Signal::Error => 0xFE00,
+            Signal::NotAvailable => 0xFFFF,
+        };
         data[0] = (raw & 0xFF) as u8;
         data[1] = ((raw >> 8) & 0xFF) as u8;
         data[2] = 0xFC | self.status.as_u8();
@@ -238,15 +255,24 @@ impl GuidanceSystemCmd {
         if !fixed8_with_ff_tail(data, 3) {
             return None;
         }
-        if data[2] & 0xFC != 0xFC {
-            return None;
-        }
+        // Byte 2 bits 2..7 are undefined; masking them out rather than
+        // demanding 0xFC follows ISO 11783-7 §5.4, and the status in bits 0..1
+        // is what the 0xAC00 decoder already does.
+        //
+        // The curvature is banded rather than rejected (Table 1): a peer that
+        // is not commanding one sends 0xFFFF, and dropping the frame took the
+        // Curvature Command Status with it — the single field that says whether
+        // that peer intends to steer at all (G4).
         let raw = (data[0] as u16) | ((data[1] as u16) << 8);
-        if raw > GUIDANCE_SYSTEM_CURVATURE_MAX_RAW {
-            return None;
-        }
         Some(Self {
-            commanded_curvature: raw as f64 * 0.25 - 8032.0,
+            commanded_curvature: match raw {
+                0..=GUIDANCE_SYSTEM_CURVATURE_MAX_RAW => {
+                    Signal::Value(f64::from(raw) * 0.25 - 8032.0)
+                }
+                0xFE00..=0xFEFF => Signal::Error,
+                0xFF00..=0xFFFF => Signal::NotAvailable,
+                _ => return None,
+            },
             status: CurvatureCommandStatus::try_from_u8(data[2] & 0x03)?,
         })
     }
@@ -403,32 +429,32 @@ mod tests {
     #[test]
     fn guidance_system_cmd_round_trip() {
         let m = GuidanceSystemCmd {
-            commanded_curvature: -1.5,
+            commanded_curvature: Signal::Value(-1.5),
             status: CurvatureCommandStatus::IntendedToSteer,
         };
         let decoded = GuidanceSystemCmd::decode(&m.encode()).unwrap();
-        assert!((decoded.commanded_curvature - -1.5).abs() < 0.25);
+        assert!((decoded.commanded_curvature.value().unwrap() - -1.5).abs() < 0.25);
         assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
     }
 
     #[test]
     fn guidance_system_curvature_encode_clamps_instead_of_wrapping() {
         let low = GuidanceSystemCmd {
-            commanded_curvature: -1_000_000.0,
+            commanded_curvature: Signal::Value(-1_000_000.0),
             ..Default::default()
         }
         .encode();
         assert_eq!(&low[..2], &[0x00, 0x00]);
 
         let high = GuidanceSystemCmd {
-            commanded_curvature: 1_000_000.0,
+            commanded_curvature: Signal::Value(1_000_000.0),
             ..Default::default()
         }
         .encode();
         assert_eq!(&high[..2], &[0xFF, 0xFA]);
 
         let nan = GuidanceSystemCmd {
-            commanded_curvature: f64::NAN,
+            commanded_curvature: Signal::Value(f64::NAN),
             ..Default::default()
         }
         .encode();
@@ -485,21 +511,33 @@ mod tests {
         .encode();
         drive_bad_mode[0] = 0x04;
         assert!(DriveStrategyCmd::decode(&drive_bad_mode).is_none());
-        let mut drive_bad_tail = DriveStrategyCmd::default().encode();
-        drive_bad_tail[3] = 0x00;
-        assert!(DriveStrategyCmd::decode(&drive_bad_tail).is_none());
 
-        let mut guidance_bad_tail = GuidanceSystemCmd {
-            commanded_curvature: -1.5,
+        // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are "don't care"
+        // on receive. Every `*_bad_tail` case here used to assert rejection.
+        let drive = DriveStrategyCmd::default();
+        let mut drive_future_tail = drive.encode();
+        drive_future_tail[3] = 0x00;
+        assert_eq!(DriveStrategyCmd::decode(&drive_future_tail), Some(drive));
+
+        let guidance = GuidanceSystemCmd {
+            commanded_curvature: Signal::Value(-1.5),
             status: CurvatureCommandStatus::IntendedToSteer,
-        }
-        .encode();
-        guidance_bad_tail[3] = 0x00;
-        assert!(GuidanceSystemCmd::decode(&guidance_bad_tail).is_none());
+        };
+        let mut guidance_future_tail = guidance.encode();
+        guidance_future_tail[3] = 0x00;
+        assert_eq!(
+            GuidanceSystemCmd::decode(&guidance_future_tail),
+            Some(guidance)
+        );
 
-        let mut guidance_bad_reserved = GuidanceSystemCmd::default().encode();
-        guidance_bad_reserved[2] &= 0x03;
-        assert!(GuidanceSystemCmd::decode(&guidance_bad_reserved).is_none());
+        // B6 — byte 2 bits 2..7 are undefined, so they are "don't care" on
+        // receive (ISO 11783-7 §5.4); only bits 0..1 carry the command status.
+        // This used to assert rejection, which discarded the one field saying
+        // whether the peer intends to steer.
+        let default_cmd = GuidanceSystemCmd::default();
+        let mut reserved_clear = default_cmd.encode();
+        reserved_clear[2] &= 0x03;
+        assert_eq!(GuidanceSystemCmd::decode(&reserved_clear), Some(default_cmd));
 
         let mut combined_bad_control = HitchPtoCombinedCmd {
             hitch_position: 30_000,
@@ -510,18 +548,26 @@ mod tests {
         .encode();
         combined_bad_control[4] |= 0x10;
         assert!(HitchPtoCombinedCmd::decode(&combined_bad_control).is_none());
-        let mut combined_bad_tail = HitchPtoCombinedCmd::default().encode();
-        combined_bad_tail[5] = 0x00;
-        assert!(HitchPtoCombinedCmd::decode(&combined_bad_tail).is_none());
 
-        let mut roll_pitch_bad_tail = HitchRollPitchCmd {
+        let combined = HitchPtoCombinedCmd::default();
+        let mut combined_future_tail = combined.encode();
+        combined_future_tail[5] = 0x00;
+        assert_eq!(
+            HitchPtoCombinedCmd::decode(&combined_future_tail),
+            Some(combined)
+        );
+
+        let roll_pitch = HitchRollPitchCmd {
             roll_position: 12_345,
             pitch_position: 23_456,
             is_front: true,
-        }
-        .encode();
-        roll_pitch_bad_tail[4] = 0x00;
-        assert!(HitchRollPitchCmd::decode(&roll_pitch_bad_tail, true).is_none());
+        };
+        let mut roll_pitch_future_tail = roll_pitch.encode();
+        roll_pitch_future_tail[4] = 0x00;
+        assert_eq!(
+            HitchRollPitchCmd::decode(&roll_pitch_future_tail, true),
+            Some(roll_pitch)
+        );
     }
 
     #[test]

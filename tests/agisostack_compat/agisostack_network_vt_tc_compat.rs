@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use machbus::isobus::functionalities::{Functionalities, Functionality};
 use machbus::isobus::implement::{
+    Signal,
     CurvatureCommandStatus, GenericSaeBs02SlotValue, GroundBasedSpeedDist, GuidanceLimitStatus,
     GuidanceMachineInfo, GuidanceSystemCmd, MachineDirection, MachineSelectedSpeedFull,
     MechanicalLockout, RequestResetCommandStatus, SpeedSource, WheelBasedSpeedDist,
@@ -1456,7 +1457,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
     );
 
     let command = GuidanceSystemCmd {
-        commanded_curvature: -43.4,
+        commanded_curvature: Signal::Value(-43.4),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let command_bytes = command.encode();
@@ -1465,7 +1466,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
         [0xD2, 0x7C, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     );
     let decoded_command = GuidanceSystemCmd::decode(&command_bytes).unwrap();
-    assert!((decoded_command.commanded_curvature - -43.5).abs() < 0.25);
+    assert!((decoded_command.commanded_curvature.value().unwrap() - -43.5).abs() < 0.25);
     assert_eq!(
         decoded_command.status,
         CurvatureCommandStatus::IntendedToSteer
@@ -1476,7 +1477,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
 fn agricultural_guidance_listen_only_examples_decode_agisostack_payloads() {
     let command_payload = [0xF9, 0x7E, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     let command = GuidanceSystemCmd::decode(&command_payload).unwrap();
-    assert!((command.commanded_curvature - 94.25).abs() < 0.25);
+    assert!((command.commanded_curvature.value().unwrap() - 94.25).abs() < 0.25);
     assert_eq!(command.status, CurvatureCommandStatus::IntendedToSteer);
 
     let machine_payload = [0xC1, 0x7C, 0x55, 0xE0, 0x64, 0xFF, 0xFF, 0xFF];

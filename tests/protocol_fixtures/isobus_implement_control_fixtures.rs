@@ -339,7 +339,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let guidance_system_cmd = GuidanceSystemCmd {
-        commanded_curvature: -1.5,
+        commanded_curvature: Signal::Value(-1.5),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let guidance_system_cmd_bytes = parse_named_hex_frame(
@@ -1048,12 +1048,12 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "guidance_system_cmd_max",
     );
     let guidance_cmd_max_msg = GuidanceSystemCmd {
-        commanded_curvature: 8031.75,
+        commanded_curvature: Signal::Value(8031.75),
         status: CurvatureCommandStatus::ErrorIndication,
     };
     assert_eq!(guidance_cmd_max_msg.encode(), guidance_cmd_max);
     let decoded_guidance_cmd_max = GuidanceSystemCmd::decode(&guidance_cmd_max).unwrap();
-    assert!((decoded_guidance_cmd_max.commanded_curvature - 8031.75).abs() < 0.25);
+    assert!((decoded_guidance_cmd_max.commanded_curvature.value().unwrap() - 8031.75).abs() < 0.25);
     assert_eq!(
         decoded_guidance_cmd_max.status,
         CurvatureCommandStatus::ErrorIndication
@@ -1234,6 +1234,23 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
+    assert!(
+        DriveStrategyCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_drive_strategy",
+        ))
+        .is_some(),
+        "undefined_bits_drive_strategy must decode"
+    );
+    assert!(
+        GuidanceSystemCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_guidance_system_cmd",
+        ))
+        .is_some(),
+        "undefined_bits_guidance_system_cmd must decode"
+    );
+
     // B5 / G3 — ISO 11783-7 §5.4: "All undefined bits should be received as
     // 'don't care' (either masked out or ignored). This permits them to be
     // defined and used in the future without causing any incompatibilities."
@@ -1331,14 +1348,13 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     assert!(
         GuidanceMachineInfo::decode(&parse_named_hex_bytes(
             ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-            "malformed_guidance_machine_bad_padding",
+            "undefined_bits_guidance_machine",
         ))
-        .is_none(),
-        "malformed_guidance_machine_bad_padding must be rejected"
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
     );
     for name in [
         "malformed_drive_strategy_short2",
-        "malformed_drive_strategy_bad_padding",
         "malformed_drive_strategy_reserved_mode",
     ] {
         assert!(
@@ -1350,22 +1366,24 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
-    for name in [
-        "malformed_guidance_system_cmd_short3",
-        "malformed_guidance_system_cmd_bad_padding",
-    ] {
-        assert!(
-            GuidanceSystemCmd::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+    assert!(
+        GuidanceSystemCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "malformed_guidance_system_cmd_short3",
+        ))
+        .is_none(),
+        "malformed_guidance_system_cmd_short3 must be rejected"
+    );
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_pto",
+        ))
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
+    );
     for name in [
         "malformed_hitch_pto_short4",
-        "malformed_hitch_pto_bad_padding",
         "malformed_hitch_pto_reserved_control_bits",
     ] {
         assert!(
@@ -1377,19 +1395,28 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
-    for name in [
-        "malformed_hitch_roll_pitch_short3",
-        "malformed_hitch_roll_pitch_bad_padding",
-    ] {
-        assert!(
-            HitchRollPitchCmd::decode(
-                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
-                false,
-            )
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+    assert!(
+        HitchRollPitchCmd::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "malformed_hitch_roll_pitch_short3",
+            ),
+            false,
+        )
+        .is_none(),
+        "malformed_hitch_roll_pitch_short3 must be rejected"
+    );
+    assert!(
+        HitchRollPitchCmd::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "undefined_bits_hitch_roll_pitch",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
+    );
     assert!(
         TractorFacilities::decode(&parse_named_hex_bytes(
             ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,

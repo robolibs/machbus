@@ -26,14 +26,14 @@ use crate::isobus::implement::guidance::{
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
 };
-use crate::j1939::shortcut_button::{ShortcutButtonState, decode_message};
+use crate::j1939::shortcut_button::decode_message;
 use crate::net::pgn_defs::{
     PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::session::plugins::shortcut_button::ISB_TIMEOUT_MS;
+use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
     AutodriveEvent, AutodriveRefusal, AutomationStatus, BusEvent, DriveCommand, Event,
     SafeStopTrigger, StopLatch,
@@ -100,8 +100,7 @@ pub struct AutoDrive {
     /// `clear_stop()` could re-engage while the operator still held stop, and
     /// an ISB transmitter that went silent read as permission rather than as
     /// the loss of stop authority it is.
-    isb_stop_asserted: bool,
-    last_isb_at: Option<Instant>,
+    isb: IsbGuard,
 }
 
 impl Default for AutoDrive {
@@ -130,8 +129,7 @@ impl AutoDrive {
             seen_seq: 0,
             seq_changed_at: None,
             stale_ms: COMMAND_STALE_MS,
-            isb_stop_asserted: false,
-            last_isb_at: None,
+            isb: IsbGuard::new(),
         }
     }
 
@@ -272,7 +270,7 @@ impl AutoDrive {
     /// Shortcut Button: clearing there produced a window of commanded motion
     /// against a stop that was being held down.
     pub fn clear_stop(&mut self) {
-        if self.isb_stop_asserted {
+        if self.isb.is_asserted() {
             return;
         }
         self.stop.clear();
@@ -285,11 +283,11 @@ impl AutoDrive {
     /// Button, or a previously-seen ISB source has gone silent.
     #[must_use]
     pub const fn is_isb_stop_asserted(&self) -> bool {
-        self.isb_stop_asserted
+        self.isb.is_asserted()
     }
 
     fn check_preconditions(&self) -> Result<(), AutodriveRefusal> {
-        if self.stop.is_latched() || self.isb_stop_asserted {
+        if self.stop.is_latched() || self.isb.is_asserted() {
             return Err(AutodriveRefusal::StopLatched);
         }
         if !self.link_alive {
@@ -358,13 +356,9 @@ impl Plugin for AutoDrive {
         if msg.pgn == PGN_SHORTCUT_BUTTON
             && let Some(decoded) = decode_message(msg)
         {
-            self.last_isb_at = Some(ctx.now());
-            // Error is not permission: only an explicit "permit" clears stop.
-            self.isb_stop_asserted = !matches!(
-                decoded.state,
-                ShortcutButtonState::PermitAllImplementsToOperate
-            );
-            if self.isb_stop_asserted && self.stop.trip(SafeStopTrigger::IsbStop) {
+            if self.isb.observe(decoded.state, ctx.now())
+                && self.stop.trip(SafeStopTrigger::IsbStop)
+            {
                 self.enter_safe_state();
                 ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
                     trigger: SafeStopTrigger::IsbStop,
@@ -472,20 +466,11 @@ impl Plugin for AutoDrive {
         }
         self.link_alive = alive;
 
-        // An ISB source that was seen once and then went silent has taken the
-        // operator's stop authority with it. `shortcut_button.rs` already
-        // asserts this rule; this controller used to contradict it inside the
-        // same preset, so cutting the ISB cable left the machine steering.
-        if let Some(seen) = self.last_isb_at
-            && now.millis_since(seen) >= ISB_TIMEOUT_MS
-        {
-            self.isb_stop_asserted = true;
-            if self.stop.trip(SafeStopTrigger::IsbStop) {
-                self.enter_safe_state();
-                ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
-                    trigger: SafeStopTrigger::IsbStop,
-                }));
-            }
+        if self.isb.tick(now) && self.stop.trip(SafeStopTrigger::IsbStop) {
+            self.enter_safe_state();
+            ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                trigger: SafeStopTrigger::IsbStop,
+            }));
         }
 
         // A live application refreshes its setpoint; one that has died does not.
@@ -574,6 +559,7 @@ impl Plugin for AutoDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::j1939::shortcut_button::ShortcutButtonState;
     use crate::net::{Frame, Identifier, Name};
     use crate::session::Session;
 

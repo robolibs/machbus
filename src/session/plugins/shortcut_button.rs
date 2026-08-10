@@ -20,6 +20,65 @@ pub const ISB_REBROADCAST_MS: u32 = 100;
 /// Three missed broadcasts and the transmitter is presumed gone.
 pub const ISB_TIMEOUT_MS: u32 = 300;
 
+/// The ISB rule an autonomy controller has to obey, in one place.
+///
+/// Both `AutoDrive` and `Guidance` own a stop latch and both must react to the
+/// Auxiliary Shortcut Button the same way. They did not: the rules below landed
+/// in `AutoDrive` and `Guidance` kept an older, narrower check, so cutting the
+/// ISB cable left `Guidance` steering. Keeping the rule here means the next
+/// controller cannot inherit half of it.
+///
+/// Two rules, both load-bearing:
+/// - **Error is not permission.** Only an explicit *permit all operations*
+///   clears the stop; every other state asserts it.
+/// - **Silence is not permission.** A source seen once and then gone has taken
+///   the operator's stop authority with it ([`ISB_TIMEOUT_MS`]).
+///
+/// Note that "every other state" currently includes *not available*, so a CF
+/// padding a frame with 0xFF latches a stop. That is deliberate for now — it
+/// matches what `AutoDrive` already shipped — but it is a design decision, not
+/// an ISO 11783-7 requirement, and this is the one place to revisit it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IsbGuard {
+    last_seen_at: Option<Instant>,
+    asserted: bool,
+}
+
+impl IsbGuard {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            last_seen_at: None,
+            asserted: false,
+        }
+    }
+
+    /// Record a decoded ISB state. Returns `true` while stop is asserted.
+    pub const fn observe(&mut self, state: ShortcutButtonState, now: Instant) -> bool {
+        self.last_seen_at = Some(now);
+        self.asserted = !matches!(state, ShortcutButtonState::PermitAllImplementsToOperate);
+        self.asserted
+    }
+
+    /// Age the guard. Returns `true` while stop is asserted, including when
+    /// this call is what tripped it.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        if let Some(seen) = self.last_seen_at
+            && now.millis_since(seen) >= ISB_TIMEOUT_MS
+        {
+            self.asserted = true;
+        }
+        self.asserted
+    }
+
+    /// `true` while the operator is commanding stop, or a source that was seen
+    /// has gone silent. A latched stop must not be cleared while this holds.
+    #[must_use]
+    pub const fn is_asserted(&self) -> bool {
+        self.asserted
+    }
+}
+
 /// Shortcut Button plugin.
 #[derive(Default)]
 pub struct ShortcutButton {

@@ -27,13 +27,14 @@ use crate::isobus::implement::guidance::{
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
 };
-use crate::j1939::shortcut_button::{ShortcutButtonState, decode_message};
+use crate::j1939::shortcut_button::decode_message;
 use crate::net::pgn_defs::{
     PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
+use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
     AutodriveRefusal, BusEvent, Event, GuidanceEvent, SafeStopTrigger, StopLatch,
 };
@@ -107,6 +108,10 @@ pub struct Guidance {
     /// Latching, not momentary: steering must not resume by itself when a
     /// button is released or a link comes back.
     stop: StopLatch,
+    /// The Auxiliary Shortcut Button rule, shared with `AutoDrive`. This plugin
+    /// used to trip only on an explicit stop state and never noticed an ISB
+    /// source going silent, so cutting the ISB cable left it steering.
+    isb: IsbGuard,
     /// Bumped by every application command. The setters have no clock, so
     /// freshness is timed in `on_tick` by watching this change.
     command_seq: u64,
@@ -162,12 +167,12 @@ impl Guidance {
         if !self.link_alive {
             return Err(AutodriveRefusal::LinkDown);
         }
-        let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
-        if info.lockout == MechanicalLockout::Active {
-            return Err(AutodriveRefusal::MechanicalLockout);
+        if self.isb.is_asserted() {
+            return Err(AutodriveRefusal::StopLatched);
         }
-        if info.remote_engage_switch_status == GenericSaeBs02SlotValue::DisabledOffPassive {
-            return Err(AutodriveRefusal::OperatorNotEngaged);
+        let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
+        if let Some(refusal) = Self::machine_violation(info) {
+            return Err(refusal);
         }
         self.engaged = true;
         self.dirty = true;
@@ -190,8 +195,42 @@ impl Guidance {
 
     /// Release a latched stop. Deliberately explicit: a fault clearing itself
     /// is not consent to move.
+    ///
+    /// Refused while the operator is still asserting stop on the Auxiliary
+    /// Shortcut Button, or while a seen ISB source is silent — clearing there
+    /// opened a window of commanded motion against a held-down stop.
     pub fn clear_stop(&mut self) {
+        if self.isb.is_asserted() {
+            return;
+        }
         self.stop.clear();
+    }
+
+    /// `true` while the operator is commanding stop on the Auxiliary Shortcut
+    /// Button, or a previously-seen ISB source has gone silent.
+    #[must_use]
+    pub const fn is_isb_stop_asserted(&self) -> bool {
+        self.isb.is_asserted()
+    }
+
+    /// The machine-reported conditions that forbid steering (ISO 11783-7 §5.2.4
+    /// Table 2, SPN 5243 mechanical lockout and SPN 9726 remote engage switch).
+    ///
+    /// Split out so they can be re-checked on every Machine Info broadcast:
+    /// checking them only at engage meant an operator asserting the lockout or
+    /// dropping the engage switch mid-turn was ignored, and this node kept
+    /// asking for the wheel.
+    const fn machine_violation(info: GuidanceMachineInfo) -> Option<AutodriveRefusal> {
+        if matches!(info.lockout, MechanicalLockout::Active) {
+            return Some(AutodriveRefusal::MechanicalLockout);
+        }
+        if matches!(
+            info.remote_engage_switch_status,
+            GenericSaeBs02SlotValue::DisabledOffPassive
+        ) {
+            return Some(AutodriveRefusal::OperatorNotEngaged);
+        }
+        None
     }
 
     /// Trip the safe state from outside — the application wires bus-off,
@@ -394,10 +433,11 @@ impl Plugin for Guidance {
         // left autosteer commanding exactly as before.
         if msg.pgn == PGN_SHORTCUT_BUTTON
             && let Some(decoded) = decode_message(msg)
-            && decoded.state == ShortcutButtonState::StopImplementOperations
         {
             let was_engaged = self.engaged;
-            if self.stop.trip(SafeStopTrigger::IsbStop) {
+            if self.isb.observe(decoded.state, ctx.now())
+                && self.stop.trip(SafeStopTrigger::IsbStop)
+            {
                 self.enter_safe_state();
                 ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
                     was_engaged,
@@ -418,6 +458,23 @@ impl Plugin for Guidance {
                     source: msg.source,
                 }));
             }
+            // The preconditions are a continuing contract, not an entry check:
+            // re-run them on every broadcast so an operator asserting the
+            // mechanical lockout mid-turn actually stops this controller.
+            if self.engaged && let Some(refusal) = Self::machine_violation(info) {
+                let was_engaged = self.engaged;
+                let trigger = match refusal {
+                    AutodriveRefusal::MechanicalLockout => SafeStopTrigger::IsbStop,
+                    _ => SafeStopTrigger::OperatorOverride,
+                };
+                if self.request_stop(trigger) {
+                    ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                        was_engaged,
+                    }));
+                }
+                return;
+            }
+
             ctx.emit(Event::Guidance(GuidanceEvent::MachineInfo {
                 source: msg.source,
                 estimated_curvature: info.estimated_curvature,
@@ -491,6 +548,18 @@ impl Plugin for Guidance {
             }));
         }
         self.link_alive = alive;
+
+        // A seen ISB source that goes silent has taken the operator's stop
+        // authority with it.
+        if self.isb.tick(now) {
+            let was_engaged = self.engaged;
+            if self.stop.trip(SafeStopTrigger::IsbStop) {
+                self.enter_safe_state();
+                ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                    was_engaged,
+                }));
+            }
+        }
 
         // A live application refreshes its setpoint; one that has died does
         // not. Without this the cadence re-transmits "intended to steer" at the
@@ -1070,9 +1139,29 @@ mod tests {
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
         assert_eq!(cmd.commanded_curvature, 0.0);
 
-        // Explicitly clearing the latch restores control. The machine info must
-        // be stamped after the last tick: a backwards clock is itself a fault
-        // now, and would re-latch the stop before engage() is reached.
+        // Clearing is refused while the button is still held: doing it there
+        // opened a window of commanded motion against a held-down stop.
+        s.get_mut::<Guidance>().unwrap().clear_stop();
+        assert!(
+            s.get::<Guidance>().unwrap().is_stop_latched(),
+            "clear_stop must not release a held ISB"
+        );
+
+        // Releasing the button, then clearing, restores control. The machine
+        // info must be stamped after the last tick: a backwards clock is itself
+        // a fault now, and would re-latch the stop before engage() is reached.
+        let release = Frame::new(
+            Identifier::encode(
+                Priority::BelowNormal,
+                PGN_SHORTCUT_BUTTON,
+                0x30,
+                BROADCAST_ADDRESS,
+            ),
+            encode_with_transition_count(ShortcutButtonState::PermitAllImplementsToOperate, 4),
+            8,
+        );
+        let released_at = Instant::from_millis(base + u64::from(MIN_TX_INTERVAL_MS) + 30);
+        s.feed(0, &release, released_at);
         s.get_mut::<Guidance>().unwrap().clear_stop();
         feed_machine_info(
             &mut s,
@@ -1080,6 +1169,108 @@ mod tests {
         );
         s.get_mut::<Guidance>().unwrap().engage().unwrap();
         assert!(s.get::<Guidance>().unwrap().is_engaged());
+    }
+
+    /// B1/C1 — the lockout is a continuing contract. Checking it only at
+    /// `engage()` meant an operator asserting the mechanical steering lockout
+    /// mid-headland-turn was ignored and this node kept asking for the wheel
+    /// (ISO 11783-7 §5.2.4 Table 2, SPN 5243).
+    #[test]
+    fn lockout_asserted_after_engage_stops_steering() {
+        use crate::net::{Frame, Identifier};
+
+        let mut s = claimed_session();
+        let base = 10_000;
+        feed_machine_info(&mut s, Instant::from_millis(base));
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+
+        // Same capture with byte 2 bits 0-1 set to Active.
+        let mut locked = CAPTURED_MACHINE_INFO;
+        locked[2] = (locked[2] & !0x03) | 0x01;
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GUIDANCE_MACHINE_INFO,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            locked,
+            8,
+        );
+        s.feed(0, &frame, Instant::from_millis(base + 10));
+
+        let g = s.get::<Guidance>().unwrap();
+        assert!(!g.is_engaged(), "a mechanical lockout must disengage");
+        assert!(g.is_stop_latched());
+    }
+
+    /// C2 — ISO 11783-7 §5.2.4: the error range means the reading is not
+    /// trustworthy. This plugin used to match only the explicit stop state, so
+    /// a faulted ISB read as permission.
+    #[test]
+    fn isb_error_state_is_not_permission() {
+        use crate::j1939::shortcut_button::{ShortcutButtonState, encode_with_transition_count};
+        use crate::net::pgn_defs::PGN_SHORTCUT_BUTTON;
+        use crate::net::{Frame, Identifier};
+
+        let mut s = claimed_session();
+        let base = 10_000;
+        feed_machine_info(&mut s, Instant::from_millis(base));
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+
+        let faulted = Frame::new(
+            Identifier::encode(
+                Priority::BelowNormal,
+                PGN_SHORTCUT_BUTTON,
+                0x30,
+                BROADCAST_ADDRESS,
+            ),
+            encode_with_transition_count(ShortcutButtonState::Error, 1),
+            8,
+        );
+        s.feed(0, &faulted, Instant::from_millis(base + 10));
+
+        let g = s.get::<Guidance>().unwrap();
+        assert!(!g.is_engaged(), "a faulted ISB is not permission to steer");
+        assert_eq!(g.stop_reason(), Some(SafeStopTrigger::IsbStop));
+    }
+
+    /// B1 — silence is not permission either. A source seen once and then gone
+    /// has taken the operator's stop authority with it.
+    #[test]
+    fn silent_isb_source_stops_steering() {
+        use crate::j1939::shortcut_button::{ShortcutButtonState, encode_with_transition_count};
+        use crate::net::pgn_defs::PGN_SHORTCUT_BUTTON;
+        use crate::net::{Frame, Identifier};
+        use crate::session::plugins::shortcut_button::ISB_TIMEOUT_MS;
+
+        let mut s = claimed_session();
+        let base = 10_000;
+        feed_machine_info(&mut s, Instant::from_millis(base));
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+
+        let permit = Frame::new(
+            Identifier::encode(
+                Priority::BelowNormal,
+                PGN_SHORTCUT_BUTTON,
+                0x30,
+                BROADCAST_ADDRESS,
+            ),
+            encode_with_transition_count(ShortcutButtonState::PermitAllImplementsToOperate, 1),
+            8,
+        );
+        s.feed(0, &permit, Instant::from_millis(base + 10));
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+
+        // Cable cut: the ISB source stops broadcasting while the steering ECU
+        // keeps talking, so the link watchdog cannot be what trips.
+        feed_machine_info(&mut s, Instant::from_millis(base + 200));
+        s.tick(Instant::from_millis(base + 10 + u64::from(ISB_TIMEOUT_MS)));
+
+        let g = s.get::<Guidance>().unwrap();
+        assert!(!g.is_engaged(), "a silent ISB must disengage");
+        assert_eq!(g.stop_reason(), Some(SafeStopTrigger::IsbStop));
     }
 
     /// W10 — `f64::EPSILON` is not a speed. A micrometre-per-second odometry

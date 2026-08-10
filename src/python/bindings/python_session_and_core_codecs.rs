@@ -9,7 +9,7 @@ use crate::j1939::diagnostic::Dtc;
 use crate::net::{ClaimState, Frame, Identifier, Name, Pgn, Priority};
 use crate::nmea::{GNSSPosition, NMEAConfig};
 use crate::session::plugins::{
-    Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
+    AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
     GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
@@ -362,6 +362,12 @@ impl PySession {
             .ok_or_else(|| err_runtime("guidance subsystem not enabled"))
     }
 
+    fn autodrive(&mut self) -> PyResult<&mut AutoDrive> {
+        self.session
+            .get_mut::<AutoDrive>()
+            .ok_or_else(|| err_runtime("autodrive subsystem not enabled"))
+    }
+
     fn vt(&mut self) -> PyResult<&mut VtClient> {
         self.session
             .get_mut::<VtClient>()
@@ -482,6 +488,7 @@ impl PySession {
         diagnostics_interval_ms = 1000,
         enable_gnss = false,
         enable_guidance = false,
+        enable_autodrive = false,
         enable_implement = false,
         enable_vt_client = false,
         enable_tc_client = false,
@@ -518,6 +525,7 @@ impl PySession {
         diagnostics_interval_ms: u32,
         enable_gnss: bool,
         enable_guidance: bool,
+        enable_autodrive: bool,
         enable_implement: bool,
         enable_vt_client: bool,
         enable_tc_client: bool,
@@ -585,6 +593,12 @@ impl PySession {
         }
         if enable_guidance {
             b = b.plug(Guidance::new());
+        }
+        // Mutually exclusive with `enable_guidance`: both author PGN 0xAD00
+        // from this address, and `build()` refuses the pair rather than let one
+        // silently overwrite the other's safe stop.
+        if enable_autodrive {
+            b = b.plug(AutoDrive::new());
         }
         if enable_implement {
             b = b.plug(Implement::new());
@@ -959,6 +973,64 @@ impl PySession {
     fn guidance_disengage(&mut self) -> PyResult<()> {
         self.guidance()?.disengage();
         Ok(())
+    }
+
+    /// Move AutoDrive to *ready to enable*.
+    fn autodrive_arm(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .arm()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
+    }
+
+    /// Begin commanding; the setpoint reaches the bus on the next tick.
+    fn autodrive_engage(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .engage()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
+    }
+
+    /// Stop commanding and fall back to the safe state. Never refused.
+    fn autodrive_disengage(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .disengage(crate::safety::SafeStopTrigger::OperatorOverride);
+        Ok(())
+    }
+
+    /// Replace the setpoint. `curvature_km_inv` is right-positive per AEF
+    /// D.7.2.1; pass `None` for either axis to leave it uncommanded.
+    #[pyo3(signature = (curvature_km_inv=None, speed_mps=None))]
+    fn autodrive_command(
+        &mut self,
+        curvature_km_inv: Option<f64>,
+        speed_mps: Option<f64>,
+    ) -> PyResult<()> {
+        let cmd = crate::session::DriveCommand {
+            curvature_km_inv,
+            speed_mps,
+        };
+        self.autodrive()?
+            .command(cmd)
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
+    }
+
+    /// Release a latched safe stop. Refused while the operator is still holding
+    /// the Auxiliary Shortcut Button.
+    fn autodrive_clear_stop(&mut self) -> PyResult<()> {
+        self.autodrive()?.clear_stop();
+        Ok(())
+    }
+
+    /// Why AutoDrive stopped (a short stable identifier), or `None`.
+    fn autodrive_stop_reason(&mut self) -> PyResult<Option<String>> {
+        Ok(self
+            .autodrive()?
+            .stop_reason()
+            .map(|trigger| trigger.as_str().to_owned()))
+    }
+
+    /// `True` while AutoDrive is actively commanding the machine.
+    fn autodrive_is_engaged(&mut self) -> PyResult<bool> {
+        Ok(self.autodrive()?.is_engaged())
     }
 
     /// The reason a safe stop is latched (a short stable identifier such as

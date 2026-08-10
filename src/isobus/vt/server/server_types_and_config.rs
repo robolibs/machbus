@@ -269,6 +269,8 @@ pub struct VTServer {
     state: StateMachine<VTServerState>,
     clients: Vec<ServerWorkingSet>,
     status_timer_ms: u32,
+    /// Annex H.1 byte 7: what this VT is currently busy doing.
+    pub(crate) busy_codes: u8,
     vt_version: u16,
     screen_width: u16,
     screen_height: u16,

@@ -5,6 +5,7 @@ impl VTServer {
             state: StateMachine::new(VTServerState::Disconnected),
             clients: Vec::new(),
             status_timer_ms: 0,
+            busy_codes: 0,
             vt_version: config.vt_version,
             screen_width: config.screen_width,
             screen_height: config.screen_height,
@@ -362,8 +363,11 @@ impl VTServer {
         data[3] = self.active_working_set;
         data[4] = 0x00;
         data[5] = 0x00;
-        data[6] = (self.vt_version & 0xFF) as u8;
-        data[7] = 0x00;
+        // Annex H.1: byte 7 is the VT busy-codes bitfield and byte 8 the VT
+        // function code of the command being executed (FF16 when idle). Byte 7
+        // is not a version — the VT reports that in the Get Memory response.
+        data[6] = self.busy_codes;
+        data[7] = 0xFF;
         data
     }
 

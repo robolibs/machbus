@@ -171,6 +171,15 @@ pub struct VTMacro {
 /// and 3 s without one is treated as a VT shutdown.
 pub const VT_STATUS_TIMEOUT_MS: u32 = 3_000;
 
+/// §4.6.9 / Annex G.3: "Each Working Set Master sends the Working Set
+/// Maintenance message once per second."
+///
+/// Without it the VT declares an unexpected shutdown after 3 s, alerts the
+/// operator, deletes the working set's object pool from volatile memory and
+/// drops any auxiliary assignments mapped to it — so the machine's screen goes
+/// blank a few seconds after it appears.
+pub const WORKING_SET_MAINTENANCE_INTERVAL_MS: u32 = 1_000;
+
 /// VT client. See module-level doc for the pump-style API contract.
 pub struct VTClient {
     config: VTClientConfig,
@@ -178,6 +187,13 @@ pub struct VTClient {
     pool: ObjectPool,
     working_set: WorkingSet,
     timer_ms: u32,
+    /// Time since the last Working Set Maintenance message, and whether the
+    /// one-shot "initiating" bit has already gone out. G.3: a second message
+    /// with that bit set is read by the VT as a working-set restart.
+    since_maintenance_ms: u32,
+    maintenance_initiated: bool,
+    /// Annex H.1 byte 7, the VT's busy bitfield as last reported.
+    vt_busy_codes: u8,
     /// Milliseconds since the last VT Status message. ISO 11783-6 §4.6.9: the
     /// VT sends it once per second and 3 s of silence is a VT shutdown, at
     /// which point the working set must enter a safe state. This was never
@@ -257,6 +273,9 @@ impl VTClient {
             working_set: WorkingSet::default(),
             timer_ms: 0,
             since_vt_status_ms: 0,
+            since_maintenance_ms: 0,
+            maintenance_initiated: false,
+            vt_busy_codes: 0,
             pending_end_of_pool_delay_ms: 0,
             vt_address: NULL_ADDRESS,
             vt_version: 0,
@@ -351,8 +370,22 @@ impl VTClient {
         self.vt_address
     }
 
+    /// The VT's last reported busy bitfield (Annex H.1 byte 7): bit 0 updating
+    /// the visible mask, bit 1 saving to non-volatile memory, bit 2 executing a
+    /// command, bit 3 executing a macro, bit 4 parsing an object pool, bit 6
+    /// auxiliary learn mode, bit 7 out of memory.
     #[inline]
     #[must_use]
+    pub const fn vt_busy_codes(&self) -> u8 {
+        self.vt_busy_codes
+    }
+
+    /// `true` when the VT reports it is out of memory (bit 7).
+    #[must_use]
+    pub const fn vt_is_out_of_memory(&self) -> bool {
+        self.vt_busy_codes & 0x80 != 0
+    }
+
     pub const fn vt_version_value(&self) -> u16 {
         self.vt_version
     }
@@ -1283,6 +1316,7 @@ impl VTClient {
     pub fn update(&mut self, elapsed_ms: u32) -> Vec<ClientOutbound> {
         self.timer_ms = self.timer_ms.saturating_add(elapsed_ms);
         self.since_vt_status_ms = self.since_vt_status_ms.saturating_add(elapsed_ms);
+        self.since_maintenance_ms = self.since_maintenance_ms.saturating_add(elapsed_ms);
         let mut out = Vec::new();
         match self.state() {
             VTState::WaitForVTStatus => {
@@ -1366,6 +1400,13 @@ impl VTClient {
                     self.transition(VTState::Disconnected);
                     self.is_active_ws = false;
                     self.on_vt_status_lost.emit(&());
+                } else if self.since_maintenance_ms >= WORKING_SET_MAINTENANCE_INTERVAL_MS {
+                    self.since_maintenance_ms = 0;
+                    out.push(ClientOutbound::to(
+                        PGN_ECU_TO_VT,
+                        self.working_set_maintenance().to_vec(),
+                        self.vt_address,
+                    ));
                 }
             }
             VTState::Disconnected => {}
@@ -1434,10 +1475,14 @@ impl VTClient {
         }
         self.vt_address = msg.source;
         self.since_vt_status_ms = 0;
-        let reported = msg.data[6];
-        if reported > 0 {
-            self.vt_version = reported as u16;
-        }
+        // Annex H.1 byte 7 is the **VT busy codes** bitfield (updating mask,
+        // saving to NVM, executing a command or macro, parsing a pool, learn
+        // mode, out of memory). The VT Status message carries no version at
+        // all; storing this byte as `vt_version` meant a VT that happened to be
+        // busy re-labelled itself as a different edition of the standard, and
+        // the working set then advertised that number back to it. The real
+        // version arrives in the Get Memory response (Annex D.3, byte 2).
+        self.vt_busy_codes = msg.data[6];
         if let Some(self_addr) = self.self_address {
             let active_addr = msg.data[1];
             let was_active = self.is_active_ws;
@@ -1450,6 +1495,22 @@ impl VTClient {
             self.transition(VTState::SendWorkingSetMaster);
             self.timer_ms = 0;
         }
+    }
+
+    /// The Annex G.3 Working Set Maintenance payload.
+    ///
+    /// Byte 2 carries the status bitmask, where bit 0 is the one-shot
+    /// "initiating" flag — G.3 warns that seeing it set in more than one
+    /// message tells the VT the working set restarted without a proper
+    /// shutdown, so it is cleared after the first transmission. Byte 3 is the
+    /// version this working set complies with.
+    fn working_set_maintenance(&mut self) -> [u8; 8] {
+        let mut data = [0xFFu8; 8];
+        data[0] = cmd::WORKING_SET_MAINTENANCE;
+        data[1] = u8::from(!self.maintenance_initiated);
+        data[2] = self.vt_version as u8;
+        self.maintenance_initiated = true;
+        data
     }
 
     fn handle_get_memory_response(&mut self, msg: &Message) {

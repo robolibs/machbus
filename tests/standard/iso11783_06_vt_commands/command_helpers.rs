@@ -67,11 +67,13 @@ fn string_value_change(command: u8, id: u16, bytes: &[u8]) -> Vec<u8> {
     data
 }
 
-fn vt_status(active_working_set: u8, version: u8) -> Vec<u8> {
+/// Annex H.1 VT Status. Byte 7 is the VT busy-codes bitfield, not a version —
+/// the VT reports its version in the Get Memory response (D.3 byte 2).
+fn vt_status(active_working_set: u8, busy_codes: u8) -> Vec<u8> {
     let mut data = [0xFFu8; 8];
     data[0] = cmd::VT_STATUS;
     data[1] = active_working_set;
-    data[6] = version;
+    data[6] = busy_codes;
     data.to_vec()
 }
 
@@ -1301,7 +1303,7 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
     client.connect().unwrap();
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
     assert_eq!(client.vt_address(), 0x80);
-    assert_eq!(client.vt_version_value(), 5);
+    assert_eq!(client.vt_busy_codes(), 5);
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x00, 6), 0x81));
@@ -1310,7 +1312,11 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x80,
         "a different VT source must not steal an established client session"
     );
-    assert_eq!(client.vt_version_value(), 5);
+    assert_eq!(
+        client.vt_busy_codes(),
+        5,
+        "state from an unbound VT source must not overwrite the session's"
+    );
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(
@@ -1359,7 +1365,7 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x81,
         "disconnect must release the old VT source binding so a later session can bind again"
     );
-    assert_eq!(client.vt_version_value(), 4);
+    assert_eq!(client.vt_busy_codes(), 4);
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x00, 7), 0x80));
@@ -1368,7 +1374,11 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x81,
         "old VT source traffic must not steal a newly rebound session"
     );
-    assert_eq!(client.vt_version_value(), 4);
+    assert_eq!(
+        client.vt_busy_codes(),
+        4,
+        "the unbound VT's status must not overwrite the bound one's"
+    );
     assert!(client.is_active_ws());
 }
 

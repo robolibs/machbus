@@ -4,7 +4,11 @@
 # Classic fixed-size command/status payloads are padded with 0xFF where the
 # implementation emits reserved bytes.
 
-vt_status_vt5_no_active_ws=FEFE00FE00000500
+# Annex H.1: byte 7 is the VT busy-codes bitfield (0 = idle) and byte 8 the VT
+# function code of the command being executed, FF16 when none is. This
+# previously read ...0500, putting the VT *version* in the busy-codes byte —
+# the client then stored it as the version it advertised back.
+vt_status_vt5_no_active_ws=FEFE00FE000000FF
 working_set_master_one_member=01FFFFFFFFFFFFFF
 get_memory_valid_ws_datamask=C018000000FFFFFF
 # Annex D.3: byte 2 is the VT's ISO 11783-6 version (5 = Third Edition, the

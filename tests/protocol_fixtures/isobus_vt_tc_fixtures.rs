@@ -569,7 +569,9 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, status.to_vec(), 0x80));
     assert_eq!(client.state(), VTState::SendWorkingSetMaster);
     assert_eq!(client.vt_address(), 0x80);
-    assert_eq!(client.vt_version_value(), 5);
+    // Annex H.1 carries no version in the status message; it arrives with the
+    // Get Memory response (D.3 byte 2), asserted below.
+    assert_eq!(client.vt_version_value(), 0);
 
     let working_set_master = client.update(1);
     assert_eq!(working_set_master.len(), 1);
@@ -599,6 +601,16 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ));
     assert_eq!(memory_response.len(), 1);
     assert_eq!(memory_response[0].dest, Some(0x42));
+    client.handle_vt_message(&Message::new(
+        PGN_VT_TO_ECU,
+        memory_response[0].data.clone(),
+        0x80,
+    ));
+    assert_eq!(
+        client.vt_version_value(),
+        5,
+        "D.3 byte 2 is where the VT reports its version"
+    );
     assert_eq!(
         memory_response[0].data,
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "get_memory_response_success")

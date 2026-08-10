@@ -199,13 +199,36 @@ mod tests {
         let mut c = VTClient::new(VTClientConfig::default());
         c.set_object_pool(dummy_pool());
         c.connect().unwrap();
-        // VT_STATUS payload: [func, active_ws, ..., version=4]
-        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 4u8, 0xFF];
+        // Annex H.1: byte 7 is the VT busy-codes bitfield, not a version.
+        // 0x04 = bit 2 = "VT is busy executing a command".
+        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 0x04u8, 0xFF];
         data.resize(8, 0xFF);
         c.handle_vt_message(&vt_msg(data, 0x80));
         assert_eq!(c.state(), VTState::SendWorkingSetMaster);
         assert_eq!(c.vt_address(), 0x80);
-        assert_eq!(c.vt_version_value(), 4);
+        assert_eq!(c.vt_busy_codes(), 0x04);
+        assert!(!c.vt_is_out_of_memory());
+        assert_eq!(
+            c.vt_version_value(),
+            0,
+            "VT Status carries no version; it arrives in the Get Memory response"
+        );
+    }
+
+    /// H38 — byte 7 is a bitfield of busy conditions. Storing it as the version
+    /// meant a VT that happened to be out of memory (bit 7 = 0x80) re-labelled
+    /// itself as "version 128", and the working set advertised that back.
+    #[test]
+    fn vt_status_busy_codes_are_not_a_version() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 0x80u8, 0xFF];
+        data.resize(8, 0xFF);
+        c.handle_vt_message(&vt_msg(data, 0x80));
+
+        assert!(c.vt_is_out_of_memory(), "bit 7 is 'VT is out of memory'");
+        assert_eq!(c.vt_version_value(), 0);
     }
 
     #[test]
@@ -364,6 +387,67 @@ mod tests {
                 c.vt_version_value(),
                 u16::from(vt_version),
                 "the version byte must be recorded, not consumed as a status"
+            );
+        }
+    }
+
+    /// P4.2 — §4.6.9: "Each Working Set Master sends the Working Set
+    /// Maintenance message once per second." It was never transmitted at all —
+    /// `cmd::WORKING_SET_MAINTENANCE` had zero references crate-wide — so a
+    /// real VT declares an unexpected shutdown after 3 s, deletes the pool and
+    /// drops the operator's auxiliary assignments. The screen goes blank a few
+    /// seconds after it appears.
+    #[test]
+    fn connected_client_sends_working_set_maintenance_every_second() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        force_connected(&mut c);
+
+        let mut sent = Vec::new();
+        // Four seconds in 100 ms steps, well past the VT's 3 s window. The VT
+        // keeps broadcasting its own status, so the session stays up and the
+        // only thing under test is our cadence.
+        for step in 0..40 {
+            if step % 5 == 0 {
+                let mut status = vec![cmd::VT_STATUS];
+                status.resize(8, 0xFF);
+                status[6] = 4;
+                c.handle_vt_message(&vt_msg(status, 0x80));
+            }
+            for out in c.update(100) {
+                if out.data.first() == Some(&cmd::WORKING_SET_MAINTENANCE) {
+                    sent.push(out.data.clone());
+                }
+            }
+        }
+        assert_eq!(
+            c.state(),
+            VTState::Connected,
+            "precondition: the session stayed up for the whole run"
+        );
+
+        assert!(
+            sent.len() >= 3,
+            "at least one message per second must reach the VT, saw {}",
+            sent.len()
+        );
+
+        // G.3: byte 2 bit 0 is the one-shot initiating flag. Seeing it a second
+        // time tells the VT the working set restarted without a shutdown.
+        assert_eq!(sent[0][1] & 0x01, 1, "the first message initiates");
+        for later in &sent[1..] {
+            assert_eq!(
+                later[1] & 0x01,
+                0,
+                "only the first message may indicate the initiating state"
+            );
+        }
+        for msg in &sent {
+            assert_eq!(msg.len(), 8);
+            assert_eq!(msg[0], cmd::WORKING_SET_MAINTENANCE);
+            assert_eq!(msg[2], 5, "byte 3 is the working set's version");
+            assert!(
+                msg[3..8].iter().all(|&b| b == 0xFF),
+                "bytes 4-8 are reserved and set to FF"
             );
         }
     }

@@ -558,6 +558,9 @@ impl TaskControllerServer {
             let Some(interval) = trigger.time_interval_ms else {
                 continue;
             };
+            if interval == 0 {
+                continue;
+            }
             trigger.elapsed_ms = trigger.elapsed_ms.saturating_add(elapsed_ms);
             while trigger.elapsed_ms >= interval {
                 trigger.elapsed_ms -= interval;
@@ -585,6 +588,9 @@ impl TaskControllerServer {
             let Some(interval) = trigger.distance_interval_mm else {
                 continue;
             };
+            if interval == 0 {
+                continue;
+            }
             trigger.distance_mm = trigger.distance_mm.saturating_add(distance_mm);
             while trigger.distance_mm >= interval {
                 trigger.distance_mm -= interval;

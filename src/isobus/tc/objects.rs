@@ -259,7 +259,12 @@ impl core::fmt::Display for ObjectID {
     }
 }
 
-/// TC object kind (first byte of every serialized object).
+/// TC object kind.
+///
+/// On the wire this is the **3-byte ASCII "Table ID"** that opens every DDOP
+/// object record (Tables A.1–A.5: `Type = String`, `Size = 3`, record bytes
+/// 1–3). The serializer emitted a single numeric byte instead, leaving every
+/// object two bytes short and the whole pool unparsable by a conformant TC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum TCObjectType {
@@ -276,6 +281,35 @@ impl TCObjectType {
     #[must_use]
     pub const fn as_u8(self) -> u8 {
         self as u8
+    }
+
+    /// The 3-byte ASCII Table ID this object opens with (Tables A.1–A.5).
+    #[inline]
+    #[must_use]
+    pub const fn table_id(self) -> [u8; 3] {
+        match self {
+            Self::Device => *b"DVC",
+            Self::DeviceElement => *b"DET",
+            Self::DeviceProcessData => *b"DPD",
+            Self::DeviceProperty => *b"DPT",
+            Self::DeviceValuePresentation => *b"DVP",
+        }
+    }
+
+    /// Parse a 3-byte ASCII Table ID.
+    #[must_use]
+    pub const fn from_table_id(id: &[u8]) -> Option<Self> {
+        if id.len() < 3 {
+            return None;
+        }
+        match [id[0], id[1], id[2]] {
+            [b'D', b'V', b'C'] => Some(Self::Device),
+            [b'D', b'E', b'T'] => Some(Self::DeviceElement),
+            [b'D', b'P', b'D'] => Some(Self::DeviceProcessData),
+            [b'D', b'P', b'T'] => Some(Self::DeviceProperty),
+            [b'D', b'V', b'P'] => Some(Self::DeviceValuePresentation),
+            _ => None,
+        }
     }
 }
 
@@ -335,10 +369,26 @@ pub struct DeviceObject {
     pub id: ObjectID,
     pub designator: String,
     pub software_version: String,
+    /// The device's 64-bit ISO 11783-5 NAME (Table A.1, "ClientNAME",
+    /// `Double integer`, 8 bytes, record byte 7+N).
+    ///
+    /// This was omitted from the record entirely, so every field after the
+    /// software version sat 8 bytes early on the wire.
+    pub client_name: u64,
     pub serial_number: String,
     pub structure_label: [u8; 7],
     pub localization_label: [u8; 7],
+    /// Table A.1, introduced in ISO 11783-10 version 4: 0..=32 bytes.
+    ///
+    /// Only transmitted when **both** the TC and the client report version 4
+    /// or higher; a version-3 connection must not carry it at all, and a
+    /// version-4 client that does not use it sends a length of 0. Use
+    /// [`DeviceObject::serialize_for_version`] rather than assuming.
+    pub extended_structure_label: Vec<u8>,
 }
+
+/// First DDOP version that defines the Extended Structure Label (Table A.1).
+pub const DDOP_VERSION_EXTENDED_STRUCTURE_LABEL: u8 = 4;
 
 impl DeviceObject {
     #[must_use]
@@ -366,6 +416,20 @@ impl DeviceObject {
         self
     }
 
+    /// Set the version-4 Extended Structure Label (0..=32 bytes).
+    #[must_use]
+    pub fn with_extended_structure_label(mut self, v: impl Into<Vec<u8>>) -> Self {
+        self.extended_structure_label = v.into();
+        self
+    }
+
+    /// Set the device's ISO 11783-5 NAME (Table A.1 "ClientNAME").
+    #[must_use]
+    pub const fn with_client_name(mut self, v: u64) -> Self {
+        self.client_name = v;
+        self
+    }
+
     #[must_use]
     pub const fn with_structure_label(mut self, v: [u8; 7]) -> Self {
         self.structure_label = v;
@@ -378,23 +442,54 @@ impl DeviceObject {
         self
     }
 
+    /// Serialize in the version-3 form (no Extended Structure Label).
+    ///
+    /// # Errors
+    /// Propagates text-field encoding failures.
     pub fn serialize(&self) -> Result<Vec<u8>> {
+        self.serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL - 1)
+    }
+
+    /// Serialize for a negotiated DDOP `version`.
+    ///
+    /// The Extended Structure Label is emitted only from version 4, per
+    /// Table A.1 and the accompanying rule that a version-3 connection "shall
+    /// fall back to the lowest common version and the 2 attributes for the
+    /// extended structure label shall both not be used".
+    ///
+    /// # Errors
+    /// A label longer than 32 bytes, or a text field that cannot be encoded.
+    pub fn serialize_for_version(&self, version: u8) -> Result<Vec<u8>> {
+        if self.extended_structure_label.len() > 32 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "device extended structure label exceeds 32 bytes",
+            ));
+        }
         let mut data = Vec::with_capacity(
             3 + 1
                 + self.designator.len()
                 + 1
                 + self.software_version.len()
+                + 8
                 + 1
                 + self.serial_number.len()
                 + 14,
         );
-        data.push(TCObjectType::Device.as_u8());
+        data.extend_from_slice(&TCObjectType::Device.table_id());
         push_u16_le(&mut data, self.id);
         push_str_with_len(&mut data, "device designator", &self.designator)?;
         push_str_with_len(&mut data, "device software version", &self.software_version)?;
+        // ClientNAME sits between the software version and the serial number
+        // (Table A.1). Omitting it shifted every later field 8 bytes early.
+        data.extend_from_slice(&self.client_name.to_le_bytes());
         push_str_with_len(&mut data, "device serial number", &self.serial_number)?;
         data.extend_from_slice(&self.structure_label);
         data.extend_from_slice(&self.localization_label);
+        if version >= DDOP_VERSION_EXTENDED_STRUCTURE_LABEL {
+            data.push(self.extended_structure_label.len() as u8);
+            data.extend_from_slice(&self.extended_structure_label);
+        }
         Ok(data)
     }
 }
@@ -467,7 +562,7 @@ impl DeviceElement {
             ));
         }
         let mut data = Vec::new();
-        data.push(TCObjectType::DeviceElement.as_u8());
+        data.extend_from_slice(&TCObjectType::DeviceElement.table_id());
         push_u16_le(&mut data, self.id);
         data.push(self.r#type.as_u8());
         push_str_with_len(&mut data, "device element designator", &self.designator)?;
@@ -487,6 +582,13 @@ impl DeviceElement {
 pub struct DeviceProcessData {
     pub id: ObjectID,
     pub ddi: DDI,
+    /// Table A.3 record byte 8, "Process data properties": a bitset of
+    /// bit 1 = member of default set, bit 2 = settable, bit 3 = control source.
+    /// Bits 2 and 3 are mutually exclusive.
+    ///
+    /// The field was absent from the record entirely, so a TC could not tell a
+    /// settable process datum from a read-only one.
+    pub properties: u8,
     pub trigger_methods: u8,
     /// `0xFFFF` = no presentation reference.
     pub presentation_object_id: ObjectID,
@@ -498,6 +600,7 @@ impl Default for DeviceProcessData {
         Self {
             id: ObjectID(0),
             ddi: DDI(0),
+            properties: 0,
             trigger_methods: 0,
             presentation_object_id: ObjectID::NULL,
             designator: String::new(),
@@ -514,6 +617,37 @@ impl DeviceProcessData {
             ));
         }
         Ok(())
+    }
+
+    /// Validate the Table A.3 properties bitset.
+    ///
+    /// # Errors
+    /// Reserved bits set, or both "settable" and "control source" — the table
+    /// notes these two are mutually exclusive.
+    pub fn validate_properties(&self) -> Result<()> {
+        const DEFAULT_SET: u8 = 0b001;
+        const SETTABLE: u8 = 0b010;
+        const CONTROL_SOURCE: u8 = 0b100;
+        if self.properties & !(DEFAULT_SET | SETTABLE | CONTROL_SOURCE) != 0 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "process data properties contain reserved bits",
+            ));
+        }
+        if self.properties & SETTABLE != 0 && self.properties & CONTROL_SOURCE != 0 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "process data properties: settable and control source are mutually exclusive",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Set the Table A.3 properties bitset.
+    #[must_use]
+    pub const fn with_properties(mut self, v: u8) -> Self {
+        self.properties = v;
+        self
     }
 
     #[must_use]
@@ -558,12 +692,17 @@ impl DeviceProcessData {
     pub fn serialize(&self) -> Result<Vec<u8>> {
         self.validate_trigger_methods()?;
         let mut data = Vec::new();
-        data.push(TCObjectType::DeviceProcessData.as_u8());
+        self.validate_properties()?;
+        data.extend_from_slice(&TCObjectType::DeviceProcessData.table_id());
         push_u16_le(&mut data, self.id);
         push_u16_le(&mut data, self.ddi);
+        // Table A.3 order: properties, triggers, designator, then the DVP
+        // reference. The DVP ID used to precede the designator, so everything
+        // after it was misaligned for a conformant reader.
+        data.push(self.properties);
         data.push(self.trigger_methods);
-        push_u16_le(&mut data, self.presentation_object_id);
         push_str_with_len(&mut data, "process data designator", &self.designator)?;
+        push_u16_le(&mut data, self.presentation_object_id);
         Ok(data)
     }
 }
@@ -629,12 +768,14 @@ impl DeviceProperty {
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut data = Vec::new();
-        data.push(TCObjectType::DeviceProperty.as_u8());
+        data.extend_from_slice(&TCObjectType::DeviceProperty.table_id());
         push_u16_le(&mut data, self.id);
         push_u16_le(&mut data, self.ddi);
         data.extend_from_slice(&self.value.to_le_bytes());
-        push_u16_le(&mut data, self.presentation_object_id);
+        // Table A.4: designator at record byte 13, then the DVP reference at
+        // 13+N. The DVP ID used to precede the designator.
         push_str_with_len(&mut data, "property designator", &self.designator)?;
+        push_u16_le(&mut data, self.presentation_object_id);
         Ok(data)
     }
 }
@@ -702,7 +843,7 @@ impl DeviceValuePresentation {
             ));
         }
         let mut data = Vec::new();
-        data.push(TCObjectType::DeviceValuePresentation.as_u8());
+        data.extend_from_slice(&TCObjectType::DeviceValuePresentation.table_id());
         push_u16_le(&mut data, self.id);
         data.extend_from_slice(&self.offset.to_le_bytes());
         data.extend_from_slice(&self.scale.to_le_bytes());
@@ -779,11 +920,12 @@ mod tests {
             .with_structure_label([0x01; 7])
             .with_localization_label([0x02; 7]);
         let bytes = d.serialize().unwrap();
-        assert_eq!(bytes[0], TCObjectType::Device.as_u8());
-        assert_eq!(bytes[1], 0x34);
-        assert_eq!(bytes[2], 0x12);
-        assert_eq!(bytes[3], 7);
-        assert_eq!(&bytes[4..11], b"Sprayer");
+        // Tables A.1-A.5: bytes 1-3 are the ASCII Table ID, 4-5 the object ID.
+        assert_eq!(&bytes[0..3], b"DVC");
+        assert_eq!(bytes[3], 0x34);
+        assert_eq!(bytes[4], 0x12);
+        assert_eq!(bytes[5], 7);
+        assert_eq!(&bytes[6..13], b"Sprayer");
     }
 
     #[test]
@@ -796,12 +938,12 @@ mod tests {
             .with_designator("S1")
             .with_children(vec![100, 200]);
         let bytes = de.serialize().unwrap();
-        assert_eq!(bytes[0], TCObjectType::DeviceElement.as_u8());
-        assert_eq!(bytes[3], DeviceElementType::Section.as_u8());
+        assert_eq!(&bytes[0..3], b"DET");
+        assert_eq!(bytes[5], DeviceElementType::Section.as_u8());
         // Designator length 2 + "S1" + number(2) + parent(2) + children_count(2) + 2*2.
-        assert_eq!(bytes[4], 2);
-        assert_eq!(&bytes[5..7], b"S1");
-        let num_offset = 7;
+        assert_eq!(bytes[6], 2);
+        assert_eq!(&bytes[7..9], b"S1");
+        let num_offset = 9;
         assert_eq!(bytes[num_offset], 5);
         let children_count_offset = num_offset + 4;
         assert_eq!(bytes[children_count_offset], 2);
@@ -821,7 +963,7 @@ mod tests {
             TriggerMethod::TimeInterval.as_u8() | TriggerMethod::OnChange.as_u8()
         );
         let bytes = pd.serialize().unwrap();
-        assert_eq!(bytes[0], TCObjectType::DeviceProcessData.as_u8());
+        assert_eq!(&bytes[0..3], b"DPD");
     }
 
     #[test]
@@ -831,9 +973,9 @@ mod tests {
             .with_ddi(0xABCD)
             .with_value(-42);
         let bytes = p.serialize().unwrap();
-        assert_eq!(bytes[0], TCObjectType::DeviceProperty.as_u8());
-        // value at offset 5..9 (1+2+2+4)
-        let v = i32::from_le_bytes(bytes[5..9].try_into().unwrap());
+        assert_eq!(&bytes[0..3], b"DPT");
+        // value at offset 7..11 (3 + 2 + 2 + 4)
+        let v = i32::from_le_bytes(bytes[7..11].try_into().unwrap());
         assert_eq!(v, -42);
     }
 
@@ -846,11 +988,11 @@ mod tests {
             .with_decimals(3)
             .with_unit("m");
         let bytes = vp.serialize().unwrap();
-        assert_eq!(bytes[0], TCObjectType::DeviceValuePresentation.as_u8());
-        // scale at offset 7..11 (1+2+4)
-        let scale = f32::from_le_bytes(bytes[7..11].try_into().unwrap());
+        assert_eq!(&bytes[0..3], b"DVP");
+        // scale at offset 9..13 (3 + 2 + 4)
+        let scale = f32::from_le_bytes(bytes[9..13].try_into().unwrap());
         assert!((scale - 0.001).abs() < 1e-6);
-        assert_eq!(bytes[11], 3); // decimals
+        assert_eq!(bytes[13], 3); // decimals
     }
 
     #[test]
@@ -896,5 +1038,176 @@ mod tests {
             .with_id(6)
             .with_children((0..=u16::MAX).map(ObjectID).collect::<Vec<_>>());
         assert!(too_many_children.serialize().is_err());
+    }
+
+    /// 6E — ISO 11783-10 Tables A.1-A.5 define the first field of every DDOP
+    /// object record as `Table ID`: `Type = String`, `Size = 3`, record bytes
+    /// 1-3, with values "DVC", "DET", "DPD", "DPT", "DVP". The serializer
+    /// emitted a single numeric byte, so every object was two bytes short and
+    /// the whole pool was unparsable by a conformant Task Controller.
+    #[test]
+    fn every_object_record_opens_with_its_ascii_table_id() {
+        assert_eq!(&TCObjectType::Device.table_id(), b"DVC");
+        assert_eq!(&TCObjectType::DeviceElement.table_id(), b"DET");
+        assert_eq!(&TCObjectType::DeviceProcessData.table_id(), b"DPD");
+        assert_eq!(&TCObjectType::DeviceProperty.table_id(), b"DPT");
+        assert_eq!(&TCObjectType::DeviceValuePresentation.table_id(), b"DVP");
+
+        for (id, expected) in [
+            (&b"DVC"[..], TCObjectType::Device),
+            (b"DET", TCObjectType::DeviceElement),
+            (b"DPD", TCObjectType::DeviceProcessData),
+            (b"DPT", TCObjectType::DeviceProperty),
+            (b"DVP", TCObjectType::DeviceValuePresentation),
+        ] {
+            assert_eq!(TCObjectType::from_table_id(id), Some(expected));
+        }
+
+        // A numeric tag is not a Table ID, and neither is a short slice.
+        assert_eq!(TCObjectType::from_table_id(&[0, 0, 0]), None);
+        assert_eq!(TCObjectType::from_table_id(b"DV"), None);
+        assert_eq!(TCObjectType::from_table_id(b"XXX"), None);
+
+        // And it really is what reaches the wire.
+        let bytes = DeviceObject::default()
+            .with_id(1)
+            .with_designator("X")
+            .serialize()
+            .unwrap();
+        assert_eq!(&bytes[0..3], b"DVC");
+    }
+
+    /// 6E — Table A.1 places `ClientNAME` (Double integer, 8 bytes) between the
+    /// software version and the serial number. It was omitted from the record
+    /// entirely, so every field after the software version sat 8 bytes early
+    /// and a conformant TC read the serial-number length out of the NAME.
+    #[test]
+    fn device_record_carries_the_client_name() {
+        let name = 0x0123_4567_89AB_CDEFu64;
+        let bytes = DeviceObject::default()
+            .with_id(1)
+            .with_designator("D")
+            .with_software_version("v")
+            .with_client_name(name)
+            .with_serial_number("S")
+            .serialize()
+            .unwrap();
+
+        // DVC(3) + id(2) + [1]"D" + [1]"v" = 9 bytes before the NAME.
+        assert_eq!(&bytes[0..3], b"DVC");
+        assert_eq!(
+            u64::from_le_bytes(bytes[9..17].try_into().unwrap()),
+            name,
+            "ClientNAME follows the software version (Table A.1 record byte 7+N)"
+        );
+        // And the serial-number length follows the NAME, not the version.
+        assert_eq!(bytes[17], 1);
+        assert_eq!(bytes[18], b'S');
+    }
+
+    /// 6E — Table A.3 orders the DPD record as Table ID, object ID, DDI,
+    /// **properties**, triggers, designator, then the DVP reference. The
+    /// properties byte was absent entirely (so a TC could not tell a settable
+    /// process datum from a read-only one) and the DVP ID preceded the
+    /// designator, misaligning everything after it.
+    #[test]
+    fn process_data_record_follows_table_a3_order() {
+        let pd = DeviceProcessData::default()
+            .with_id(10)
+            .with_ddi(0x1234)
+            .with_properties(0b011) // default set + settable
+            .with_trigger(TriggerMethod::OnChange)
+            .with_designator("PD1")
+            .with_presentation(0xFFFF);
+        let bytes = pd.serialize().unwrap();
+
+        assert_eq!(&bytes[0..3], b"DPD");
+        assert_eq!(&bytes[3..5], &[10, 0], "object ID");
+        assert_eq!(&bytes[5..7], &[0x34, 0x12], "DDI");
+        assert_eq!(bytes[7], 0b011, "properties at record byte 8");
+        assert_eq!(bytes[8], TriggerMethod::OnChange.as_u8(), "triggers follow");
+        assert_eq!(bytes[9], 3, "then the designator length");
+        assert_eq!(&bytes[10..13], b"PD1");
+        assert_eq!(&bytes[13..15], &[0xFF, 0xFF], "DVP reference last");
+    }
+
+    /// Table A.3 notes that "settable" and "control source" are mutually
+    /// exclusive, and only three bits are defined.
+    #[test]
+    fn process_data_properties_reject_impossible_combinations() {
+        let base = DeviceProcessData::default().with_id(1).with_ddi(1);
+
+        assert!(base.clone().with_properties(0b001).serialize().is_ok());
+        assert!(base.clone().with_properties(0b010).serialize().is_ok());
+        assert!(base.clone().with_properties(0b100).serialize().is_ok());
+
+        // settable + control source
+        assert!(base.clone().with_properties(0b110).serialize().is_err());
+        // reserved bits
+        assert!(base.with_properties(0b1000).serialize().is_err());
+    }
+
+    /// 6E — Table A.4 puts the property designator at record byte 13 and the
+    /// DVP reference at 13+N. The DVP ID used to precede the designator, so
+    /// every field after it was misaligned for a conformant reader.
+    #[test]
+    fn property_record_puts_the_dvp_reference_after_the_designator() {
+        let bytes = DeviceProperty::default()
+            .with_id(20)
+            .with_ddi(0xABCD)
+            .with_value(-42)
+            .with_designator("Prop1")
+            .with_presentation(0x1234)
+            .serialize()
+            .unwrap();
+
+        assert_eq!(&bytes[0..3], b"DPT");
+        assert_eq!(&bytes[3..5], &[20, 0]);
+        assert_eq!(&bytes[5..7], &[0xCD, 0xAB], "DDI");
+        assert_eq!(
+            i32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            -42,
+            "value at record bytes 8-11"
+        );
+        assert_eq!(bytes[11], 5, "designator length at record byte 12");
+        assert_eq!(&bytes[12..17], b"Prop1");
+        assert_eq!(&bytes[17..19], &[0x34, 0x12], "DVP reference last");
+    }
+
+    /// 6E — the Extended Structure Label was introduced in ISO 11783-10
+    /// version 4 and "shall only be used when the versions of the TC and of the
+    /// client are both reported as version 4 or higher". It was missing
+    /// entirely; emitting it unconditionally would be just as wrong.
+    #[test]
+    fn extended_structure_label_is_version_gated() {
+        let device = DeviceObject::default()
+            .with_id(1)
+            .with_designator("D")
+            .with_extended_structure_label(*b"CFG-A");
+
+        // Version 3 must not carry it at all.
+        let v3 = device.serialize_for_version(3).unwrap();
+        assert!(!v3.ends_with(b"CFG-A"));
+
+        // Version 4 carries a length-prefixed array.
+        let v4 = device
+            .serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL)
+            .unwrap();
+        assert_eq!(v4.len(), v3.len() + 1 + 5);
+        assert_eq!(v4[v3.len()], 5, "length prefix");
+        assert!(v4.ends_with(b"CFG-A"));
+
+        // A v4 client not using it reports a length of zero, not an omission.
+        let unused = DeviceObject::default().with_id(1).with_designator("D");
+        let v4_empty = unused
+            .serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL)
+            .unwrap();
+        assert_eq!(*v4_empty.last().unwrap(), 0);
+
+        // 0..=32 bytes is the defined range.
+        let overlong = DeviceObject::default()
+            .with_id(1)
+            .with_extended_structure_label(vec![b'X'; 33]);
+        assert!(overlong.serialize_for_version(4).is_err());
     }
 }

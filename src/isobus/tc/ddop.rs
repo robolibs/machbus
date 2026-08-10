@@ -360,38 +360,38 @@ impl DDOP {
         let mut ddop = Self::default();
         let mut offset = 0usize;
         while offset < data.len() {
-            if offset + 3 > data.len() {
+            // Record bytes 1-3 are the ASCII Table ID, 4-5 the object ID.
+            if offset + 5 > data.len() {
                 return Err(truncated_error());
             }
-            let obj_type_byte = data[offset];
-            let obj_id = ObjectID((data[offset + 1] as u16) | ((data[offset + 2] as u16) << 8));
-            offset += 3;
-            match obj_type_byte {
-                t if t == TCObjectType::Device.as_u8() => {
+            let Some(object_type) = TCObjectType::from_table_id(&data[offset..offset + 3]) else {
+                return Err(Error::with_message(
+                    ErrorCode::PoolValidation,
+                    "unknown TC object table ID in DDOP",
+                ));
+            };
+            let obj_id = ObjectID((data[offset + 3] as u16) | ((data[offset + 4] as u16) << 8));
+            offset += 5;
+            match object_type {
+                TCObjectType::Device => {
                     let dev = parse_device(data, &mut offset, obj_id)?;
                     ddop.devices.push(dev);
                 }
-                t if t == TCObjectType::DeviceElement.as_u8() => {
+                TCObjectType::DeviceElement => {
                     let e = parse_element(data, &mut offset, obj_id)?;
                     ddop.elements.push(e);
                 }
-                t if t == TCObjectType::DeviceProcessData.as_u8() => {
+                TCObjectType::DeviceProcessData => {
                     let pd = parse_process_data(data, &mut offset, obj_id)?;
                     ddop.process_data.push(pd);
                 }
-                t if t == TCObjectType::DeviceProperty.as_u8() => {
+                TCObjectType::DeviceProperty => {
                     let p = parse_property(data, &mut offset, obj_id)?;
                     ddop.properties.push(p);
                 }
-                t if t == TCObjectType::DeviceValuePresentation.as_u8() => {
+                TCObjectType::DeviceValuePresentation => {
                     let vp = parse_value_presentation(data, &mut offset, obj_id)?;
                     ddop.value_presentations.push(vp);
-                }
-                _ => {
-                    return Err(Error::with_message(
-                        ErrorCode::PoolValidation,
-                        "unknown TC object type in DDOP",
-                    ));
                 }
             }
             if obj_id >= ddop.next_id {
@@ -539,17 +539,9 @@ fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
         return Err(truncated_error());
     }
     let bytes = &data[*offset..*offset + len];
-    if !bytes.iter().all(|b| b.is_ascii()) {
-        return Err(Error::with_message(
-            ErrorCode::PoolValidation,
-            "DDOP text contains unsupported non-ASCII bytes",
-        ));
-    }
     let s = core::str::from_utf8(bytes)
-        .map_err(|_| {
-            Error::with_message(ErrorCode::PoolValidation, "DDOP text is not valid UTF-8")
-        })?
-        .to_owned();
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
     *offset += len;
     Ok(s)
 }
@@ -557,6 +549,15 @@ fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
 fn parse_device(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceObject> {
     let designator = read_string(data, offset)?;
     let software_version = read_string(data, offset)?;
+    // ClientNAME (Table A.1): 8 bytes between the software version and the
+    // serial number.
+    if *offset + 8 > data.len() {
+        return Err(truncated_error());
+    }
+    let mut name_bytes = [0u8; 8];
+    name_bytes.copy_from_slice(&data[*offset..*offset + 8]);
+    let client_name = u64::from_le_bytes(name_bytes);
+    *offset += 8;
     let serial_number = read_string(data, offset)?;
     if *offset + 14 > data.len() {
         return Err(truncated_error());
@@ -567,13 +568,25 @@ fn parse_device(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceO
     let mut localization_label = [0u8; 7];
     localization_label.copy_from_slice(&data[*offset..*offset + 7]);
     *offset += 7;
+    // Version 4 appends a length-prefixed Extended Structure Label. A
+    // version-3 pool simply ends here, so its absence is not an error.
+    let mut extended_structure_label = Vec::new();
+    if *offset < data.len() {
+        let len = usize::from(data[*offset]);
+        if len <= 32 && *offset + 1 + len <= data.len() {
+            extended_structure_label.extend_from_slice(&data[*offset + 1..*offset + 1 + len]);
+            *offset += 1 + len;
+        }
+    }
     Ok(DeviceObject {
         id,
         designator,
         software_version,
+        client_name,
         serial_number,
         structure_label,
         localization_label,
+        extended_structure_label,
     })
 }
 
@@ -628,24 +641,47 @@ fn parse_element(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<Device
 }
 
 fn parse_process_data(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceProcessData> {
+    // DDI(2) + properties(1) + triggers(1) + designator length(1).
     if *offset + 5 > data.len() {
         return Err(truncated_error());
     }
     let ddi = DDI((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
+    if ddi.raw() == 0 || ddi.raw() == 0xFFFF {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP process data DDI 0 and 65535 are reserved NULL DDIs",
+        ));
+    }
     *offset += 2;
-    let trigger_methods = data[*offset];
+    // Table A.3 record byte 8.
+    let properties = data[*offset];
     *offset += 1;
+    let trigger_methods = data[*offset];
+    if trigger_methods & 0xE0 != 0 {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP trigger method reserved bits 5..7 must be zero",
+        ));
+    }
+    *offset += 1;
+    // Table A.3: the designator precedes the DVP reference.
+    let designator = read_string(data, offset)?;
+    if *offset + 2 > data.len() {
+        return Err(truncated_error());
+    }
     let presentation_object_id =
         ObjectID((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
     *offset += 2;
-    let designator = read_string(data, offset)?;
-    Ok(DeviceProcessData {
+    let process_data = DeviceProcessData {
         id,
         ddi,
+        properties,
         trigger_methods,
         presentation_object_id,
         designator,
-    })
+    };
+    process_data.validate_properties()?;
+    Ok(process_data)
 }
 
 fn parse_property(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceProperty> {
@@ -653,13 +689,23 @@ fn parse_property(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<Devic
         return Err(truncated_error());
     }
     let ddi = DDI((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
+    if ddi.raw() == 0 || ddi.raw() == 0xFFFF {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP property DDI 0 and 65535 are reserved NULL DDIs",
+        ));
+    }
     *offset += 2;
     let value = i32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap());
     *offset += 4;
+    // Table A.4: designator at record byte 13, DVP reference at 13+N.
+    let designator = read_string(data, offset)?;
+    if *offset + 2 > data.len() {
+        return Err(truncated_error());
+    }
     let presentation_object_id =
         ObjectID((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
     *offset += 2;
-    let designator = read_string(data, offset)?;
     Ok(DeviceProperty {
         id,
         ddi,

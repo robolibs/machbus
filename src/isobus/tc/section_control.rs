@@ -111,6 +111,31 @@ pub fn unpack_condensed_work_state(mask: u16, count: usize) -> Vec<bool> {
     sections
 }
 
+/// Pack up to 256 section boolean states into 16 x 16-bit condensed work state bitmasks
+/// for DDIs 161..176 or 290..305.
+#[must_use]
+pub fn pack_condensed_work_state_256(sections: &[bool]) -> [u16; 16] {
+    let mut masks = [0u16; 16];
+    for (i, &on) in sections.iter().take(256).enumerate() {
+        if on {
+            masks[i / 16] |= 1 << (i % 16);
+        }
+    }
+    masks
+}
+
+/// Unpack 16 x 16-bit condensed work state bitmasks into a boolean vector for `count` sections (max 256).
+#[must_use]
+pub fn unpack_condensed_work_state_256(masks: &[u16; 16], count: usize) -> Vec<bool> {
+    let len = count.min(256);
+    let mut sections = Vec::with_capacity(len);
+    for i in 0..len {
+        let mask = masks[i / 16];
+        sections.push((mask & (1 << (i % 16))) != 0);
+    }
+    sections
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

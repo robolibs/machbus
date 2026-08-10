@@ -481,6 +481,31 @@ impl TimeLogStructure {
         4 + 2 + self.position.byte_len() + self.values.len() * 4
     }
 
+    /// Encode a single binary record into ISO 11783-10 `.BIN` format matching this structure.
+    #[must_use]
+    pub fn encode_record(&self, rec: &TimeLogRecord) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.record_size());
+        out.extend_from_slice(&rec.time_ms.to_le_bytes());
+        out.extend_from_slice(&rec.date_days.to_le_bytes());
+        if self.position.north {
+            out.extend_from_slice(&rec.north_1e7_deg.unwrap_or(0).to_le_bytes());
+        }
+        if self.position.east {
+            out.extend_from_slice(&rec.east_1e7_deg.unwrap_or(0).to_le_bytes());
+        }
+        if self.position.up {
+            out.extend_from_slice(&rec.up_mm.unwrap_or(0).to_le_bytes());
+        }
+        if self.position.status {
+            out.push(rec.status.unwrap_or(0));
+        }
+        for (i, _) in self.values.iter().enumerate() {
+            let val = rec.values.get(i).copied().unwrap_or(0);
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+        out
+    }
+
     /// Decode one binary record (ISO 11783-10 Table 3 field order: time,
     /// date, North/East/Up/Status, then each channel value). Returns `None`
     /// if `data` is shorter than [`record_size`](Self::record_size).

@@ -531,14 +531,16 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.9 reserves only bytes 7-8; bytes 3-6 are the received data
+            // size, so byte 7 is what must be FF for the frame to be canonical.
             vec![
                 tc_cmd::OBJECT_POOL_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
             ],
             0x33,
@@ -561,15 +563,17 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.11 reserves only byte 8; bytes 3-6 are the faulty parent and
+            // object IDs and byte 7 the object-pool error codes.
             vec![
                 tc_cmd::ACTIVATE_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
             ],
             0x33,
         ))
@@ -593,15 +597,16 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.11 again: byte 8 is the only reserved byte.
             vec![
                 tc_cmd::ACTIVATE_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
             ],
             0x33,
         ))

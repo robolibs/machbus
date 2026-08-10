@@ -185,6 +185,21 @@ fn is_padded_fixed8(data: &[u8], used: usize) -> bool {
     data.len() == 8 && has_ff_tail(data, used)
 }
 
+/// B.6.9 Object-pool Transfer Response: byte 2 is the error code and bytes 3-6
+/// carry the received data size, with only bytes 7-8 reserved. Demanding FF
+/// from byte 3 onward rejected every conformant frame, so the pool upload could
+/// never complete against a real TC.
+fn is_object_pool_transfer_response(data: &[u8]) -> bool {
+    is_padded_fixed8(data, 6)
+}
+
+/// B.6.11 Object-pool Activate/Deactivate Response: byte 2 error codes, bytes
+/// 3-4 the parent object ID of the faulty object, bytes 5-6 the faulty object
+/// ID, byte 7 the object-pool error codes, byte 8 reserved.
+fn is_object_pool_activate_response(data: &[u8]) -> bool {
+    is_padded_fixed8(data, 7)
+}
+
 fn version_response_is_canonical(data: &[u8]) -> bool {
     data.len() == 8 && tc_options_byte_is_valid(data[3]) && data[4] == 0x00
 }
@@ -657,7 +672,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForPoolResponse, tc_cmd::OBJECT_POOL_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_transfer_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC object-pool response must be an 8-byte padded frame",
                     ));
@@ -666,7 +681,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForActivation, tc_cmd::ACTIVATE_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_activate_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC activate-pool response must be an 8-byte padded frame",
                     ));
@@ -675,7 +690,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForDeactivation, tc_cmd::ACTIVATE_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_activate_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC deactivate-pool response must be an 8-byte padded frame",
                     ));
@@ -737,7 +752,7 @@ impl TaskControllerClient {
     }
 
     fn handle_deactivate_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_activate_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -828,7 +843,7 @@ impl TaskControllerClient {
     }
 
     fn handle_pool_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_transfer_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -840,7 +855,7 @@ impl TaskControllerClient {
     }
 
     fn handle_activate_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_activate_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -1274,15 +1289,17 @@ mod tests {
 
         c.handle_tc_message(&tc_msg(vec![tc_cmd::OBJECT_POOL_RESPONSE, 0], 0x33));
         assert_eq!(c.state(), TCState::WaitForPoolResponse);
+        // B.6.9 reserves only bytes 7-8; bytes 3-6 carry the received data
+        // size, so a zero there is a conformant frame, not a malformed one.
         let mut bad_pool = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
-        bad_pool[2] = 0x00;
+        bad_pool[6] = 0x00;
         c.handle_tc_message(&tc_msg(bad_pool, 0x33));
         assert_eq!(c.state(), TCState::WaitForPoolResponse);
 
-        c.handle_tc_message(&tc_msg(
-            tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0),
-            0x33,
-        ));
+        // A real TC reports how many bytes it received; that must be accepted.
+        let mut good_pool = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
+        good_pool[2..6].copy_from_slice(&1234u32.to_le_bytes());
+        c.handle_tc_message(&tc_msg(good_pool, 0x33));
         assert_eq!(c.state(), TCState::ActivatePool);
         c.update(1);
         assert_eq!(c.state(), TCState::WaitForActivation);
@@ -1315,6 +1332,56 @@ mod tests {
             0x33,
         ));
         assert_eq!(c.state(), TCState::TransferDDOP);
+    }
+
+    /// C19/C20 — both responses were guarded as "8 bytes, all FF after byte 2",
+    /// which is not what ISO 11783-10 Annex B defines. B.6.9 puts the received
+    /// data size in bytes 3-6 and B.6.11 puts the faulty parent/object IDs in
+    /// bytes 3-6 with the object-pool error codes in byte 7. A conformant TC
+    /// was therefore refused: the pool upload could never complete and the DDOP
+    /// never activated, so the implement stayed permanently unavailable for
+    /// task operation — no section control, no rate control, no logging.
+    #[test]
+    fn conformant_pool_responses_carry_their_annex_b_fields() {
+        let mut c = TaskControllerClient::new(TCClientConfig::default());
+        c.set_ddop(dummy_ddop());
+        c.connect().unwrap();
+        c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+        c.update(1); // Working Set Master.
+        c.update(1); // Version request.
+        c.handle_tc_message(&tc_msg(version_response(4, 1, 4, 0), 0x33));
+        c.update(1);
+        // An all-FF structure label means the TC holds no matching pool.
+        let mut label = [0xFFu8; 8];
+        label[0] = tc_cmd::STRUCTURE_LABEL;
+        c.handle_tc_message(&tc_msg(label.to_vec(), 0x33));
+        assert_eq!(c.state(), TCState::TransferDDOP);
+        c.update(1);
+        assert_eq!(c.state(), TCState::WaitForPoolResponse);
+
+        // B.6.9: error code 0 and a real received-data-size in bytes 3-6.
+        let mut transfer = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
+        transfer[2..6].copy_from_slice(&4096u32.to_le_bytes());
+        c.handle_tc_message(&tc_msg(transfer, 0x33));
+        assert_eq!(
+            c.state(),
+            TCState::ActivatePool,
+            "a transfer response reporting its received size must be accepted"
+        );
+        c.update(1);
+        assert_eq!(c.state(), TCState::WaitForActivation);
+
+        // B.6.11: no errors, so the faulty parent/object IDs are the NULL
+        // object ID (0xFFFF) and the object-pool error codes byte is 0.
+        let mut activate = tc_fixed_response(tc_cmd::ACTIVATE_RESPONSE, 0);
+        activate[2..6].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        activate[6] = 0x00;
+        c.handle_tc_message(&tc_msg(activate, 0x33));
+        assert_eq!(
+            c.state(),
+            TCState::Connected,
+            "an activate response with the B.6.11 fields present must connect"
+        );
     }
 
     #[test]

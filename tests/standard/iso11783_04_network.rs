@@ -182,6 +182,18 @@ fn network_layer_name_scoped_filters_require_observed_address_claims() {
     );
 }
 
+/// ISO 11783-4 lists PGN 60672 as "CF to NIU, Destination-Specific", so a
+/// configuration command must be addressed to the bridge it reconfigures.
+fn niu_control(data: Vec<u8>, source: u8, destination: u8) -> Message {
+    Message::with_addressing(
+        PGN_NIU_NETWORK_MSG,
+        data,
+        source,
+        destination,
+        Priority::Default,
+    )
+}
+
 #[test]
 fn network_layer_persistent_filters_survive_runtime_clear_only() {
     let mut niu = Niu::new(NiuConfig::default());
@@ -199,15 +211,13 @@ fn network_layer_persistent_filters_survive_runtime_clear_only() {
     }
     .encode()
     .unwrap();
-    niu.handle_niu_message(&Message::new(
-        PGN_NIU_NETWORK_MSG,
-        delete_all.to_vec(),
-        0x44,
-    ));
-    assert!(
-        niu.filters().is_empty(),
-        "the explicit network-control delete-all command removes persistent policy too"
+    niu.handle_niu_message(&niu_control(delete_all.to_vec(), 0x44, 0x20));
+    assert_eq!(
+        niu.filters().len(),
+        1,
+        "a remote clear removes runtime rules but not configured persistent policy"
     );
+    assert!(niu.filters()[0].persistent);
 }
 
 #[test]
@@ -290,11 +300,7 @@ fn network_layer_filter_mode_control_gates_default_forwarding_until_allow_rule()
     }
     .encode()
     .unwrap();
-    niu.handle_niu_message(&Message::new(
-        PGN_NIU_NETWORK_MSG,
-        allow_heartbeat.to_vec(),
-        0x44,
-    ));
+    niu.handle_niu_message(&niu_control(allow_heartbeat.to_vec(), 0x44, 0x20));
     assert_eq!(niu.filters().len(), 1);
     assert!(
         niu.process_frame(
@@ -399,11 +405,15 @@ fn network_layer_niu_control_messages_ignore_invalid_sources_before_mutation() {
         "null-destination NIU control metadata must not mutate the filter database"
     );
 
+    // A globally addressed command is not this bridge's to act on either.
     niu.handle_niu_message(&Message::new(
         PGN_NIU_NETWORK_MSG,
         add_filter.to_vec(),
         0x44,
     ));
+    assert!(niu.filters().is_empty());
+
+    niu.handle_niu_message(&niu_control(add_filter.to_vec(), 0x44, 0x20));
     assert_eq!(niu.filters().len(), 1);
     assert_eq!(niu.filters()[0].pgn, PGN_HEARTBEAT);
 }

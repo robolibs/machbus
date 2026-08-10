@@ -290,14 +290,17 @@ fn tecu_facility_payload_requires_complete_fixed_frame_and_reserved_bits() {
     assert_eq!(TractorFacilities::decode(&encoded[..4]), None);
     assert_eq!(TractorFacilities::decode(&encoded[..7]), None);
 
-    let mut bad_byte4_reserved = encoded;
-    bad_byte4_reserved[4] &= 0x3F;
-    assert_eq!(TractorFacilities::decode(&bad_byte4_reserved), None);
+    // B5 / G3 — ISO 11783-7 §5.4. A tractor advertising a facility set the
+    // receiver has never heard of is exactly the case this clause exists for;
+    // rejecting the frame loses every facility bit that *is* understood.
+    let mut reserved_clear = encoded;
+    reserved_clear[4] &= 0x3F;
+    assert_eq!(TractorFacilities::decode(&reserved_clear), Some(facilities));
 
     for index in [5usize, 6, 7] {
-        let mut bad_tail = encoded;
-        bad_tail[index] = 0x00;
-        assert_eq!(TractorFacilities::decode(&bad_tail), None);
+        let mut future_tail = encoded;
+        future_tail[index] = 0x00;
+        assert_eq!(TractorFacilities::decode(&future_tail), Some(facilities));
     }
 }
 

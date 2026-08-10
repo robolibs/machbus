@@ -210,7 +210,12 @@ impl TractorFacilities {
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() != 8 || data[4] & 0xC0 != 0xC0 || data[5..].iter().any(|&b| b != 0xFF) {
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
+        if data.len() != 8 {
             return None;
         }
         let mut f = Self {
@@ -578,18 +583,24 @@ mod tests {
         assert!(TractorFacilities::decode(&[0u8; 9]).is_none());
     }
 
+    /// B5 — ISO 11783-7:2022 §5.4. This PG is the one the standard is most
+    /// explicit about, since a tractor advertising a facility set the receiver
+    /// has never heard of is exactly the forward-compatibility case §5.4 exists
+    /// for. Rejecting the frame loses every facility bit that *is* understood.
     #[test]
-    fn reserved_bytes_and_bits_are_rejected() {
-        let mut bytes = TractorFacilities::default()
+    fn undefined_bits_and_bytes_are_ignored_on_receive() {
+        let good = TractorFacilities::default()
             .with_class3_v2_all()
-            .with_front_v2_all()
-            .encode();
+            .with_front_v2_all();
 
-        bytes[4] &= 0x3F;
-        assert!(TractorFacilities::decode(&bytes).is_none());
+        let mut reserved_bits_clear = good.encode();
+        reserved_bits_clear[4] &= 0x3F;
+        assert_eq!(TractorFacilities::decode(&reserved_bits_clear), Some(good));
 
-        let mut bytes = TractorFacilities::default().encode();
-        bytes[5] = 0x00;
-        assert!(TractorFacilities::decode(&bytes).is_none());
+        let plain = TractorFacilities::default();
+        let mut future_tail = plain.encode();
+        future_tail[5] = 0x00;
+        future_tail[7] = 0x5A;
+        assert_eq!(TractorFacilities::decode(&future_tail), Some(plain));
     }
 }

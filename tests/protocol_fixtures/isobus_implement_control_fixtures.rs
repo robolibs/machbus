@@ -1183,47 +1183,30 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
-    for name in [
-        "malformed_lighting_short3",
-        "malformed_lighting_bad_padding",
-    ] {
-        assert!(
-            LightingState::decode(&parse_named_hex_bytes(
+    assert!(
+        LightingState::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_lighting_short3",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_machine_selected_speed_short4",
-        "malformed_machine_selected_speed_bad_padding",
-        "malformed_machine_selected_speed_reserved_bits",
-    ] {
-        assert!(
-            MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
+        .is_none(),
+        "malformed_lighting_short3 must be rejected"
+    );
+    assert!(
+        MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_machine_selected_speed_short4",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_machine_speed_cmd_short2",
-        "malformed_machine_speed_cmd_bad_padding",
-        "malformed_machine_speed_cmd_reserved_bits",
-    ] {
-        assert!(
-            MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
+        .is_none(),
+        "malformed_machine_selected_speed_short4 must be rejected"
+    );
+    assert!(
+        MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_machine_speed_cmd_short2",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+        .is_none(),
+        "malformed_machine_speed_cmd_short2 must be rejected"
+    );
     let malformed_speed_distance = parse_named_hex_bytes(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "malformed_speed_distance_short7",
@@ -1240,7 +1223,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     );
     for name in [
         "malformed_hitch_status_short3",
-        "malformed_hitch_status_bad_padding",
         "malformed_hitch_status_reserved_bit",
     ] {
         assert!(
@@ -1252,30 +1234,88 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
+    // B5 / G3 — ISO 11783-7 §5.4: "All undefined bits should be received as
+    // 'don't care' (either masked out or ignored). This permits them to be
+    // defined and used in the future without causing any incompatibilities."
+    // These vectors were named "malformed_*_bad_padding" / "_reserved_bits" and
+    // asserted to be *rejected*, which is the opposite of the clause: they are
+    // what a transmitter one revision ahead legitimately sends.
+    assert!(
+        LightingState::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_lighting",
+        ))
+        .is_some(),
+        "a future revision using the reserved tail must still decode"
+    );
     for name in [
-        "malformed_pto_status_short2",
-        "malformed_pto_status_bad_padding",
+        "undefined_bits_machine_selected_speed_tail",
+        "undefined_bits_machine_selected_speed_reserved",
     ] {
         assert!(
-            PtoStatus::decode(
-                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
-                true,
-            )
-            .is_none(),
-            "{name} must be rejected"
+            MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                name,
+            ))
+            .is_some(),
+            "{name} must decode"
         );
     }
     for name in [
-        "malformed_aux_valve_flow_bad_padding",
-        "malformed_aux_valve_flow_bad_reserved_bit",
+        "undefined_bits_machine_speed_cmd_tail",
+        "undefined_bits_machine_speed_cmd_reserved",
+    ] {
+        assert!(
+            MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                name,
+            ))
+            .is_some(),
+            "{name} must decode"
+        );
+    }
+    assert!(
+        HitchStatus::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "undefined_bits_hitch_status_tail",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined_bits_hitch_status_tail must decode"
+    );
+    assert!(
+        PtoStatus::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "undefined_bits_pto_status_tail",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined_bits_pto_status_tail must decode"
+    );
+
+    assert!(
+        PtoStatus::decode(
+                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, "malformed_pto_status_short2"),
+                true,
+            )
+        .is_none(),
+        "malformed_pto_status_short2 must be rejected"
+    );
+    for name in [
+        "undefined_bits_aux_valve_flow_tail",
+        "undefined_bits_aux_valve_flow_reserved",
     ] {
         assert!(
             AuxValveFlowMsg::decode(
                 &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
                 3,
             )
-            .is_none(),
-            "{name} must be rejected"
+            .is_some(),
+            "{name} must decode: undefined bits are don't-care on receive"
         );
     }
     assert!(

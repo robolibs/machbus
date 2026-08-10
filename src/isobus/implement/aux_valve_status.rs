@@ -236,11 +236,12 @@ impl AuxValveFlowMsg {
     /// in the PGN (`base + index`), not in the payload.
     #[must_use]
     pub fn decode(data: &[u8], valve_index: u8) -> Option<Self> {
-        if data.len() != 8
-            || valve_index >= MAX_AUX_VALVES
-            || data[2] & 0x80 != 0x80
-            || data[3..].iter().any(|&byte| byte != 0xFF)
-        {
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
+        if data.len() != 8 || valve_index >= MAX_AUX_VALVES {
             return None;
         }
         let limit_status = ValveLimitStatus::try_from_u8((data[2] >> 2) & 0x07)?;
@@ -405,15 +406,20 @@ mod tests {
         assert!(AuxValveFlowMsg::decode(&[0u8; 9], 0).is_none());
     }
 
+    /// B5 — undefined bits and bytes are ignored on receive (ISO 11783-7:2022 §5.4);
+    /// only the valve index, which is not on the wire at all, is validated.
     #[test]
-    fn decode_rejects_bad_padding_reserved_bit_and_index() {
-        let mut bad_tail = AuxValveFlowMsg::default().encode();
-        bad_tail[3] = 0x00;
-        assert!(AuxValveFlowMsg::decode(&bad_tail, 0).is_none());
+    fn undefined_bits_are_ignored_but_the_index_is_checked() {
+        let good = AuxValveFlowMsg::default();
 
-        let mut bad_reserved_bit = AuxValveFlowMsg::default().encode();
-        bad_reserved_bit[2] &= 0x7F;
-        assert!(AuxValveFlowMsg::decode(&bad_reserved_bit, 0).is_none());
+        let mut future_tail = good.encode();
+        future_tail[3] = 0x00;
+        future_tail[7] = 0x5A;
+        assert_eq!(AuxValveFlowMsg::decode(&future_tail, 0), Some(good));
+
+        let mut reserved_bit_clear = good.encode();
+        reserved_bit_clear[2] &= 0x7F;
+        assert_eq!(AuxValveFlowMsg::decode(&reserved_bit_clear, 0), Some(good));
 
         assert!(
             AuxValveFlowMsg::decode(&AuxValveFlowMsg::default().encode(), MAX_AUX_VALVES).is_none()

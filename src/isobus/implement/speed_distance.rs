@@ -34,10 +34,6 @@ use crate::net::types::Pgn;
 const VALID_MAX_U16_SIGNAL_RAW: u16 = 0xFAFF;
 const VALID_MAX_U32_SIGNAL_RAW: u32 = 0xFAFF_FFFF;
 
-fn has_ff_tail(data: &[u8], used: usize) -> bool {
-    data[used..].iter().all(|&byte| byte == 0xFF)
-}
-
 fn scaled_u16_non_na(value: f64, resolution: f64) -> u16 {
     if !value.is_finite() {
         return 0;
@@ -628,7 +624,10 @@ impl HitchStatus {
     /// was received on the front or rear hitch PGN.
     #[must_use]
     pub fn decode(data: &[u8], is_rear: bool) -> Option<Self> {
-        if data.len() != 8 || data[1] & 0x80 != 0 || !has_ff_tail(data, 4) {
+        // Byte 1 bit 8 is *defined* (the hitch exit code is 3 bits wide), so a
+        // set bit there really is malformed. The tail is not: undefined bytes
+        // are "don't care" on receive (ISO 11783-7 §5.4).
+        if data.len() != 8 || data[1] & 0x80 != 0 {
             return None;
         }
         let force_raw = (data[2] as u16) | ((data[3] as u16) << 8);
@@ -660,8 +659,10 @@ pub struct PtoStatus {
     /// 2 bits: 0 = disengaged, 1 = engaged, 2 = error, 3 = N/A.
     pub engagement: u8,
     pub limit_status: LimitStatus,
-    /// Note: only the low 2 bits are used on the wire here (PTO
-    /// layout, unlike the hitch which uses 3).
+    /// Note: only the low 2 bits are used on the wire here (PTO layout, unlike
+    /// the hitch which uses 3), so `ExitReasonCode::NotAvailable` (7) cannot be
+    /// represented: it encodes as 3 and reads back as `Fault`. Callers that
+    /// need "no exit reason reported" on a PTO have no way to say so.
     pub exit_code: ExitReasonCode,
     /// 2 bits: 0 = not active, 1 = active, 2 = error, 3 = N/A.
     pub economy_mode: u8,
@@ -707,7 +708,12 @@ impl PtoStatus {
 
     #[must_use]
     pub fn decode(data: &[u8], is_rear: bool) -> Option<Self> {
-        if data.len() != 8 || !has_ff_tail(data, 3) {
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
+        if data.len() != 8 {
             return None;
         }
         let rpm = (data[0] as u16) | ((data[1] as u16) << 8);
@@ -959,17 +965,32 @@ mod tests {
         // frame whose reserved bits are set to 1, which is what a conformant
         // transmitter sends, must be rejected. See the dedicated tests below.
 
-        let mut hitch_bad_padding = HitchStatus::default().encode();
-        hitch_bad_padding[4] = 0x00;
-        assert!(HitchStatus::decode(&hitch_bad_padding, true).is_none());
-
+        // B5 — the hitch keeps its byte-1 bit 8 check: that bit is *defined*
+        // (ISO 11783-7 hitch layout uses 3 bits for the exit code), so a set
+        // bit there is a malformed frame rather than a future field.
         let mut hitch_bad_reserved = HitchStatus::default().encode();
         hitch_bad_reserved[1] |= 0x80;
         assert!(HitchStatus::decode(&hitch_bad_reserved, true).is_none());
 
-        let mut pto_bad_padding = PtoStatus::default().encode();
-        pto_bad_padding[3] = 0x00;
-        assert!(PtoStatus::decode(&pto_bad_padding, true).is_none());
+        // Undefined tail bytes are "don't care" on receive (§5.4).
+        let hitch = HitchStatus::default();
+        let mut hitch_future_tail = hitch.encode();
+        hitch_future_tail[4] = 0x00;
+        hitch_future_tail[7] = 0x5A;
+        assert_eq!(HitchStatus::decode(&hitch_future_tail, true), Some(hitch));
+
+        // Compared field-by-field rather than as a whole struct: the PTO exit
+        // code is only 2 bits on the wire, so `NotAvailable` (7) encodes as 3
+        // and reads back as `Fault`. That asymmetry predates this change and is
+        // a modelling gap in `ExitReasonCode`, not a padding question.
+        let pto = PtoStatus {
+            exit_code: ExitReasonCode::SystemCmd,
+            ..PtoStatus::default()
+        };
+        let mut pto_future_tail = pto.encode();
+        pto_future_tail[3] = 0x00;
+        pto_future_tail[7] = 0x5A;
+        assert_eq!(PtoStatus::decode(&pto_future_tail, true), Some(pto));
     }
 
     /// W1 — real Machine Selected Speed frames captured off a tractor's ISOBUS

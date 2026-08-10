@@ -86,22 +86,30 @@ malformed_tractor_control_short1=FF
 malformed_tractor_control_bad_padding=FFFF00FFFFFFFFFF
 malformed_tractor_control_reserved_mode=025AFFFFFFFFFFFF
 malformed_lighting_short3=FFFFFF
-malformed_lighting_bad_padding=D1DFF5FC00FFFFFF
 malformed_machine_selected_speed_short4=FFFFFFFF
-malformed_machine_selected_speed_bad_padding=881300FFD4FFFFFF
-malformed_machine_selected_speed_reserved_bits=8813FFFF14FFFFFF
 malformed_machine_speed_cmd_short2=FFFF
-malformed_machine_speed_cmd_bad_padding=C409FC00FFFFFFFF
-malformed_machine_speed_cmd_reserved_bits=C40900FFFFFFFFFF
 malformed_speed_distance_short7=00000000000000
 malformed_machine_selected_speed_full_reserved_bit=C40940420F004294
 malformed_hitch_status_short3=FA7FFF
-malformed_hitch_status_bad_padding=C815F05500FFFFFF
+# Byte 1 bit 8 is a *defined* bit (the hitch exit code is 3 bits wide), so a
+# set bit there really is a malformed frame.
 malformed_hitch_status_reserved_bit=C895F055FFFFFFFF
+
+# ISO 11783-7 §5.4: "All undefined bits should be received as 'don't care'."
+# These were named "malformed" and asserted to be rejected, which is the
+# opposite of what the clause says — they are what a transmitter one revision
+# ahead legitimately puts on the wire, and every one of them must decode.
+undefined_bits_lighting=D1DFF5FC00FFFFFF
+undefined_bits_machine_selected_speed_tail=881300FFD4FFFFFF
+undefined_bits_machine_selected_speed_reserved=8813FFFF14FFFFFF
+undefined_bits_machine_speed_cmd_tail=C409FC00FFFFFFFF
+undefined_bits_machine_speed_cmd_reserved=C40900FFFFFFFFFF
+undefined_bits_hitch_status_tail=C815F05500FFFFFF
+undefined_bits_aux_valve_flow_tail=C832A500FFFFFFFF
+undefined_bits_aux_valve_flow_reserved=C83225FFFFFFFFFF
+undefined_bits_pto_status_tail=E010E100FFFFFFFF
 malformed_pto_status_short2=FEFF
-malformed_pto_status_bad_padding=E010E100FFFFFFFF
-malformed_aux_valve_flow_bad_padding=C832A500FFFFFFFF
-malformed_aux_valve_flow_bad_reserved_bit=C83225FFFFFFFFFF
+
 malformed_guidance_curvature_bad_padding=827D00FFFFFFFFFF
 malformed_guidance_machine_bad_padding=767D45605B00FFFF
 malformed_guidance_machine_reserved_control_bits=767D45615BFFFFFF

@@ -492,9 +492,14 @@ fn implement_aux_valve_and_machine_speed_reject_reserved_payload_bits() {
         Some(selected)
     );
 
-    let mut bad_reserved = selected_bytes;
-    bad_reserved[4] &= 0x3F;
-    assert_eq!(MachineSelectedSpeedMsg::decode(&bad_reserved), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = selected_bytes;
+    reserved_clear[4] &= 0x3F;
+    assert_eq!(
+        MachineSelectedSpeedMsg::decode(&reserved_clear),
+        Some(selected)
+    );
 
     let command = MachineSpeedCommandMsg::default()
         .with_speed_mps(2.5)
@@ -528,13 +533,15 @@ fn implement_machine_speed_command_rejects_noncanonical_shape_without_losing_sen
         MachineDirection::NotAvailable
     );
 
-    let mut bad_reserved_bits = encoded;
-    bad_reserved_bits[2] &= 0x03;
-    assert_eq!(MachineSpeedCommandMsg::decode(&bad_reserved_bits), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = encoded;
+    reserved_clear[2] &= 0x03;
+    assert!(MachineSpeedCommandMsg::decode(&reserved_clear).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(MachineSpeedCommandMsg::decode(&bad_tail), None);
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(MachineSpeedCommandMsg::decode(&future_tail).is_some());
 }
 
 #[test]
@@ -557,14 +564,17 @@ fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
         assert_eq!(AuxValveFlowMsg::decode(&bad_limit, 3), None);
     }
 
-    let mut bad_reserved_bit = encoded;
-    bad_reserved_bit[2] &= 0x7F;
-    assert_eq!(AuxValveFlowMsg::decode(&bad_reserved_bit, 3), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = encoded;
+    reserved_clear[2] &= 0x7F;
+    assert!(AuxValveFlowMsg::decode(&reserved_clear, 3).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[7] = 0x00;
-    assert_eq!(AuxValveFlowMsg::decode(&bad_tail, 3), None);
+    let mut future_tail = encoded;
+    future_tail[7] = 0x00;
+    assert!(AuxValveFlowMsg::decode(&future_tail, 3).is_some());
 
+    // The valve index is not on the wire, so it is still validated.
     assert_eq!(AuxValveFlowMsg::decode(&encoded, 16), None);
 }
 
@@ -844,9 +854,11 @@ fn implement_lighting_state_rejects_non_canonical_fixed_frames() {
     assert_eq!(LightingState::decode(&encoded), Some(lighting));
     assert_eq!(LightingState::decode(&encoded[..7]), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[4] = 0x00;
-    assert_eq!(LightingState::decode(&bad_tail), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut future_tail = encoded;
+    future_tail[4] = 0x00;
+    assert_eq!(LightingState::decode(&future_tail), Some(lighting));
 }
 
 #[test]
@@ -969,13 +981,17 @@ fn implement_hitch_status_rejects_reserved_exit_codes_without_payload_slop() {
         assert_eq!(HitchStatus::decode(&bad_exit, true), None);
     }
 
+    // Byte 1 bit 8 is a *defined* bit — the hitch exit code is 3 bits wide —
+    // so a set bit there is genuinely malformed and stays rejected.
     let mut bad_reserved_bit = encoded;
     bad_reserved_bit[1] |= 0x80;
     assert_eq!(HitchStatus::decode(&bad_reserved_bit, true), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[4] = 0x00;
-    assert_eq!(HitchStatus::decode(&bad_tail, true), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut future_tail = encoded;
+    future_tail[4] = 0x00;
+    assert!(HitchStatus::decode(&future_tail, true).is_some());
 }
 
 #[test]

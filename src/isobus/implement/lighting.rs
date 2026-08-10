@@ -106,7 +106,12 @@ impl LightingState {
     /// Decode from a classic 8-byte payload.
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() != 8 || data[4..].iter().any(|&byte| byte != 0xFF) {
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
+        if data.len() != 8 {
             return None;
         }
         Some(Self {
@@ -293,10 +298,20 @@ mod tests {
         assert!(LightingState::decode(&[0u8; 9]).is_none());
     }
 
+    /// B5 — ISO 11783-7:2022 §5.4 makes undefined bits "don't care" on receive so
+    /// they can be assigned later without breaking deployed receivers. This
+    /// used to assert the opposite: that a tail of anything but 0xFF is a
+    /// decode failure, which rejects any transmitter one revision ahead.
     #[test]
-    fn decode_rejects_bad_reserved_tail() {
-        let mut bytes = LightingState::default().encode();
+    fn undefined_tail_bytes_are_ignored_on_receive() {
+        let good = LightingState::default();
+        let mut bytes = good.encode();
         bytes[4] = 0x00;
-        assert!(LightingState::decode(&bytes).is_none());
+        bytes[7] = 0x5A;
+        assert_eq!(
+            LightingState::decode(&bytes),
+            Some(good),
+            "a future revision using the reserved tail must still decode"
+        );
     }
 }

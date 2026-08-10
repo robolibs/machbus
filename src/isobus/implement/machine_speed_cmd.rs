@@ -212,13 +212,11 @@ impl MachineSelectedSpeedMsg {
         if data.len() != 8 {
             return None;
         }
-        if data[2] != 0xFF
-            || data[3] != 0xFF
-            || data[4] & 0xC0 != 0xC0
-            || data[5..].iter().any(|&byte| byte != 0xFF)
-        {
-            return None;
-        }
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
         Some(Self {
             speed_raw: (data[0] as u16) | ((data[1] as u16) << 8),
             direction: MachineDirection::try_from_u8(data[4] & 0x03)?,
@@ -282,9 +280,9 @@ impl MachineSpeedCommandMsg {
         if data.len() != 8 {
             return None;
         }
-        if data[2] & 0xFC != 0xFC || data[3..].iter().any(|&byte| byte != 0xFF) {
-            return None;
-        }
+        // Undefined bits and bytes are "don't care" on receive (§5.4); the
+        // defined two bits of byte 2 are masked out below.
+        
         Some(Self {
             target_speed_raw: (data[0] as u16) | ((data[1] as u16) << 8),
             direction_cmd: MachineDirection::try_from_u8(data[2] & 0x03)?,
@@ -396,24 +394,44 @@ mod tests {
 
     #[test]
     fn decoders_reject_bad_reserved_padding_and_bits() {
-        let mut status_bad_reserved_byte = MachineSelectedSpeedMsg::default().encode();
-        status_bad_reserved_byte[2] = 0x00;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_reserved_byte).is_none());
+        // B5 — ISO 11783-7 §5.4: undefined bits and bytes are "don't care" on
+        // receive. Every case below used to be asserted as a decode failure.
+        let status = MachineSelectedSpeedMsg::default();
 
-        let mut status_bad_reserved_bits = MachineSelectedSpeedMsg::default().encode();
-        status_bad_reserved_bits[4] &= 0x3F;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_reserved_bits).is_none());
+        let mut reserved_byte_zeroed = status.encode();
+        reserved_byte_zeroed[2] = 0x00;
+        reserved_byte_zeroed[3] = 0x00;
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&reserved_byte_zeroed),
+            Some(status)
+        );
 
-        let mut status_bad_tail = MachineSelectedSpeedMsg::default().encode();
-        status_bad_tail[5] = 0x00;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_tail).is_none());
+        let mut reserved_bits_clear = status.encode();
+        reserved_bits_clear[4] &= 0x3F;
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&reserved_bits_clear),
+            Some(status)
+        );
 
-        let mut command_bad_reserved_bits = MachineSpeedCommandMsg::default().encode();
-        command_bad_reserved_bits[2] &= 0x03;
-        assert!(MachineSpeedCommandMsg::decode(&command_bad_reserved_bits).is_none());
+        let mut future_tail = status.encode();
+        future_tail[5] = 0x00;
+        future_tail[7] = 0x5A;
+        assert_eq!(MachineSelectedSpeedMsg::decode(&future_tail), Some(status));
 
-        let mut command_bad_tail = MachineSpeedCommandMsg::default().encode();
-        command_bad_tail[3] = 0x00;
-        assert!(MachineSpeedCommandMsg::decode(&command_bad_tail).is_none());
+        let command = MachineSpeedCommandMsg::default();
+        let mut command_reserved_clear = command.encode();
+        command_reserved_clear[2] &= 0x03;
+        assert_eq!(
+            MachineSpeedCommandMsg::decode(&command_reserved_clear),
+            Some(command)
+        );
+
+        let mut command_future_tail = command.encode();
+        command_future_tail[3] = 0x00;
+        command_future_tail[7] = 0x5A;
+        assert_eq!(
+            MachineSpeedCommandMsg::decode(&command_future_tail),
+            Some(command)
+        );
     }
 }

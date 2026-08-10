@@ -89,19 +89,43 @@ impl HeartbeatCounter {
         }
     }
 
-    /// Validate `self` as the successor of `previous` (§5.3.3.1.2).
+    /// Judge **sequence continuity only** (§5.3.3.1.2).
     ///
     /// A counter that repeats, goes backwards, or jumps by more than 3 is a
     /// severe communication error rather than a missed frame.
+    ///
+    /// The special values are conditions rather than sequence positions, so
+    /// they are not sequence errors and this returns `true` for them. That is
+    /// not the same as "healthy": `0xFE` and `0xFF` carry their own obligations
+    /// and are classified by [`is_severe_comms_error`](Self::is_severe_comms_error)
+    /// and [`is_graceful_shutdown_edge`](Self::is_graceful_shutdown_edge). Using
+    /// `follows` alone as the health check treated a peer explicitly declaring
+    /// its own fault as a peer in good order.
     #[must_use]
     pub fn follows(self, previous: Self) -> bool {
         let (Self::Count(now), Self::Count(before)) = (self, previous) else {
-            // Special values are conditions, not sequence positions.
             return true;
         };
         let span = u16::from(HEARTBEAT_ROLLOVER) + 1;
         let delta = (u16::from(now) + span - u16::from(before)) % span;
         (1..=3).contains(&delta)
+    }
+
+    /// §5.3.3.1.2: "If the Heartbeat counter value in the currently received
+    /// message is 'Invalid' or 'Error condition on sender', then the recipient
+    /// shall treat it as a severe communication error and handle it as defined
+    /// in 5.3.3."
+    #[must_use]
+    pub const fn is_severe_comms_error(self) -> bool {
+        matches!(self, Self::SenderError)
+    }
+
+    /// §5.3.3.1.2: a transition *into* "Graceful shutdown" — the peer is
+    /// stopping deliberately, so communication stops with it rather than
+    /// escalating as a fault. A repeat of the same value is not a new edge.
+    #[must_use]
+    pub const fn is_graceful_shutdown_edge(self, previous: Self) -> bool {
+        matches!(self, Self::GracefulShutdown) && !matches!(previous, Self::GracefulShutdown)
     }
 }
 
@@ -359,6 +383,39 @@ impl TimClientStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D6 — AEF §5.3.3.1.2: "If the Heartbeat counter value in the currently
+    /// received message is 'Invalid' or 'Error condition on sender', then the
+    /// recipient shall treat it as a severe communication error"; and a
+    /// transition into "Graceful shutdown" stops communication with that peer.
+    ///
+    /// `follows` was the module's only stated implementation of that clause and
+    /// returns `true` for both, because they are conditions rather than
+    /// sequence positions — so a TIM server in a self-declared fault state read
+    /// as healthy and kept its client commanding it.
+    #[test]
+    fn special_counters_are_conditions_not_healthy_sequence_positions() {
+        let ok = HeartbeatCounter::Count(4);
+
+        // Still true: they are not *sequence* errors.
+        assert!(HeartbeatCounter::SenderError.follows(ok));
+        assert!(HeartbeatCounter::GracefulShutdown.follows(ok));
+
+        // But they are not healthy either.
+        assert!(HeartbeatCounter::SenderError.is_severe_comms_error());
+        assert!(!HeartbeatCounter::GracefulShutdown.is_severe_comms_error());
+        assert!(!ok.is_severe_comms_error());
+        assert!(!HeartbeatCounter::Reset.is_severe_comms_error());
+
+        // Shutdown is an edge: the first one acts, a repeat does not.
+        assert!(HeartbeatCounter::GracefulShutdown.is_graceful_shutdown_edge(ok));
+        assert!(
+            !HeartbeatCounter::GracefulShutdown
+                .is_graceful_shutdown_edge(HeartbeatCounter::GracefulShutdown),
+            "a repeated shutdown value is not a new transition"
+        );
+        assert!(!ok.is_graceful_shutdown_edge(HeartbeatCounter::GracefulShutdown));
+    }
 
     #[test]
     fn heartbeat_counter_rolls_over_at_fa_not_ff() {

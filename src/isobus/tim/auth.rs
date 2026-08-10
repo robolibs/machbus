@@ -420,7 +420,22 @@ pub enum AuthState {
 /// itself from the ECDH shared secret and the challenge it issued. The caller
 /// supplies only the peer's answer, so a caller cannot accidentally (or
 /// deliberately) authenticate itself.
+/// Which side of the TIM handshake this instance is.
+///
+/// AEF §4.4.5.4 splits the derived key into a client-to-server half and a
+/// server-to-client half. Which half a peer signs with is fixed by its *role*,
+/// not by anything negotiated: a conformant server always signs with the
+/// server-to-client half and a conformant client with the other. Deriving the
+/// split from the challenge bytes instead — as this used to — agreed with
+/// another machbus node but with a conformant peer only about half the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimRole {
+    Client,
+    Server,
+}
+
 pub struct TimAuthentication {
+    role: TimRole,
     state: AuthState,
     secret: Option<StaticSecret>,
     shared: Option<[u8; 32]>,
@@ -453,8 +468,31 @@ impl Default for TimAuthentication {
 
 impl TimAuthentication {
     #[must_use]
+    /// A client-side authentication. See [`TimAuthentication::new_server`].
+    #[must_use]
     pub fn new() -> Self {
+        Self::with_role(TimRole::Client)
+    }
+
+    /// A server-side authentication.
+    ///
+    /// The role decides which half of the derived key this side signs with
+    /// (§4.4.5.4), so it must match what the peer expects.
+    #[must_use]
+    pub fn new_server() -> Self {
+        Self::with_role(TimRole::Server)
+    }
+
+    /// This side's role in the handshake.
+    #[must_use]
+    pub const fn role(&self) -> TimRole {
+        self.role
+    }
+
+    #[must_use]
+    fn with_role(role: TimRole) -> Self {
         Self {
+            role,
             state: AuthState::Unauthenticated,
             secret: None,
             shared: None,
@@ -580,9 +618,10 @@ impl TimAuthentication {
             return Err(AuthError::ChallengesDoNotMatch);
         }
         // Both sides must derive the same pair, so the challenges are mixed in
-        // a canonical order rather than "mine then theirs".
-        let own_first = self.own_challenge < self.peer_challenge;
-        let (first, second) = if own_first {
+        // a canonical order rather than "mine then theirs". This ordering is
+        // only about agreeing on the *input*; it must not decide which half
+        // each side signs with — see the role split below.
+        let (first, second) = if self.own_challenge < self.peer_challenge {
             (&self.own_challenge, &self.peer_challenge)
         } else {
             (&self.peer_challenge, &self.own_challenge)
@@ -600,13 +639,13 @@ impl TimAuthentication {
         let mut high = [0u8; 16];
         low.copy_from_slice(&derived[..16]);
         high.copy_from_slice(&derived[16..]);
-        // The halves are assigned to opposite directions on the two peers, so
-        // the key that authenticates A to B is never the one that
-        // authenticates B to A.
-        if own_first {
-            Ok((low, high))
-        } else {
-            Ok((high, low))
+        // §4.4.5.4: "one key is used for server-to-client authentication ...
+        // the other key is used for client-to-server authentication". The half
+        // a side signs with follows from its role, so a conformant peer and
+        // this one always agree. Returns (outbound, inbound).
+        match self.role {
+            TimRole::Client => Ok((low, high)),
+            TimRole::Server => Ok((high, low)),
         }
     }
 
@@ -731,8 +770,10 @@ mod tests {
     /// signed DER chain is not what these tests are about; that the gate exists
     /// at all is covered by `key_agreement_requires_certificate_validation`.
     fn agreed_pair() -> (TimAuthentication, TimAuthentication) {
+        // §4.4.5.4 splits the derived key by role, so a handshake needs one of
+        // each: two clients would both sign with the client-to-server half.
         let mut a = TimAuthentication::new();
-        let mut b = TimAuthentication::new();
+        let mut b = TimAuthentication::new_server();
         a.state = AuthState::CertificatesExchanged;
         b.state = AuthState::CertificatesExchanged;
         let a_public = a.begin_key_agreement([7u8; 32]);
@@ -993,9 +1034,10 @@ mod tests {
         let anchor = vector("root_spki");
         let crl = CertificateRevocationList::new();
 
-        // The genuine chain verifies.
+        // The genuine chain verifies. Its device certificate carries the
+        // Curve25519 key F.2.2 mandates, which `accept_chain` now also binds.
         let root = vector("root");
-        let device = vector("device");
+        let device = vector("x25519_device");
         let good = CertificateChain::parse_der(&[&root, &device]).expect("a real chain parses");
         good.check_issuer_linkage().expect("names link");
         let mut auth = TimAuthentication::new();
@@ -1084,6 +1126,55 @@ mod tests {
         assert_eq!(
             rsa_chain.device_x25519_public_key(),
             Err(AuthError::EccPublicKeyValidationFailed)
+        );
+    }
+
+    /// D5 — AEF §4.4.5.4: "one key is used for server-to-client authentication
+    /// (ECDH.sharedKey.Server_to_Client); the other key is used for
+    /// client-to-server authentication".
+    ///
+    /// Which half a side signs with follows from its **role**. This used to be
+    /// decided by a lexicographic comparison of the two random challenges, so
+    /// two machbus nodes always agreed with each other and a conformant peer
+    /// agreed only when the random bytes happened to sort the right way — about
+    /// half of all handshakes.
+    #[test]
+    fn the_key_halves_are_split_by_role_not_by_challenge_bytes() {
+        fn halves(role: TimRole, own: &[u8], peer: &[u8]) -> ([u8; 16], [u8; 16]) {
+            let mut auth = TimAuthentication::with_role(role);
+            auth.state = AuthState::KeyAgreed;
+            auth.shared = Some([0x42; 32]);
+            auth.own_challenge = own.to_vec();
+            auth.peer_challenge = peer.to_vec();
+            auth.directional_keys().unwrap()
+        }
+
+        // Two challenge pairs that sort in opposite directions.
+        let low = [0x01u8; 32];
+        let high = [0xFEu8; 32];
+
+        for (own, peer) in [(&low, &high), (&high, &low)] {
+            let client = halves(TimRole::Client, own, peer);
+            // The server sees the same pair from the other side.
+            let server = halves(TimRole::Server, peer, own);
+
+            assert_eq!(
+                client.0, server.1,
+                "what the client signs with is what the server verifies with"
+            );
+            assert_eq!(
+                client.1, server.0,
+                "and the other direction uses the other half"
+            );
+            assert_ne!(client.0, client.1, "the two directions must differ");
+        }
+
+        // The client half does not depend on how the challenges sort.
+        let a = halves(TimRole::Client, &low, &high);
+        let b = halves(TimRole::Client, &high, &low);
+        assert_eq!(
+            a.0, b.0,
+            "a client always signs with the client-to-server half"
         );
     }
 

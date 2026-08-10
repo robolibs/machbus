@@ -10,6 +10,7 @@
 
 use alloc::vec::Vec;
 
+use super::messages::HeartbeatCounter;
 use super::functions::TimFunctionId;
 
 /// Message code shared by request and response (A.2.3).
@@ -272,6 +273,34 @@ impl AssignmentTable {
         self.liveness.retain(|(a, _)| *a != client);
     }
 
+    /// Route a client's heartbeat counter to the §5.3.3.1.2 outcome it demands.
+    ///
+    /// `follows` alone judges sequence continuity, and the special values are
+    /// not sequence positions — so a peer explicitly reporting "error condition
+    /// on sender" (0xFE), or one announcing a graceful shutdown (0xFF), read as
+    /// a peer in good order and kept its assignments. Both must release.
+    ///
+    /// Returns `true` if the client's assignments were released.
+    pub fn note_client_heartbeat(
+        &mut self,
+        client: u8,
+        counter: HeartbeatCounter,
+        previous: HeartbeatCounter,
+    ) -> bool {
+        if counter.is_severe_comms_error() || !counter.follows(previous) {
+            self.note_client_heartbeat_error(client);
+            return true;
+        }
+        if counter.is_graceful_shutdown_edge(previous) {
+            // A deliberate stop, not a fault: release, but do not escalate.
+            self.release_all(client);
+            self.liveness.retain(|(a, _)| *a != client);
+            return true;
+        }
+        self.note_client_status(client);
+        false
+    }
+
     /// Advance the per-client status watchdogs. Returns the clients whose
     /// assignments were released because their status message timed out.
     pub fn tick(&mut self, elapsed_ms: u32) -> Vec<u8> {
@@ -444,6 +473,47 @@ mod tests {
     /// H69 — §4.3 makes successful mutual authentication the precondition for
     /// TIM automation. The table handed out External Guidance and Vehicle Speed
     /// — steering and throttle — to any address that asked.
+    /// D6 — the routing side of §5.3.3.1.2: a self-declared sender error and a
+    /// graceful shutdown both release the client's assignments, where before
+    /// only a broken *sequence* did.
+    #[test]
+    fn a_declared_sender_error_releases_assignments() {
+        use super::super::messages::HeartbeatCounter;
+
+        let mut table = AssignmentTable::new(&[TimFunctionId::VehicleSpeed]);
+        table.note_client_status(0x26);
+
+        // A healthy step keeps everything.
+        assert!(!table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::Count(1),
+            HeartbeatCounter::Count(0)
+        ));
+
+        // The peer declares its own fault.
+        assert!(
+            table.note_client_heartbeat(
+                0x26,
+                HeartbeatCounter::SenderError,
+                HeartbeatCounter::Count(1)
+            ),
+            "0xFE is a severe communication error, not a healthy heartbeat"
+        );
+
+        // And a deliberate shutdown also releases, on the transition only.
+        table.note_client_status(0x26);
+        assert!(table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::GracefulShutdown,
+            HeartbeatCounter::Count(2)
+        ));
+        assert!(!table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::GracefulShutdown,
+            HeartbeatCounter::GracefulShutdown
+        ));
+    }
+
     #[test]
     fn an_unauthenticated_client_is_refused_every_function() {
         let mut table = AssignmentTable::new(&[

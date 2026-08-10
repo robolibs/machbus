@@ -8,6 +8,12 @@
 //!
 //! The C++ `MachineSpeedInterface` is intentionally not ported.
 
+/// Origin of the machine-selected speed (ISO 11783-9 §4.4.2.8).
+///
+/// This is a **3-bit** field. Read as 2 bits, raw 4 (`Simulated`) aliases to
+/// `WheelBased` and raw 7 (`NotAvailable`) aliases to `Blended` — an autonomy
+/// controller would then close its loop on a test-bench or absent speed
+/// believing it came from the wheels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum SpeedSource {
@@ -16,16 +22,21 @@ pub enum SpeedSource {
     GroundBased = 1,
     NavigationBased = 2,
     Blended = 3,
+    /// Bench/spoofed speed. Never close a control loop on this.
+    Simulated = 4,
+    NotAvailable = 7,
 }
 
 impl SpeedSource {
     #[must_use]
     pub const fn from_u8(v: u8) -> Self {
-        match v & 0x03 {
+        match v & 0x07 {
             0 => Self::WheelBased,
             1 => Self::GroundBased,
             2 => Self::NavigationBased,
-            _ => Self::Blended,
+            3 => Self::Blended,
+            4 => Self::Simulated,
+            _ => Self::NotAvailable,
         }
     }
 
@@ -36,8 +47,17 @@ impl SpeedSource {
             1 => Some(Self::GroundBased),
             2 => Some(Self::NavigationBased),
             3 => Some(Self::Blended),
+            4 => Some(Self::Simulated),
+            7 => Some(Self::NotAvailable),
             _ => None,
         }
+    }
+
+    /// `true` when the value does not describe real motion of this machine, so
+    /// a controller must not treat it as feedback.
+    #[must_use]
+    pub const fn is_trustworthy_for_control(self) -> bool {
+        !matches!(self, Self::Simulated | Self::NotAvailable)
     }
 
     #[inline]

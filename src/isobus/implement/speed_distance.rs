@@ -56,6 +56,94 @@ fn u16_signal_raw_is_valid(raw: u16) -> bool {
     raw <= VALID_MAX_U16_SIGNAL_RAW
 }
 
+/// A J1939 measured parameter, which carries three distinct outcomes the wire
+/// keeps separate: a real measurement, the transmitter reporting its own fault,
+/// and the parameter simply not being provided.
+///
+/// Collapsing these into a decode failure — as this module used to — makes a
+/// faulted sensor indistinguishable from an unplugged bus, and drops the whole
+/// PG (including its other, valid fields) whenever one parameter is absent.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Signal<T> {
+    /// A real measurement.
+    Value(T),
+    /// The transmitter reports it cannot measure this parameter (error range).
+    Error,
+    /// The transmitter does not provide this parameter at all.
+    #[default]
+    NotAvailable,
+}
+
+impl<T: Copy> Signal<T> {
+    /// The measurement, or `None` for error / not-available.
+    #[must_use]
+    pub const fn value(self) -> Option<T> {
+        match self {
+            Self::Value(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_error(self) -> bool {
+        matches!(self, Self::Error)
+    }
+
+    #[must_use]
+    pub const fn is_not_available(self) -> bool {
+        matches!(self, Self::NotAvailable)
+    }
+
+    /// The measurement, or `fallback` when it is not a real value. Use only
+    /// where a substituted number cannot be mistaken for a measurement.
+    #[must_use]
+    pub fn unwrap_or(self, fallback: T) -> T {
+        self.value().unwrap_or(fallback)
+    }
+}
+
+impl<T> From<T> for Signal<T> {
+    fn from(value: T) -> Self {
+        Self::Value(value)
+    }
+}
+
+/// Split a 16-bit raw signal into value / error / not-available.
+/// Reserved raws (0xFB00..=0xFDFF) are the only genuine decode failure.
+fn u16_signal(raw: u16, resolution: f64) -> Option<Signal<f64>> {
+    match raw {
+        0..=VALID_MAX_U16_SIGNAL_RAW => Some(Signal::Value(f64::from(raw) * resolution)),
+        0xFE00..=0xFEFF => Some(Signal::Error),
+        0xFF00..=0xFFFF => Some(Signal::NotAvailable),
+        _ => None,
+    }
+}
+
+fn u32_signal(raw: u32, resolution: f64) -> Option<Signal<f64>> {
+    match raw {
+        0..=VALID_MAX_U32_SIGNAL_RAW => Some(Signal::Value(raw as f64 * resolution)),
+        0xFE00_0000..=0xFEFF_FFFF => Some(Signal::Error),
+        0xFF00_0000..=0xFFFF_FFFF => Some(Signal::NotAvailable),
+        _ => None,
+    }
+}
+
+fn encode_u16_signal(signal: Signal<f64>, resolution: f64) -> u16 {
+    match signal {
+        Signal::Value(v) => scaled_u16_non_na(v, resolution),
+        Signal::Error => 0xFE00,
+        Signal::NotAvailable => 0xFFFF,
+    }
+}
+
+fn encode_u32_signal(signal: Signal<f64>, resolution: f64) -> u32 {
+    match signal {
+        Signal::Value(v) => scaled_u32_bounded(v, resolution),
+        Signal::Error => 0xFE00_0000,
+        Signal::NotAvailable => 0xFFFF_FFFF,
+    }
+}
+
 fn scaled_u32_bounded(value: f64, resolution: f64) -> u32 {
     if !value.is_finite() {
         return 0;
@@ -68,10 +156,6 @@ fn scaled_u32_bounded(value: f64, resolution: f64) -> u32 {
     } else {
         raw as u32
     }
-}
-
-fn u32_signal_raw_is_valid(raw: u32) -> bool {
-    raw <= VALID_MAX_U32_SIGNAL_RAW
 }
 
 fn percent_raw_is_available_or_not_available(raw: u8) -> bool {
@@ -110,9 +194,9 @@ pub fn wheel_slip_percent(wheel_speed_mps: f64, ground_speed_mps: f64) -> Option
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WheelBasedSpeedDist {
     /// `0.001 m/s` per bit (2 bytes).
-    pub speed_mps: f64,
+    pub speed_mps: Signal<f64>,
     /// `0.001 m` per bit (4 bytes, total accumulated).
-    pub distance_m: f64,
+    pub distance_m: Signal<f64>,
     pub direction: MachineDirection,
     /// Maximum tractor power-on time, minutes; `0xFF` = N/A.
     pub max_power_time_min: u8,
@@ -128,8 +212,8 @@ pub struct WheelBasedSpeedDist {
 impl Default for WheelBasedSpeedDist {
     fn default() -> Self {
         Self {
-            speed_mps: 0.0,
-            distance_m: 0.0,
+            speed_mps: Signal::NotAvailable,
+            distance_m: Signal::NotAvailable,
             direction: MachineDirection::NotAvailable,
             max_power_time_min: 0xFF,
             key_switch_state: 0x03,
@@ -143,10 +227,10 @@ impl WheelBasedSpeedDist {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let spd = scaled_u16_non_na(self.speed_mps, 0.001);
+        let spd = encode_u16_signal(self.speed_mps, 0.001);
         data[0] = (spd & 0xFF) as u8;
         data[1] = ((spd >> 8) & 0xFF) as u8;
-        let dist = scaled_u32_bounded(self.distance_m, 0.001);
+        let dist = encode_u32_signal(self.distance_m, 0.001);
         data[2] = (dist & 0xFF) as u8;
         data[3] = ((dist >> 8) & 0xFF) as u8;
         data[4] = ((dist >> 16) & 0xFF) as u8;
@@ -169,12 +253,11 @@ impl WheelBasedSpeedDist {
             | ((data[3] as u32) << 8)
             | ((data[4] as u32) << 16)
             | ((data[5] as u32) << 24);
-        if !u16_signal_raw_is_valid(spd) || !u32_signal_raw_is_valid(dist) {
-            return None;
-        }
+        let speed_mps = u16_signal(spd, 0.001)?;
+        let distance_m = u32_signal(dist, 0.001)?;
         Some(Self {
-            speed_mps: spd as f64 * 0.001,
-            distance_m: dist as f64 * 0.001,
+            speed_mps,
+            distance_m,
             direction: MachineDirection::try_from_u8(data[7] & 0x03)?,
             max_power_time_min: data[6],
             key_switch_state: (data[7] >> 2) & 0x03,
@@ -190,17 +273,17 @@ impl WheelBasedSpeedDist {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GroundBasedSpeedDist {
     /// `0.001 m/s` per bit.
-    pub speed_mps: f64,
+    pub speed_mps: Signal<f64>,
     /// `0.001 m` per bit (total accumulated).
-    pub distance_m: f64,
+    pub distance_m: Signal<f64>,
     pub direction: MachineDirection,
 }
 
 impl Default for GroundBasedSpeedDist {
     fn default() -> Self {
         Self {
-            speed_mps: 0.0,
-            distance_m: 0.0,
+            speed_mps: Signal::NotAvailable,
+            distance_m: Signal::NotAvailable,
             direction: MachineDirection::NotAvailable,
         }
     }
@@ -210,21 +293,28 @@ impl GroundBasedSpeedDist {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let spd = scaled_u16_non_na(self.speed_mps, 0.001);
+        let spd = encode_u16_signal(self.speed_mps, 0.001);
         data[0] = (spd & 0xFF) as u8;
         data[1] = ((spd >> 8) & 0xFF) as u8;
-        let dist = scaled_u32_bounded(self.distance_m, 0.001);
+        let dist = encode_u32_signal(self.distance_m, 0.001);
         data[2] = (dist & 0xFF) as u8;
         data[3] = ((dist >> 8) & 0xFF) as u8;
         data[4] = ((dist >> 16) & 0xFF) as u8;
         data[5] = ((dist >> 24) & 0xFF) as u8;
-        data[7] = self.direction.as_u8() & 0x03;
+        // Byte 8 bits 3-8 are unspecified and must be transmitted as ones
+        // (ISO 11783-7 §5.5.9.1); emitting zeros here made every frame this
+        // stack sent non-conformant.
+        data[7] = 0xFC | (self.direction.as_u8() & 0x03);
         data
     }
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() != 8 || data[6] != 0xFF || data[7] & 0xFC != 0 {
+        // Unspecified bits are "don't care" on receive (§5.4). Demanding they
+        // be zero rejected every conformant transmitter: the committed
+        // captures carry byte 8 = 0xFD/0xFC and byte 7 = 0x00, all of which
+        // this decoder used to drop.
+        if data.len() != 8 {
             return None;
         }
         let spd = (data[0] as u16) | ((data[1] as u16) << 8);
@@ -232,12 +322,11 @@ impl GroundBasedSpeedDist {
             | ((data[3] as u32) << 8)
             | ((data[4] as u32) << 16)
             | ((data[5] as u32) << 24);
-        if !u16_signal_raw_is_valid(spd) || !u32_signal_raw_is_valid(dist) {
-            return None;
-        }
+        let speed_mps = u16_signal(spd, 0.001)?;
+        let distance_m = u32_signal(dist, 0.001)?;
         Some(Self {
-            speed_mps: spd as f64 * 0.001,
-            distance_m: dist as f64 * 0.001,
+            speed_mps,
+            distance_m,
             direction: MachineDirection::try_from_u8(data[7] & 0x03)?,
         })
     }
@@ -252,9 +341,9 @@ impl GroundBasedSpeedDist {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MachineSelectedSpeedFull {
     /// `0.001 m/s` per bit.
-    pub speed_mps: f64,
+    pub speed_mps: Signal<f64>,
     /// `0.001 m` per bit (total accumulated).
-    pub distance_m: f64,
+    pub distance_m: Signal<f64>,
     pub direction: MachineDirection,
     pub source: SpeedSource,
     /// 3 bits: 0 = not limited, …, 7 = N/A.
@@ -265,12 +354,13 @@ pub struct MachineSelectedSpeedFull {
 impl Default for MachineSelectedSpeedFull {
     fn default() -> Self {
         Self {
-            speed_mps: 0.0,
-            distance_m: 0.0,
+            speed_mps: Signal::NotAvailable,
+            distance_m: Signal::NotAvailable,
             direction: MachineDirection::NotAvailable,
             source: SpeedSource::WheelBased,
             limit_status: 0x07,
-            exit_code: 0xFF,
+            // 6-bit field: 0x3F is its "not available" value.
+            exit_code: 0x3F,
         }
     }
 }
@@ -279,24 +369,26 @@ impl MachineSelectedSpeedFull {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let spd = scaled_u16_non_na(self.speed_mps, 0.001);
+        let spd = encode_u16_signal(self.speed_mps, 0.001);
         data[0] = (spd & 0xFF) as u8;
         data[1] = ((spd >> 8) & 0xFF) as u8;
-        let dist = scaled_u32_bounded(self.distance_m, 0.001);
+        let dist = encode_u32_signal(self.distance_m, 0.001);
         data[2] = (dist & 0xFF) as u8;
         data[3] = ((dist >> 8) & 0xFF) as u8;
         data[4] = ((dist >> 16) & 0xFF) as u8;
         data[5] = ((dist >> 24) & 0xFF) as u8;
-        data[6] = self.exit_code;
+        // Byte 8: direction bits 1-2, source bits 3-5 (3 bits), limit status
+        // bits 6-8 (3 bits). Exit reason is the low 6 bits of byte 7.
+        data[6] = 0xC0 | (self.exit_code & 0x3F);
         data[7] = (self.direction.as_u8() & 0x03)
-            | ((self.source.as_u8() & 0x03) << 2)
-            | ((self.limit_status & 0x07) << 4);
+            | ((self.source.as_u8() & 0x07) << 2)
+            | ((self.limit_status & 0x07) << 5);
         data
     }
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() != 8 || data[7] & 0x80 != 0 {
+        if data.len() != 8 {
             return None;
         }
         let spd = (data[0] as u16) | ((data[1] as u16) << 8);
@@ -304,16 +396,15 @@ impl MachineSelectedSpeedFull {
             | ((data[3] as u32) << 8)
             | ((data[4] as u32) << 16)
             | ((data[5] as u32) << 24);
-        if !u16_signal_raw_is_valid(spd) || !u32_signal_raw_is_valid(dist) {
-            return None;
-        }
+        let speed_mps = u16_signal(spd, 0.001)?;
+        let distance_m = u32_signal(dist, 0.001)?;
         Some(Self {
-            speed_mps: spd as f64 * 0.001,
-            distance_m: dist as f64 * 0.001,
+            speed_mps,
+            distance_m,
             direction: MachineDirection::try_from_u8(data[7] & 0x03)?,
-            source: SpeedSource::try_from_u8((data[7] >> 2) & 0x03)?,
-            limit_status: (data[7] >> 4) & 0x07,
-            exit_code: data[6],
+            source: SpeedSource::try_from_u8((data[7] >> 2) & 0x07)?,
+            limit_status: (data[7] >> 5) & 0x07,
+            exit_code: data[6] & 0x3F,
         })
     }
 }
@@ -587,8 +678,8 @@ mod tests {
     #[test]
     fn wheel_speed_round_trip() {
         let m = WheelBasedSpeedDist {
-            speed_mps: 5.5,
-            distance_m: 12_345.678,
+            speed_mps: 5.5.into(),
+            distance_m: 12_345.678.into(),
             direction: MachineDirection::Forward,
             max_power_time_min: 60,
             key_switch_state: 1,
@@ -596,8 +687,8 @@ mod tests {
             operator_direction_reversed_state: 0,
         };
         let decoded = WheelBasedSpeedDist::decode(&m.encode()).unwrap();
-        assert!((decoded.speed_mps - 5.5).abs() < 1e-3);
-        assert!((decoded.distance_m - 12_345.678).abs() < 1e-3);
+        assert!((decoded.speed_mps.unwrap_or(f64::NAN) - 5.5).abs() < 1e-3);
+        assert!((decoded.distance_m.unwrap_or(f64::NAN) - 12_345.678).abs() < 1e-3);
         assert_eq!(decoded.direction, MachineDirection::Forward);
         assert_eq!(decoded.max_power_time_min, 60);
         assert_eq!(decoded.key_switch_state, 1);
@@ -608,33 +699,34 @@ mod tests {
     #[test]
     fn ground_speed_round_trip() {
         let m = GroundBasedSpeedDist {
-            speed_mps: 3.0,
-            distance_m: 100.0,
+            speed_mps: 3.0.into(),
+            distance_m: 100.0.into(),
             direction: MachineDirection::Reverse,
         };
         let decoded = GroundBasedSpeedDist::decode(&m.encode()).unwrap();
-        assert!((decoded.speed_mps - 3.0).abs() < 1e-3);
-        assert!((decoded.distance_m - 100.0).abs() < 1e-3);
+        assert!((decoded.speed_mps.unwrap_or(f64::NAN) - 3.0).abs() < 1e-3);
+        assert!((decoded.distance_m.unwrap_or(f64::NAN) - 100.0).abs() < 1e-3);
         assert_eq!(decoded.direction, MachineDirection::Reverse);
     }
 
     #[test]
     fn machine_selected_speed_full_round_trip() {
         let m = MachineSelectedSpeedFull {
-            speed_mps: 2.5,
-            distance_m: 1000.0,
+            speed_mps: 2.5.into(),
+            distance_m: 1000.0.into(),
             direction: MachineDirection::Forward,
             source: SpeedSource::GroundBased,
             limit_status: 1,
-            exit_code: 0x42,
+            // Exit reason is a 6-bit field; 0x42 would not survive the mask.
+            exit_code: 0x02,
         };
         let decoded = MachineSelectedSpeedFull::decode(&m.encode()).unwrap();
-        assert!((decoded.speed_mps - 2.5).abs() < 1e-3);
-        assert!((decoded.distance_m - 1000.0).abs() < 1e-3);
+        assert!((decoded.speed_mps.unwrap_or(f64::NAN) - 2.5).abs() < 1e-3);
+        assert!((decoded.distance_m.unwrap_or(f64::NAN) - 1000.0).abs() < 1e-3);
         assert_eq!(decoded.direction, MachineDirection::Forward);
         assert_eq!(decoded.source, SpeedSource::GroundBased);
         assert_eq!(decoded.limit_status, 1);
-        assert_eq!(decoded.exit_code, 0x42);
+        assert_eq!(decoded.exit_code, 0x02);
     }
 
     #[test]
@@ -718,32 +810,32 @@ mod tests {
     #[test]
     fn numeric_encoders_clamp_instead_of_wrapping_or_emitting_speed_na() {
         let wheel_high = WheelBasedSpeedDist {
-            speed_mps: f64::INFINITY,
-            distance_m: f64::INFINITY,
+            speed_mps: f64::INFINITY.into(),
+            distance_m: f64::INFINITY.into(),
             ..Default::default()
         }
         .encode();
         assert_eq!(&wheel_high[..6], &[0, 0, 0, 0, 0, 0]);
 
         let wheel_high = WheelBasedSpeedDist {
-            speed_mps: 1.0e9,
-            distance_m: 1.0e12,
+            speed_mps: 1.0e9.into(),
+            distance_m: 1.0e12.into(),
             ..Default::default()
         }
         .encode();
         assert_eq!(&wheel_high[..6], &[0xFF, 0xFA, 0xFF, 0xFF, 0xFF, 0xFA]);
 
         let ground_low = GroundBasedSpeedDist {
-            speed_mps: -1.0,
-            distance_m: f64::NAN,
+            speed_mps: Signal::Value(-1.0),
+            distance_m: f64::NAN.into(),
             ..Default::default()
         }
         .encode();
         assert_eq!(&ground_low[..6], &[0, 0, 0, 0, 0, 0]);
 
         let selected_high = MachineSelectedSpeedFull {
-            speed_mps: 1.0e9,
-            distance_m: 1.0e12,
+            speed_mps: 1.0e9.into(),
+            distance_m: 1.0e12.into(),
             ..Default::default()
         }
         .encode();
@@ -791,17 +883,10 @@ mod tests {
 
     #[test]
     fn decoders_reject_bad_padding_and_reserved_bits() {
-        let mut ground_bad_padding = GroundBasedSpeedDist::default().encode();
-        ground_bad_padding[6] = 0x00;
-        assert!(GroundBasedSpeedDist::decode(&ground_bad_padding).is_none());
-
-        let mut ground_bad_reserved = GroundBasedSpeedDist::default().encode();
-        ground_bad_reserved[7] |= 0xFC;
-        assert!(GroundBasedSpeedDist::decode(&ground_bad_reserved).is_none());
-
-        let mut selected_bad_reserved = MachineSelectedSpeedFull::default().encode();
-        selected_bad_reserved[7] |= 0x80;
-        assert!(MachineSelectedSpeedFull::decode(&selected_bad_reserved).is_none());
+        // Unspecified bits in the speed messages are "don't care" on receive
+        // (ISO 11783-7 §5.4). This block used to assert the opposite — that a
+        // frame whose reserved bits are set to 1, which is what a conformant
+        // transmitter sends, must be rejected. See the dedicated tests below.
 
         let mut hitch_bad_padding = HitchStatus::default().encode();
         hitch_bad_padding[4] = 0x00;
@@ -814,5 +899,147 @@ mod tests {
         let mut pto_bad_padding = PtoStatus::default().encode();
         pto_bad_padding[3] = 0x00;
         assert!(PtoStatus::decode(&pto_bad_padding, true).is_none());
+    }
+
+    /// W1 — real Machine Selected Speed frames captured off a tractor's ISOBUS
+    /// (`can_log2.txt`, TECU at SA 0xF0). Byte 8 = 0xE1 means direction
+    /// forward, source wheel-based, limit status "not available". The decoder
+    /// used to read the source as 2 bits and the limit status at bit 5 instead
+    /// of bit 6, and rejected any frame with byte 8 bit 8 set — which is every
+    /// frame carrying limit status 7. All 1592 in the capture were dropped, so
+    /// nothing could observe the speed the tractor was closing its loop on.
+    #[test]
+    fn machine_selected_speed_decodes_real_captured_frames() {
+        for (frame, label) in [
+            (
+                [0x00, 0x00, 0xF7, 0x4A, 0x00, 0x00, 0xFF, 0xE1],
+                "moving, dir forward",
+            ),
+            (
+                [0x00, 0x00, 0xF7, 0x4A, 0x00, 0x00, 0xFF, 0xE0],
+                "stopped, dir reverse",
+            ),
+        ] {
+            let decoded = MachineSelectedSpeedFull::decode(&frame)
+                .unwrap_or_else(|| panic!("real captured frame must decode ({label})"));
+            assert_eq!(decoded.source, SpeedSource::WheelBased, "{label}");
+            assert_eq!(
+                decoded.limit_status, 7,
+                "{label}: limit status not available"
+            );
+        }
+
+        assert_eq!(
+            MachineSelectedSpeedFull::decode(&[0x00, 0x00, 0xF7, 0x4A, 0x00, 0x00, 0xFF, 0xE1])
+                .unwrap()
+                .direction,
+            MachineDirection::Forward
+        );
+    }
+
+    /// W7 — raw 4 is *simulated* speed. Decoded as a 2-bit field it aliased to
+    /// `WheelBased`, so a bench signal was indistinguishable from real motion.
+    #[test]
+    fn speed_source_distinguishes_simulated_from_wheel_based() {
+        assert_eq!(SpeedSource::try_from_u8(4), Some(SpeedSource::Simulated));
+        assert_eq!(SpeedSource::from_u8(4), SpeedSource::Simulated);
+        assert!(!SpeedSource::Simulated.is_trustworthy_for_control());
+        assert!(!SpeedSource::NotAvailable.is_trustworthy_for_control());
+        assert!(SpeedSource::WheelBased.is_trustworthy_for_control());
+
+        let mut frame = [0x00, 0x00, 0xF7, 0x4A, 0x00, 0x00, 0xFF, 0xE1];
+        frame[7] = (frame[7] & !0x1C) | (4 << 2);
+        assert_eq!(
+            MachineSelectedSpeedFull::decode(&frame).unwrap().source,
+            SpeedSource::Simulated
+        );
+    }
+
+    /// W2 — ISO 11783-7 §5.5.9.1 requires unspecified bits to be transmitted
+    /// as ones, and §5.4 requires receivers to ignore them. This encoder wrote
+    /// zeros and its decoder demanded zeros, so machbus and every conformant
+    /// transmitter talked past each other.
+    #[test]
+    fn ground_based_speed_uses_ones_for_unspecified_bits() {
+        let encoded = GroundBasedSpeedDist {
+            speed_mps: 1.5.into(),
+            distance_m: 100.0.into(),
+            direction: MachineDirection::Forward,
+        }
+        .encode();
+        assert_eq!(
+            encoded[7] & 0xFC,
+            0xFC,
+            "byte 8 bits 3-8 are unspecified and must be ones"
+        );
+
+        // The capture's byte-8 values, which the old decoder rejected outright.
+        for tail in [0xFDu8, 0xFC] {
+            let mut frame = encoded;
+            frame[7] = tail;
+            assert!(
+                GroundBasedSpeedDist::decode(&frame).is_some(),
+                "captured byte 8 = {tail:#04X} must decode"
+            );
+        }
+        // Zero-padded reserved bits are legal to receive too.
+        let mut zero_padded = encoded;
+        zero_padded[7] &= 0x03;
+        assert!(GroundBasedSpeedDist::decode(&zero_padded).is_some());
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    /// W2 + W5 — the exact Ground-Based Speed & Distance frame the committed
+    /// capture contains 1592 times (`can_log2.txt`, TECU at SA 0xF0). This
+    /// machine has no ground-speed sensor, so it reports the speed as
+    /// not-available while still broadcasting a valid PG. The decoder used to
+    /// reject it twice over: byte 8's unspecified bits are ones, and the
+    /// speed raw is 0xFFFF.
+    #[test]
+    fn ground_based_speed_decodes_the_captured_no_sensor_frame() {
+        for (frame, label) in [
+            (
+                [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFD],
+                "byte 8 = 0xFD",
+            ),
+            (
+                [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFC],
+                "byte 8 = 0xFC",
+            ),
+        ] {
+            let decoded = GroundBasedSpeedDist::decode(&frame)
+                .unwrap_or_else(|| panic!("captured frame must decode ({label})"));
+            assert!(
+                decoded.speed_mps.is_not_available(),
+                "{label}: no ground-speed sensor fitted"
+            );
+            assert_eq!(
+                decoded.distance_m.value(),
+                Some(65.535),
+                "{label}: the distance in the same frame is still valid data"
+            );
+        }
+
+        assert_eq!(
+            GroundBasedSpeedDist::decode(&[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFD])
+                .unwrap()
+                .direction,
+            MachineDirection::Forward
+        );
+    }
+
+    /// A faulted sensor and an absent one must not look alike: that ambiguity
+    /// is what made "no reading" indistinguishable from "bus unplugged".
+    #[test]
+    fn error_and_not_available_speeds_stay_distinguishable() {
+        let mut faulted = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFD];
+        faulted[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
+        let decoded = GroundBasedSpeedDist::decode(&faulted).unwrap();
+        assert!(decoded.speed_mps.is_error());
+        assert!(!decoded.speed_mps.is_not_available());
     }
 }

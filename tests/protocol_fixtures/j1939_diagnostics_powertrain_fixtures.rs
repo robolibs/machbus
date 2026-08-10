@@ -735,11 +735,12 @@ fn fixture_j1939_heartbeat_and_maintain_power_codecs_are_stable() {
         J1939_HEARTBEAT_MAINTAIN_POWER_HEX,
         "maintain_all_inactive_no_request",
     );
+    // H56 — a TECU receives Maintain Power, it does not transmit it
+    // (ISO 11783-10 §6.6.3: "The client shall send a 'Maintain Power'
+    // message"). The payload itself is still exercised below from the CF side.
     let mut tecu = PowerManager::new(PowerRole::Tecu);
     tecu.key_off();
-    let broadcasts = tecu.update(100);
-    assert_eq!(broadcasts.len(), 1);
-    assert_eq!(broadcasts[0].encode(), keyoff);
+    assert!(tecu.update(100).is_empty());
 
     let keyoff_msg = Message::new(PGN_MAINTAIN_POWER, keyoff.to_vec(), 0xF0);
     let mut cf = PowerManager::new(PowerRole::Cf);

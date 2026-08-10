@@ -13,7 +13,7 @@
 use alloc::{collections::BTreeSet, vec::Vec};
 
 use crate::net::constants::{
-    HEARTBEAT_INTERVAL_MS, POWER_MAINTAIN_REPEAT_MS, POWER_MAX_EXTENSION_MS, POWER_SHUTDOWN_MIN_MS,
+    POWER_MAINTAIN_REPEAT_MS, POWER_MAX_EXTENSION_MS, POWER_SHUTDOWN_MIN_MS,
 };
 use crate::net::event::Event;
 use crate::net::message::Message;
@@ -283,7 +283,6 @@ pub struct PowerManager {
     /// Time since the last maintain request *received* (TECU mode).
     maintain_timer_ms: u32,
     /// Periodic broadcast cadence (TECU mode, 100 ms).
-    broadcast_timer_ms: u32,
     /// Periodic maintain-request cadence (CF mode, 1 s).
     request_timer_ms: u32,
     requesting_power: bool,
@@ -303,7 +302,6 @@ impl PowerManager {
             state: PowerState::Running,
             shutdown_timer_ms: 0,
             maintain_timer_ms: 0,
-            broadcast_timer_ms: 0,
             request_timer_ms: 0,
             requesting_power: false,
             requesting_clients: BTreeSet::new(),
@@ -403,21 +401,16 @@ impl PowerManager {
 
     // ─── Internal ──────────────────────────────────────────────────
 
-    fn update_tecu(&mut self, elapsed_ms: u32, out: &mut Vec<MaintainPowerData>) {
-        self.broadcast_timer_ms = self.broadcast_timer_ms.saturating_add(elapsed_ms);
-        if self.broadcast_timer_ms >= HEARTBEAT_INTERVAL_MS {
-            self.broadcast_timer_ms = 0;
-            out.push(MaintainPowerData {
-                implement_in_work_state: MaintainPowerState::Inactive,
-                implement_park_state: MaintainPowerState::Inactive,
-                implement_ready_to_work_state: MaintainPowerState::Inactive,
-                implement_transport_state: MaintainPowerState::Inactive,
-                maintain_ecu_power: MaintainPowerRequirement::NoFurtherRequirement,
-                maintain_actuator_power: MaintainPowerRequirement::NoFurtherRequirement,
-                timestamp_us: 0,
-            });
-        }
-
+    fn update_tecu(&mut self, elapsed_ms: u32, _out: &mut Vec<MaintainPowerData>) {
+        // A TECU does not transmit Maintain Power. ISO 11783-10 §6.6.3: "The
+        // client shall send a 'Maintain Power' message (see ISO 11783-7) to
+        // inform the system", and the TC/TECU side "shall maintain services for
+        // a minimum of 2 s following the last 'Maintain Power' request".
+        //
+        // Broadcasting it from the tractor at 10 Hz put the *implement's*
+        // request PG on the bus from the wrong node, telling every listener
+        // that the implement wanted nothing — including while a real implement
+        // was asking for power to be held.
         match self.state {
             PowerState::ShutdownPending => {
                 self.shutdown_timer_ms = self.shutdown_timer_ms.saturating_add(elapsed_ms);
@@ -566,17 +559,33 @@ mod tests {
         assert_eq!(pm.state(), PowerState::Running);
     }
 
+    /// H56 — Maintain Power is the *client's* message. ISO 11783-10 §6.6.3:
+    /// "The client shall send a 'Maintain Power' message (see ISO 11783-7)",
+    /// and the TC/TECU side maintains services in response. Broadcasting it
+    /// from the tractor at 10 Hz put the implement's request PG on the bus from
+    /// the wrong node, announcing "no further requirement" on the implement's
+    /// behalf — including while a real implement was asking to hold power.
     #[test]
-    fn tecu_broadcasts_at_100ms() {
+    fn tecu_does_not_transmit_the_implement_maintain_power_message() {
         let mut pm = PowerManager::new(PowerRole::Tecu);
-        let out1 = pm.update(50);
-        assert!(out1.is_empty());
-        let out2 = pm.update(60); // 110 ms total → broadcast
-        assert_eq!(out2.len(), 1);
-        assert_eq!(
-            out2[0].maintain_ecu_power,
-            MaintainPowerRequirement::NoFurtherRequirement
-        );
+        for _ in 0..40 {
+            assert!(
+                pm.update(50).is_empty(),
+                "a TECU receives Maintain Power; it does not send it"
+            );
+        }
+    }
+
+    /// The CF (implement) role is the one that transmits it.
+    #[test]
+    fn cf_role_still_transmits_maintain_power() {
+        let mut pm = PowerManager::new(PowerRole::Cf);
+        pm.request_power(true);
+        let mut sent = 0usize;
+        for _ in 0..40 {
+            sent += pm.update(50).len();
+        }
+        assert!(sent > 0, "the implement side keeps asking");
     }
 
     #[test]

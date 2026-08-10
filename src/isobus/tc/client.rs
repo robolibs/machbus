@@ -243,6 +243,9 @@ pub struct TaskControllerClient {
     timer_ms: u32,
     tc_address: Address,
     tc_version: u8,
+    /// What this client advertises in its version response, and the ceiling on
+    /// the DDOP version it will serialize.
+    capabilities: TCClientCapabilities,
     num_booms: u8,
     num_sections: u8,
 
@@ -262,6 +265,7 @@ impl TaskControllerClient {
             timer_ms: 0,
             tc_address: NULL_ADDRESS,
             tc_version: 0,
+            capabilities: TCClientCapabilities::default(),
             num_booms: 0,
             num_sections: 0,
             value_cb: None,
@@ -348,6 +352,28 @@ impl TaskControllerClient {
     #[must_use]
     pub const fn tc_version(&self) -> u8 {
         self.tc_version
+    }
+
+    /// What this client advertises to the TC.
+    #[must_use]
+    pub const fn capabilities(&self) -> TCClientCapabilities {
+        self.capabilities
+    }
+
+    /// Override the advertised capabilities, including the DDOP version.
+    pub const fn set_capabilities(&mut self, capabilities: TCClientCapabilities) {
+        self.capabilities = capabilities;
+    }
+
+    /// The DDOP version actually used on the wire: the lower of what this
+    /// client and the TC report (A.2).
+    #[must_use]
+    pub const fn negotiated_ddop_version(&self) -> u8 {
+        if self.capabilities.version < self.tc_version {
+            self.capabilities.version
+        } else {
+            self.tc_version
+        }
     }
 
     pub fn on_value_request<F>(&mut self, cb: F)
@@ -526,7 +552,13 @@ impl TaskControllerClient {
                 self.timer_ms = 0;
             }
             TCState::TransferDDOP => {
-                if let Ok(pool_data) = self.ddop.serialize() {
+                // A.2: the extended structure label "shall only be used when
+                // the versions of the TC and of the client are both reported as
+                // version 4 or higher", so the pool is written for the lower of
+                // the two. Serializing unconditionally at version 3 while
+                // advertising 4 produced a record no version-4 TC could parse.
+                let negotiated = self.capabilities.version.min(self.tc_version);
+                if let Ok(pool_data) = self.ddop.serialize_for_version(negotiated) {
                     let mut data = Vec::with_capacity(pool_data.len() + 1);
                     data.push(tc_cmd::OBJECT_POOL_TRANSFER);
                     data.extend_from_slice(&pool_data);
@@ -620,7 +652,7 @@ impl TaskControllerClient {
                     "TC version request must be an 8-byte padded frame",
                 ));
             }
-            let data = Self::build_request_version_response(TCClientCapabilities::default());
+            let data = Self::build_request_version_response(self.capabilities);
             return Ok(vec![TCClientOutbound::to(
                 PGN_ECU_TO_TC,
                 data.to_vec(),
@@ -1332,6 +1364,62 @@ mod tests {
             0x33,
         ));
         assert_eq!(c.state(), TCState::TransferDDOP);
+    }
+
+    /// C21 — the client advertises version 4 but serialized the DeviceObject
+    /// through the version-3 path, omitting the two extended-structure-label
+    /// attributes that A.2 places at record byte 31+N+M+O. Every field after
+    /// that point shifts, so no version-4 Task Controller can load the pool.
+    #[test]
+    fn ddop_is_serialized_at_the_negotiated_version() {
+        fn pool_bytes_against_tc(tc_version: u8) -> (Vec<u8>, u8) {
+            let mut c = TaskControllerClient::new(TCClientConfig::default());
+            c.set_ddop(dummy_ddop());
+            c.connect().unwrap();
+            c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+            c.update(1);
+            c.update(1);
+            c.handle_tc_message(&tc_msg(version_response(tc_version, 1, 4, 0), 0x33));
+            c.update(1);
+            let mut label = [0xFFu8; 8];
+            label[0] = tc_cmd::STRUCTURE_LABEL;
+            c.handle_tc_message(&tc_msg(label.to_vec(), 0x33));
+            assert_eq!(c.state(), TCState::TransferDDOP);
+            let negotiated = c.negotiated_ddop_version();
+            let out = c.update(1);
+            let transfer = out
+                .iter()
+                .find(|o| o.data.first() == Some(&tc_cmd::OBJECT_POOL_TRANSFER))
+                .expect("the pool is transferred");
+            (transfer.data.clone(), negotiated)
+        }
+
+        let (v4_bytes, v4_negotiated) = pool_bytes_against_tc(4);
+        let (v3_bytes, v3_negotiated) = pool_bytes_against_tc(3);
+
+        assert_eq!(v4_negotiated, 4, "both sides report 4");
+        assert_eq!(v3_negotiated, 3, "a version-3 TC pulls the pool down to 3");
+        assert_ne!(
+            v4_bytes, v3_bytes,
+            "the DeviceObject record differs between versions 3 and 4; \
+             serializing the same bytes for both is the defect"
+        );
+        assert!(
+            v4_bytes.len() > v3_bytes.len(),
+            "version 4 adds the extended structure label length byte"
+        );
+
+        // And the version-3 form must still be byte-identical to what a
+        // version-3 TC previously received.
+        assert_eq!(
+            v3_bytes[1..],
+            {
+                let mut expected = vec![];
+                expected.extend(dummy_ddop().serialize().unwrap());
+                expected
+            }[..],
+            "the version-3 wire form is unchanged"
+        );
     }
 
     /// C19/C20 — both responses were guarded as "8 bytes, all FF after byte 2",

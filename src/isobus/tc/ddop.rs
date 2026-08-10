@@ -7,8 +7,9 @@
 use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
 
 use super::objects::{
-    DDI, DeviceElement, DeviceElementType, DeviceObject, DeviceProcessData, DeviceProperty,
-    DeviceValuePresentation, ElementNumber, ObjectID, TCObjectType,
+    DDI, DDOP_VERSION_EXTENDED_STRUCTURE_LABEL, DeviceElement, DeviceElementType, DeviceObject,
+    DeviceProcessData, DeviceProperty, DeviceValuePresentation, ElementNumber, ObjectID,
+    TCObjectType,
 };
 use crate::net::error::{Error, ErrorCode, Result};
 
@@ -110,11 +111,25 @@ impl DDOP {
     /// non-ASCII and overlong strings instead of emitting payloads that cannot
     /// be decoded back into the same bytes.
     pub fn serialize(&self) -> Result<Vec<u8>> {
+        self.serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL - 1)
+    }
+
+    /// Serialize the pool for a negotiated DDOP `version`.
+    ///
+    /// Only the DeviceObject record differs between versions: A.2 adds the two
+    /// extended-structure-label attributes at version 4. Serializing a
+    /// version-3 DeviceObject while advertising version 4 shifts every field
+    /// after record byte 31+N+M+O, so a version-4 Task Controller cannot parse
+    /// the pool at all — no section control, no rate control, no logging.
+    ///
+    /// # Errors
+    /// Propagates text-field encoding and validation failures.
+    pub fn serialize_for_version(&self, version: u8) -> Result<Vec<u8>> {
         self.validate_serializable()?;
 
         let mut data = Vec::new();
         for d in &self.devices {
-            data.extend(d.serialize()?);
+            data.extend(d.serialize_for_version(version)?);
         }
         for e in &self.elements {
             data.extend(e.serialize()?);

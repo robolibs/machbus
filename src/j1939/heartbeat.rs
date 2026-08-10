@@ -383,8 +383,17 @@ impl HeartbeatReceiver {
         }
     }
 
+    /// Last sequence byte accepted, or `None` before the first heartbeat.
     #[inline]
     #[must_use]
+    pub const fn last_sequence(&self) -> Option<u8> {
+        if self.first_received {
+            Some(self.last_sequence)
+        } else {
+            None
+        }
+    }
+
     pub fn state(&self) -> HbReceiverState {
         self.state
     }

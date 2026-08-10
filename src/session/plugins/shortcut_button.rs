@@ -13,11 +13,23 @@ use core::any::Any;
 
 const INTERESTS: &[Pgn] = &[PGN_SHORTCUT_BUTTON];
 
+/// The ISB is a periodic message. A receiver that stops hearing it must not
+/// keep treating the last "permit all operations" as current.
+pub const ISB_REBROADCAST_MS: u32 = 100;
+
+/// Three missed broadcasts and the transmitter is presumed gone.
+pub const ISB_TIMEOUT_MS: u32 = 300;
+
 /// Shortcut Button plugin.
 #[derive(Default)]
 pub struct ShortcutButton {
     last: Option<ShortcutButtonEvent>,
+    /// When `last` arrived, so a stale ISB source stops reading as an all-clear.
+    last_at: Option<Instant>,
     transition_count: u8,
+    /// State this node broadcasts, re-sent on a cadence until changed.
+    local_state: Option<ShortcutButtonState>,
+    last_tx_at: Option<Instant>,
     pending: Vec<Vec<u8>>,
 }
 
@@ -34,12 +46,45 @@ impl ShortcutButton {
         self.last
     }
 
-    /// Queue a broadcast of `state` with the next local transition count.
+    /// Set the state this node broadcasts. It is then re-sent every
+    /// [`ISB_REBROADCAST_MS`] until changed.
+    ///
+    /// The transition count advances only when the state actually changes. It
+    /// used to advance on every transmission, so a conformant periodic re-send
+    /// looked to receivers like an unbroken stream of new transitions.
     pub fn broadcast(&mut self, state: ShortcutButtonState) {
-        let count = self.transition_count;
-        self.pending
-            .push(encode_with_transition_count(state, count).to_vec());
-        self.transition_count = count.wrapping_add(1);
+        if self.local_state != Some(state) {
+            if self.local_state.is_some() {
+                self.transition_count = self.transition_count.wrapping_add(1);
+            }
+            self.local_state = Some(state);
+            // A state change goes out immediately rather than waiting.
+            self.last_tx_at = None;
+        }
+    }
+
+    /// The peer ISB state, or `None` when none has arrived or the transmitter
+    /// has gone silent past [`ISB_TIMEOUT_MS`].
+    ///
+    /// Losing the ISB source is a fault, not an all-clear: `last()` keeps
+    /// returning the cached record for display, but this accessor expires.
+    #[must_use]
+    pub fn current(&self, now: Instant) -> Option<ShortcutButtonEvent> {
+        match (self.last, self.last_at) {
+            (Some(e), Some(t)) if now.millis_since(t) < ISB_TIMEOUT_MS => Some(e),
+            _ => None,
+        }
+    }
+
+    /// `true` when a peer is actively commanding "stop all implement
+    /// operations", or when a previously-seen ISB source has gone silent.
+    #[must_use]
+    pub fn is_stop_active(&self, now: Instant) -> bool {
+        match self.current(now) {
+            Some(e) => e.message.state == ShortcutButtonState::StopImplementOperations,
+            // Seen once, then lost: treat as stop, not as permission.
+            None => self.last.is_some(),
+        }
     }
 
     /// Queue a broadcast with an explicit transition count.
@@ -70,19 +115,37 @@ impl Plugin for ShortcutButton {
             message: decoded,
         };
         self.last = Some(event);
+        self.last_at = Some(ctx.now());
         ctx.emit(Event::ShortcutButton(event));
     }
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+        let now = ctx.now();
         for payload in self.pending.drain(..) {
             ctx.send(
                 PGN_SHORTCUT_BUTTON,
                 payload,
                 BROADCAST_ADDRESS,
-                Priority::Default,
+                Priority::BelowNormal,
             );
         }
-        None
+
+        if let Some(state) = self.local_state {
+            let due = self
+                .last_tx_at
+                .is_none_or(|t| now.millis_since(t) >= ISB_REBROADCAST_MS);
+            if due {
+                ctx.send(
+                    PGN_SHORTCUT_BUTTON,
+                    encode_with_transition_count(state, self.transition_count).to_vec(),
+                    BROADCAST_ADDRESS,
+                    Priority::BelowNormal,
+                );
+                self.last_tx_at = Some(now);
+            }
+        }
+
+        Some(now.add_millis(u64::from(ISB_REBROADCAST_MS)))
     }
 
     fn as_any(&self) -> &dyn Any {

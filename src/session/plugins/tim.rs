@@ -7,8 +7,8 @@ use crate::isobus::implement::tractor_commands::{
     HitchCommand, HitchCommandMsg, PtoCommand, PtoCommandMsg,
 };
 use crate::isobus::tim::{
-    AuxValveCommand, HitchState, PtoState, TimAuthority, TimCommand, TimInterlocks, TimOptionSet,
-    TimValidationError,
+    AuxValveCommand, HitchState, PtoState, TIM_UPDATE_INTERVAL_MS, TimAuthority, TimCommand,
+    TimInterlocks, TimOptionSet, TimValidationError,
 };
 use crate::net::pgn_defs::{
     PGN_AUX_VALVE_0_7, PGN_AUX_VALVE_8_15, PGN_AUX_VALVE_16_23, PGN_AUX_VALVE_24_31,
@@ -46,6 +46,9 @@ pub struct Tim {
     last_aux: Option<AuxValveCommand>,
     pending_events: Vec<TimEvent>,
     pending_tx: Vec<(Pgn, Vec<u8>, Address)>,
+    /// Previous tick instant, so the authority watchdog can be advanced by the
+    /// elapsed time rather than by tick count.
+    last_tick: Option<Instant>,
 }
 
 impl Tim {
@@ -61,6 +64,7 @@ impl Tim {
             last_aux: None,
             pending_events: Vec::new(),
             pending_tx: Vec::new(),
+            last_tick: None,
         }
     }
 
@@ -335,8 +339,21 @@ impl Plugin for Tim {
     }
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+        let now = ctx.now();
+
+        // Advance the loss-of-communication watchdog. `TimAuthority` has always
+        // had one, with a documented AEF safe-stop revoke — but nothing called
+        // `tick`, so a granted authority survived indefinitely after the peer
+        // stopped sending keepalives.
+        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
+        self.last_tick = Some(now);
+        if elapsed > 0 && self.authority.tick(elapsed) {
+            self.pending_events
+                .push(TimEvent::AuthorityStateChanged(self.authority.state()));
+        }
+
         self.drain_pending(ctx);
-        None
+        Some(now.add_millis(u64::from(TIM_UPDATE_INTERVAL_MS)))
     }
 
     fn as_any(&self) -> &dyn Any {

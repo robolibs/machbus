@@ -6,6 +6,7 @@
 //! (The former `Stack` facade that also lived here has been removed; `session`
 //! is now the single facade.)
 
+pub mod autodrive;
 pub mod auxiliary;
 pub mod diag;
 pub mod dm_memory;
@@ -20,6 +21,7 @@ pub mod imp;
 pub mod language_command;
 pub mod maintain_power;
 pub mod powertrain;
+pub mod safety;
 pub mod sc;
 pub mod shortcut_button;
 pub mod tc;
@@ -28,6 +30,7 @@ pub mod tim;
 pub mod vt;
 pub mod vt_server;
 
+pub use autodrive::{AutodriveEvent, AutodriveRefusal, AutomationStatus, DriveCommand};
 pub use auxiliary::AuxiliaryEvent;
 pub use diag::DiagEvent;
 pub use dm_memory::DmMemoryEvent;
@@ -41,6 +44,7 @@ pub use imp::{Hitch, ImplementEvent, Pto};
 pub use language_command::LanguageCommandEvent;
 pub use maintain_power::MaintainPowerEvent;
 pub use powertrain::{PowertrainEvent, PowertrainSnapshot};
+pub use safety::{SafeStopTrigger, StopLatch};
 pub use sc::ScEvent;
 pub use shortcut_button::ShortcutButtonEvent;
 pub use tc::TcEvent;

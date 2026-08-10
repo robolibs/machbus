@@ -21,24 +21,42 @@
 //! Turning a path + GNSS pose into a curvature each cycle (pure-pursuit / Stanley)
 //! is the application's job; this plugin moves the resulting command on the wire.
 
-use crate::isobus::implement::guidance::{GenericSaeBs02SlotValue, GuidanceMachineInfo};
+use crate::isobus::implement::guidance::{
+    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout,
+};
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
 };
+use crate::j1939::shortcut_button::{ShortcutButtonState, decode_message};
 use crate::net::pgn_defs::{
     PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
+    PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::session::sys::{Event, GuidanceEvent};
+use crate::session::sys::{AutodriveRefusal, Event, GuidanceEvent, SafeStopTrigger, StopLatch};
 use crate::time::Instant;
 use core::any::Any;
 
-const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO];
+const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO, PGN_SHORTCUT_BUTTON];
 
-/// A steering ECU broadcasts Machine Info (PGN 0xAC00) every 100 ms. If none has
-/// arrived within this window the guidance link is considered dead.
-const LINK_TIMEOUT_MS: u32 = 500;
+/// A steering ECU broadcasts Machine Info (PGN 0xAC00) every 100 ms. Three
+/// missed broadcasts is the AEF 023 loss-of-communication threshold.
+const LINK_TIMEOUT_MS: u32 = 300;
+
+/// Fastest the controller will put a command on the bus. ISO 11783-7 §5.2.7.2
+/// forbids transmitting faster than the parameter group's minimum update
+/// period; the guidance pair is a 100 ms group.
+const MIN_TX_INTERVAL_MS: u32 = 100;
+
+/// Slowest the controller will go while it has something to say. The command
+/// is a heartbeat: a steering ECU that stops hearing it must time out, so the
+/// controller keeps re-sending the current setpoint even when nothing changes.
+const MAX_TX_INTERVAL_MS: u32 = 2000;
+
+/// Below this ground speed a commanded yaw rate cannot be expressed as a path
+/// curvature, so [`Guidance::command_velocity`] commands straight instead.
+pub const MIN_CURVATURE_SPEED_MPS: f64 = 0.05;
 
 /// Automatic-guidance (autosteer) plugin.
 #[derive(Default)]
@@ -52,10 +70,22 @@ pub struct Guidance {
     /// Whether the controller is currently requesting the steering ECU to steer
     /// (the *Curvature Command Status* sent on PGN 0xAD00).
     engaged: bool,
-    /// Last curvature handed to the controller (1/km); re-sent verbatim whenever
-    /// the engage state changes so the new intent reaches the bus immediately.
+    /// Current commanded curvature (1/km). Last value wins: a caller that
+    /// commands faster than the cadence replaces the setpoint rather than
+    /// queueing another frame.
     commanded_curvature: f64,
-    pending: Vec<(Pgn, Vec<u8>)>,
+    /// Speed setpoint from [`Guidance::command_velocity`], if the caller drives
+    /// this plugin with a twist rather than curvature alone.
+    speed_setpoint: Option<(f64, MachineDirection)>,
+    /// When the setpoint last reached the bus.
+    last_tx_at: Option<Instant>,
+    /// Setpoint or engage state changed since the last transmission, so the
+    /// next one may go out as soon as the minimum interval allows.
+    dirty: bool,
+    /// Latching record of the first failure that demanded the safe state.
+    /// Latching, not momentary: steering must not resume by itself when a
+    /// button is released or a link comes back.
+    stop: StopLatch,
 }
 
 impl Guidance {
@@ -66,19 +96,25 @@ impl Guidance {
         Self::default()
     }
 
-    /// Queue an Agricultural Guidance System Command (PGN 0xAD00) carrying the
-    /// current commanded curvature and the engage-derived Curvature Command Status.
-    fn queue_system_command(&mut self) {
-        let cmd = GuidanceSystemCmd {
+    /// The Guidance System Command (PGN 0xAD00) for the current setpoint.
+    fn system_command(&self) -> GuidanceSystemCmd {
+        GuidanceSystemCmd {
             commanded_curvature: self.commanded_curvature,
             status: if self.engaged {
                 CurvatureCommandStatus::IntendedToSteer
             } else {
                 CurvatureCommandStatus::NotIntendedToSteer
             },
-        };
-        self.pending
-            .push((PGN_GUIDANCE_SYSTEM_CMD, cmd.encode().to_vec()));
+        }
+    }
+
+    /// Force the safe state: straight ahead, not intending to steer. Used on
+    /// every failure path so the last command cannot persist.
+    fn enter_safe_state(&mut self) {
+        self.engaged = false;
+        self.commanded_curvature = 0.0;
+        self.speed_setpoint = Some((0.0, MachineDirection::Forward));
+        self.dirty = true;
     }
 
     /// Request the steering ECU to engage and steer to the commanded curvature.
@@ -87,9 +123,59 @@ impl Guidance {
     /// re-queues the last commanded curvature so the intent reaches the bus on the
     /// next tick. The ECU only actually engages if its own machine info reports it
     /// ready (see [`is_steering_ready`](Self::is_steering_ready)).
-    pub fn engage(&mut self) {
+    /// # Errors
+    /// Returns the first unmet precondition. `engage()` used to set the flag
+    /// unconditionally: it checked neither link liveness, nor the mechanical
+    /// lockout, nor the operator's engage switch, nor whether a stop was
+    /// latched, so an application could request steering from a machine that
+    /// had told it not to.
+    pub fn engage(&mut self) -> Result<(), AutodriveRefusal> {
+        if self.stop.is_latched() {
+            return Err(AutodriveRefusal::StopLatched);
+        }
+        if !self.link_alive {
+            return Err(AutodriveRefusal::LinkDown);
+        }
+        let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
+        if info.lockout == MechanicalLockout::Active {
+            return Err(AutodriveRefusal::MechanicalLockout);
+        }
+        if info.remote_engage_switch_status == GenericSaeBs02SlotValue::DisabledOffPassive {
+            return Err(AutodriveRefusal::OperatorNotEngaged);
+        }
         self.engaged = true;
-        self.queue_system_command();
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// `true` while a stop is latched. [`engage`](Self::engage) refuses until
+    /// [`clear_stop`](Self::clear_stop) is called.
+    #[must_use]
+    pub fn is_stop_latched(&self) -> bool {
+        self.stop.is_latched()
+    }
+
+    /// Why the controller stopped, if it did.
+    #[must_use]
+    pub fn stop_reason(&self) -> Option<SafeStopTrigger> {
+        self.stop.reason()
+    }
+
+    /// Release a latched stop. Deliberately explicit: a fault clearing itself
+    /// is not consent to move.
+    pub fn clear_stop(&mut self) {
+        self.stop.clear();
+    }
+
+    /// Trip the safe state from outside — the application wires bus-off,
+    /// address-claim loss and heartbeat errors here, since those are observed
+    /// at session level rather than on a PGN this plugin subscribes to.
+    pub fn request_stop(&mut self, trigger: SafeStopTrigger) -> bool {
+        let tripped = self.stop.trip(trigger);
+        if tripped {
+            self.enter_safe_state();
+        }
+        tripped
     }
 
     /// Stop requesting steering: clears the engage request and commands straight.
@@ -97,9 +183,7 @@ impl Guidance {
     /// Sends curvature `0.0` with status *not intended to steer*, so a conformant
     /// steering ECU drops back to manual control.
     pub fn disengage(&mut self) {
-        self.engaged = false;
-        self.commanded_curvature = 0.0;
-        self.queue_system_command();
+        self.enter_safe_state();
     }
 
     /// Whether the controller is currently requesting steering (its own intent —
@@ -116,8 +200,10 @@ impl Guidance {
     /// flushed on the next tick as a Guidance System Command (PGN 0xAD00). The
     /// command only steers while the controller is [`engage`](Self::engage)d.
     pub fn command_curvature(&mut self, curvature_per_km: f64) {
+        if self.commanded_curvature != curvature_per_km {
+            self.dirty = true;
+        }
         self.commanded_curvature = curvature_per_km;
-        self.queue_system_command();
     }
 
     /// Command a turn of the given **radius in metres** (a convenience over
@@ -148,11 +234,17 @@ impl Guidance {
     /// command's direction; the curvature sign follows the ISO 11783-7 wire
     /// convention (flip `angular_rad_s` if your platform's sign differs).
     ///
-    /// A near-zero `linear_mps` cannot define a forward path curvature, so it
-    /// commands straight (`κ = 0`) while still sending the (near-zero) speed.
+    /// A `linear_mps` below [`MIN_CURVATURE_SPEED_MPS`] cannot define a forward
+    /// path curvature, so it commands straight (`κ = 0`) while still sending
+    /// the (near-zero) speed.
+    ///
+    /// The guard is a *physical* threshold, not `f64::EPSILON`: at 1e-16 m/s a
+    /// micrometre-per-second odometry residue yields a curvature in the
+    /// billions, which the codec clamps to ±8031.75 km⁻¹ — a 12 cm turn radius
+    /// — and transmits as a perfectly valid maximum-curvature command.
     pub fn command_velocity(&mut self, linear_mps: f64, angular_rad_s: f64) {
         // Steering: curvature κ = ω / v, in 1/m → 1/km for the wire.
-        let curvature_per_km = if linear_mps.abs() > f64::EPSILON {
+        let curvature_per_km = if linear_mps.abs() > MIN_CURVATURE_SPEED_MPS {
             (angular_rad_s / linear_mps) * 1000.0
         } else {
             0.0
@@ -165,11 +257,11 @@ impl Guidance {
         } else {
             MachineDirection::Forward
         };
-        let speed = MachineSpeedCommandMsg::default()
-            .with_speed_mps(linear_mps.abs())
-            .with_direction(direction);
-        self.pending
-            .push((PGN_MACHINE_SELECTED_SPEED_CMD, speed.encode().to_vec()));
+        let setpoint = Some((linear_mps.abs(), direction));
+        if self.speed_setpoint != setpoint {
+            self.dirty = true;
+        }
+        self.speed_setpoint = setpoint;
     }
 
     /// The most recent machine info from the steering ECU, if any has arrived.
@@ -192,10 +284,22 @@ impl Guidance {
     /// guidance data is actually flowing.
     #[must_use]
     pub fn is_steering_ready(&self) -> bool {
-        matches!(
-            self.latest.map(|m| m.steering_system_readiness_state),
-            Some(GenericSaeBs02SlotValue::EnabledOnActive)
-        )
+        // Gated on liveness: `latest` is never cleared, so without this an
+        // application polling `if is_steering_ready() { engage() }` would see
+        // the last EnabledOnActive forever after the ECU was unplugged.
+        self.link_alive
+            && matches!(
+                self.latest.map(|m| m.steering_system_readiness_state),
+                Some(GenericSaeBs02SlotValue::EnabledOnActive)
+            )
+    }
+
+    /// Age of the cached Machine Info in milliseconds, or `None` if none has
+    /// arrived. Pair with [`latest_machine_info`](Self::latest_machine_info)
+    /// when displaying the raw record, which is deliberately not expired.
+    #[must_use]
+    pub fn machine_info_age_ms(&self, now: Instant) -> Option<u32> {
+        self.last_info_at.map(|t| now.millis_since(t))
     }
 
     /// Whether a steering ECU is currently broadcasting Machine Info (PGN 0xAC00)
@@ -227,12 +331,35 @@ impl Plugin for Guidance {
     }
 
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
+        // Auxiliary Shortcut Button: the operator's stop-all command. This was
+        // decoded elsewhere in the crate and acted on nowhere, so pressing it
+        // left autosteer commanding exactly as before.
+        if msg.pgn == PGN_SHORTCUT_BUTTON
+            && let Some(decoded) = decode_message(msg)
+            && decoded.state == ShortcutButtonState::StopImplementOperations
+        {
+            let was_engaged = self.engaged;
+            if self.stop.trip(SafeStopTrigger::IsbStop) {
+                self.enter_safe_state();
+                ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                    was_engaged,
+                }));
+            }
+            return;
+        }
+
         if msg.pgn == PGN_GUIDANCE_MACHINE_INFO
             && let Some(info) = GuidanceMachineInfo::decode(&msg.data)
         {
+            let was_dead = !self.link_alive && self.last_info_at.is_some();
             self.latest = Some(info);
             self.last_info_at = Some(ctx.now());
             self.link_alive = true;
+            if was_dead {
+                ctx.emit(Event::Guidance(GuidanceEvent::LinkRestored {
+                    source: msg.source,
+                }));
+            }
             ctx.emit(Event::Guidance(GuidanceEvent::MachineInfo {
                 source: msg.source,
                 estimated_curvature: info.estimated_curvature,
@@ -246,15 +373,64 @@ impl Plugin for Guidance {
     }
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
-        // Decay link liveness if no fresh Machine Info arrived within the window.
-        self.link_alive = self
-            .last_info_at
-            .is_some_and(|t| ctx.now().millis_since(t) < LINK_TIMEOUT_MS);
+        let now = ctx.now();
 
-        for (pgn, data) in self.pending.drain(..) {
-            ctx.send(pgn, data, BROADCAST_ADDRESS, Priority::Default);
+        // Loss of the steering ECU forces the safe state. Previously this flag
+        // was recomputed every tick and never read, so an engaged controller
+        // kept streaming "intended to steer" at the last curvature forever
+        // after the ECU fell silent.
+        let alive = self
+            .last_info_at
+            .is_some_and(|t| now.millis_since(t) < LINK_TIMEOUT_MS);
+        if self.link_alive && !alive {
+            let silent_for_ms = self.last_info_at.map_or(0, |t| now.millis_since(t));
+            let was_engaged = self.engaged;
+            self.stop.trip(SafeStopTrigger::GuidanceLinkTimeout);
+            self.enter_safe_state();
+            ctx.emit(Event::Guidance(GuidanceEvent::LinkLost {
+                silent_for_ms,
+                was_engaged,
+            }));
         }
-        None
+        self.link_alive = alive;
+
+        // Last value wins on a bounded cadence: at most one frame per PGN per
+        // MIN_TX_INTERVAL_MS, and at least one per MAX_TX_INTERVAL_MS so the
+        // command keeps behaving as the heartbeat a steering ECU expects.
+        let due = match self.last_tx_at {
+            None => true,
+            Some(last) => {
+                let since = now.millis_since(last);
+                since >= MAX_TX_INTERVAL_MS || (self.dirty && since >= MIN_TX_INTERVAL_MS)
+            }
+        };
+
+        if due {
+            ctx.send(
+                PGN_GUIDANCE_SYSTEM_CMD,
+                self.system_command().encode().to_vec(),
+                BROADCAST_ADDRESS,
+                Priority::Normal,
+            );
+            if let Some((speed_mps, direction)) = self.speed_setpoint {
+                let speed = MachineSpeedCommandMsg::default()
+                    .with_speed_mps(speed_mps)
+                    .with_direction(direction);
+                ctx.send(
+                    PGN_MACHINE_SELECTED_SPEED_CMD,
+                    speed.encode().to_vec(),
+                    BROADCAST_ADDRESS,
+                    Priority::Normal,
+                );
+            }
+            self.last_tx_at = Some(now);
+            self.dirty = false;
+        }
+
+        Some(
+            self.last_tx_at
+                .map_or(now, |last| last.add_millis(u64::from(MIN_TX_INTERVAL_MS))),
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -272,6 +448,26 @@ mod tests {
     use crate::net::Name;
     use crate::session::Session;
     use crate::time::Instant;
+
+    /// A real captured Machine Info frame: lockout not active, engage switch
+    /// not-available (i.e. not actively disabled). Feeding one is now a
+    /// precondition of `engage()`.
+    const CAPTURED_MACHINE_INFO: [u8; 8] = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
+
+    fn feed_machine_info(s: &mut Session, at: Instant) {
+        use crate::net::{Frame, Identifier};
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GUIDANCE_MACHINE_INFO,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            CAPTURED_MACHINE_INFO,
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
 
     fn claimed_session() -> Session {
         let name = Name::default()
@@ -388,6 +584,7 @@ mod tests {
 
         let mut s = claimed_session();
         let mut now = Instant::ZERO.add_millis(2050);
+        feed_machine_info(&mut s, now);
 
         // Disengaged: a curvature command requests no steering.
         s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
@@ -397,10 +594,12 @@ mod tests {
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
         assert!((cmd.commanded_curvature - 20.0).abs() < 0.25);
 
-        // engage() re-queues the last curvature with the intend-to-steer flag.
-        s.get_mut::<Guidance>().unwrap().engage();
+        // engage() re-sends the last curvature with the intend-to-steer flag,
+        // no sooner than the minimum transmit interval.
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
         assert!(s.get::<Guidance>().unwrap().is_engaged());
-        now = now.add_millis(50);
+        now = now.add_millis(u64::from(MIN_TX_INTERVAL_MS));
+        feed_machine_info(&mut s, now);
         s.tick(now);
         let cmd = last_system_cmd(&mut s);
         assert_eq!(cmd.status, CurvatureCommandStatus::IntendedToSteer);
@@ -409,10 +608,226 @@ mod tests {
         // disengage() drops the request and commands straight.
         s.get_mut::<Guidance>().unwrap().disengage();
         assert!(!s.get::<Guidance>().unwrap().is_engaged());
-        now = now.add_millis(50);
+        now = now.add_millis(u64::from(MIN_TX_INTERVAL_MS));
         s.tick(now);
         let cmd = last_system_cmd(&mut s);
         assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
         assert_eq!(cmd.commanded_curvature, 0.0);
+    }
+
+    /// S1.8 — the command is a heartbeat, not a one-shot. The plugin used to
+    /// transmit only what the application queued, so an application that
+    /// commanded once and stopped left the steering ECU holding a stale
+    /// "intended to steer" forever while PGN 0xAD00 vanished from the bus.
+    #[test]
+    fn command_is_resent_without_further_application_calls() {
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+
+        let mut sent = 0usize;
+        for _ in 0..60 {
+            now = now.add_millis(50);
+            s.tick(now);
+            while let Some((_, frame)) = s.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                    sent += 1;
+                }
+            }
+        }
+
+        assert!(
+            sent >= 2,
+            "the setpoint must keep reaching the bus with no further calls (saw {sent})"
+        );
+    }
+
+    /// S1.8 — and it must not flood. The committed capture shows ~314 Hz on
+    /// PGN 0xAD00 against the TECU's 100 ms broadcasts, because every
+    /// application call pushed another frame onto an unbounded queue.
+    #[test]
+    fn rapid_commands_are_rate_limited_to_the_minimum_interval() {
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+
+        // One second of wall time, commanded every 3 ms as the drive tool does.
+        let mut sent = 0usize;
+        for i in 0..333 {
+            s.get_mut::<Guidance>()
+                .unwrap()
+                .command_curvature(f64::from(i % 17));
+            now = now.add_millis(3);
+            s.tick(now);
+            while let Some((_, frame)) = s.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                    sent += 1;
+                }
+            }
+        }
+
+        assert!(
+            sent <= 11,
+            "~1 s at a 100 ms floor is at most ~10 frames, saw {sent}"
+        );
+    }
+
+    /// S1.8 — safety commands are control traffic. ISO 11783-3 Table D.1 puts
+    /// them at priority 3; the capture shows every real TECU frame as 0x0C…
+    /// while machbus emitted 0x18… (priority 6).
+    #[test]
+    fn commands_are_sent_at_control_priority() {
+        let mut s = claimed_session();
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.tick(Instant::ZERO.add_millis(2050));
+
+        let mut checked = false;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                assert_eq!(frame.id.priority(), Priority::Normal, "control priority 3");
+                checked = true;
+            }
+        }
+        assert!(checked, "a guidance command was transmitted");
+    }
+
+    /// S1.2 — losing the steering ECU must force the safe state. The liveness
+    /// flag existed but had no consumer anywhere in the crate.
+    #[test]
+    fn losing_the_link_disengages_and_commands_straight() {
+        use crate::isobus::implement::{CurvatureCommandStatus, GuidanceSystemCmd};
+        let mut s = claimed_session();
+        let base = 10_000u64;
+
+        feed_machine_info(&mut s, Instant::from_millis(base));
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+        s.tick(Instant::from_millis(base + 100));
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+        while s.poll_transmit().is_some() {}
+        while s.poll_event().is_some() {}
+
+        // Let the link go quiet past the timeout.
+        s.tick(Instant::from_millis(
+            base + 100 + u64::from(LINK_TIMEOUT_MS) + 10,
+        ));
+
+        assert!(
+            !s.get::<Guidance>().unwrap().is_engaged(),
+            "a dead steering link must clear the engage request"
+        );
+        let lost = std::iter::from_fn(|| s.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Guidance(GuidanceEvent::LinkLost { was_engaged, .. }) if was_engaged
+            )
+        });
+        assert!(lost, "the loss must be reported, not just acted on");
+
+        let mut cmd = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                cmd = GuidanceSystemCmd::decode(&frame.data);
+            }
+        }
+        let cmd = cmd.expect("the safe state must reach the bus");
+        assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
+        assert_eq!(cmd.commanded_curvature, 0.0);
+    }
+
+    /// S1.4 — the ISB is the operator's stop-all button. It was decoded and
+    /// cached, and no plugin, session path or example ever acted on it: an
+    /// engaged autosteer kept commanding straight through a press.
+    #[test]
+    fn isb_stop_latches_and_blocks_re_engagement() {
+        use crate::isobus::implement::{CurvatureCommandStatus, GuidanceSystemCmd};
+        use crate::j1939::shortcut_button::{ShortcutButtonState, encode_with_transition_count};
+        use crate::net::pgn_defs::PGN_SHORTCUT_BUTTON;
+        use crate::net::{Frame, Identifier};
+
+        let mut s = claimed_session();
+        let base = 10_000u64;
+        feed_machine_info(&mut s, Instant::from_millis(base));
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+        s.tick(Instant::from_millis(base));
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+        while s.poll_transmit().is_some() {}
+        while s.poll_event().is_some() {}
+
+        let stop = Frame::new(
+            Identifier::encode(
+                Priority::BelowNormal,
+                PGN_SHORTCUT_BUTTON,
+                0x30,
+                BROADCAST_ADDRESS,
+            ),
+            encode_with_transition_count(ShortcutButtonState::StopImplementOperations, 3),
+            8,
+        );
+        s.feed(0, &stop, Instant::from_millis(base + 10));
+
+        let g = s.get::<Guidance>().unwrap();
+        assert!(!g.is_engaged(), "an ISB stop must disengage");
+        assert!(g.is_stop_latched());
+
+        let reported = std::iter::from_fn(|| s.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Guidance(GuidanceEvent::StopRequested { was_engaged }) if was_engaged
+            )
+        });
+        assert!(reported, "the stop must be reported");
+
+        // Re-engaging is refused while latched — releasing the button must not
+        // by itself put the machine back under automation.
+        assert_eq!(
+            s.get_mut::<Guidance>().unwrap().engage(),
+            Err(AutodriveRefusal::StopLatched)
+        );
+        assert!(!s.get::<Guidance>().unwrap().is_engaged());
+
+        s.tick(Instant::from_millis(
+            base + u64::from(MIN_TX_INTERVAL_MS) + 20,
+        ));
+        let mut cmd = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                cmd = GuidanceSystemCmd::decode(&frame.data);
+            }
+        }
+        let cmd = cmd.expect("the safe state reaches the bus");
+        assert_eq!(cmd.status, CurvatureCommandStatus::NotIntendedToSteer);
+        assert_eq!(cmd.commanded_curvature, 0.0);
+
+        // Explicitly clearing the latch restores control.
+        s.get_mut::<Guidance>().unwrap().clear_stop();
+        feed_machine_info(&mut s, Instant::from_millis(base + 60));
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+        assert!(s.get::<Guidance>().unwrap().is_engaged());
+    }
+
+    /// W10 — `f64::EPSILON` is not a speed. A micrometre-per-second odometry
+    /// residue used to yield a curvature in the billions, clamped to a 12 cm
+    /// turn radius and transmitted as a valid maximum-curvature command.
+    #[test]
+    fn near_zero_speed_commands_straight_not_full_lock() {
+        let mut s = claimed_session();
+        s.get_mut::<Guidance>()
+            .unwrap()
+            .command_velocity(1e-6, 0.04);
+        s.tick(Instant::ZERO.add_millis(2050));
+
+        let mut curvature = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                curvature = crate::isobus::implement::GuidanceSystemCmd::decode(&frame.data)
+                    .map(|c| c.commanded_curvature);
+            }
+        }
+        assert_eq!(
+            curvature,
+            Some(0.0),
+            "a speed below the physical threshold must command straight"
+        );
     }
 }

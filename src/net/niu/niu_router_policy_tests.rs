@@ -10,6 +10,18 @@ mod tests {
         Frame::from_message(Priority::Default, pgn, src, dst, &[1, 2, 3])
     }
 
+    /// An NIU configuration command addressed to a specific bridge, as
+    /// ISO 11783-4 requires for PGN 60672.
+    fn niu_command(data: Vec<u8>, source: Address, destination: Address) -> Message {
+        Message::with_addressing(
+            PGN_NIU_NETWORK_MSG,
+            data,
+            source,
+            destination,
+            Priority::Default,
+        )
+    }
+
     #[test]
     fn niu_profiles_state_behaviours_and_honest_support() {
         assert_eq!(NIU_PROFILES.len(), 4);
@@ -664,7 +676,9 @@ mod tests {
         .to_vec();
         // Pad to make a valid Message (the function only inspects the first 5 bytes here).
         payload.resize(8, 0xFF);
-        let msg = Message::new(PGN_NIU_NETWORK_MSG, payload.clone(), 0x10);
+        // ISO 11783-4: PGN 60672 is "CF to NIU, Destination-Specific", so a
+        // globally addressed configuration command is not one this NIU acts on.
+        let msg = niu_command(payload.clone(), 0x10, 0x20);
         niu.handle_niu_message(&Message::new(PGN_HEARTBEAT, payload.clone(), 0x10));
         assert!(
             niu.filters().is_empty(),
@@ -674,6 +688,86 @@ mod tests {
         niu.handle_niu_message(&msg);
         assert_eq!(niu.filters().len(), 1);
         assert_eq!(niu.filters()[0].pgn, PGN_HEARTBEAT);
+    }
+
+    /// H74 — `FilterRule` documents PGN 0 as the "any PGN" wildcard. In
+    /// block-specific mode a remote AddFilterEntry naming PGN 0 installed a
+    /// block-everything rule: one message turned the bridge into a blackhole.
+    #[test]
+    fn a_wildcard_filter_entry_from_the_bus_is_refused() {
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockSpecific));
+        niu.set_filter_mode(NiuFilterMode::BlockSpecific);
+        niu.start().unwrap();
+
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: 0,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+
+        assert!(
+            niu.filters().is_empty(),
+            "a wildcard block is an operator decision, not a peer's to assert"
+        );
+        // The bridge still forwards.
+        let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
+        assert!(niu.process_frame(f, Side::Tractor, 0).is_some());
+    }
+
+    /// H12 — a remote clear wiped the whole database, taking persistent
+    /// (configured-policy) rules with it. `clear_filters` already honours the
+    /// flag; the message handler bypassed it with a raw `Vec::clear`.
+    #[test]
+    fn a_remote_clear_keeps_persistent_filter_rules() {
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+
+        let mut permanent = FilterRule::new(PGN_DM1, ForwardPolicy::Block, true);
+        permanent.persistent = true;
+        niu.add_filter(permanent);
+        niu.add_filter(FilterRule::new(PGN_HEARTBEAT, ForwardPolicy::Block, true));
+        assert_eq!(niu.filters().len(), 2);
+
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::ClearFilterEntry,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+
+        assert_eq!(niu.filters().len(), 1, "the persistent rule survives");
+        assert_eq!(niu.filters()[0].pgn, PGN_DM1);
+    }
+
+    /// ISO 11783-4 lists PGN 60672 as "CF to NIU, Destination-Specific". A
+    /// globally addressed command let any CF reconfigure every NIU listening.
+    #[test]
+    fn a_globally_addressed_niu_command_is_ignored() {
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: PGN_HEARTBEAT,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+
+        niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload.clone(), 0x10));
+        assert!(niu.filters().is_empty(), "global destination is refused");
+
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+        assert_eq!(niu.filters().len(), 1, "an addressed command is honoured");
     }
 
     #[test]
@@ -693,7 +787,7 @@ mod tests {
             vec![0x06, 0x01, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             vec![0x99, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
         ] {
-            niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload, 0x10));
+            niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
         }
 
         assert!(niu.filters().is_empty());

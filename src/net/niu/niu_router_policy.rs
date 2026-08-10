@@ -1146,7 +1146,13 @@ impl Niu {
         if msg.pgn != PGN_NIU_NETWORK_MSG {
             return;
         }
-        if !msg.has_usable_source() || msg.destination == NULL_ADDRESS {
+        // A configuration command reconfigures *this* bridge, so it must be
+        // addressed to it. Accepting a globally addressed one let any CF on
+        // either segment rewrite the filter database of every NIU listening.
+        if !msg.has_usable_source()
+            || msg.destination == NULL_ADDRESS
+            || msg.destination == BROADCAST_ADDRESS
+        {
             return;
         }
         let Some(niu_msg) = NiuNetworkMsg::try_decode(&msg.data) else {
@@ -1167,6 +1173,19 @@ impl Niu {
                 // This always installed `Allow`, so adding an entry to a
                 // block-specific database asked the bridge to forward exactly
                 // the PGN the caller wanted stopped.
+                // PGN 0 is the wildcard "any PGN" (see `FilterRule`). Installed
+                // from a remote command in block-specific mode it blocks every
+                // frame in both directions — one message turns the bridge into
+                // a blackhole. A wildcard is an operator decision, not
+                // something a peer gets to assert over the bus.
+                if niu_msg.filter_pgn == 0 {
+                    tracing::warn!(
+                        target: "machbus.niu",
+                        source = %format_args!("0x{:02X}", msg.source),
+                        "refusing a wildcard NIU filter entry",
+                    );
+                    return;
+                }
                 let policy = match self.filter_mode() {
                     NiuFilterMode::BlockSpecific => ForwardPolicy::Block,
                     NiuFilterMode::PassSpecific => ForwardPolicy::Allow,
@@ -1185,7 +1204,10 @@ impl Niu {
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
             NiuFunction::ClearFilterEntry => {
-                self.filters.clear();
+                // Persistent rules are configured policy, not runtime state, so
+                // a remote clear must not take them with it. `filters.clear()`
+                // wiped the whole database including them.
+                self.clear_filters();
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
             NiuFunction::RequestGeneralParametrics => {

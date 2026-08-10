@@ -782,23 +782,16 @@ impl NMEAInterface {
         {
             return;
         }
-        let mut pos = GNSSPosition {
-            wgs: Wgs::new(
-                lat_raw as f64 * LAT_LON_RESOLUTION,
-                lon_raw as f64 * LAT_LON_RESOLUTION,
-                0.0,
-            ),
-            timestamp_us: msg.timestamp_us,
-            fix_type: GNSSFixType::GNSSFix,
-            ..Default::default()
-        };
-        if let Some(prev) = self.latest_position {
-            pos.heading_rad = prev.heading_rad;
-            pos.speed_mps = prev.speed_mps;
-            pos.satellites_used = prev.satellites_used;
-            pos.hdop = prev.hdop;
-            pos.pdop = prev.pdop;
-        }
+        // Appendix B.1 gives PGN 129025 two fields — latitude and longitude.
+        // It carries no quality of any kind, so claiming `GNSSFix` here
+        // overwrote the real method from 129029 field 9 twice a second: a gate
+        // written as `if pos.has_fix()` never opened, and one on `is_rtk()`
+        // chattered, while the machine kept steering on a receiver that had
+        // dropped to dead reckoning. Carry everything else forward untouched.
+        let mut pos = self.latest_position.unwrap_or_default();
+        pos.wgs.latitude = lat_raw as f64 * LAT_LON_RESOLUTION;
+        pos.wgs.longitude = lon_raw as f64 * LAT_LON_RESOLUTION;
+        pos.timestamp_us = msg.timestamp_us;
         self.latest_position = Some(pos);
         self.on_position.emit(&pos);
     }

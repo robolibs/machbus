@@ -88,6 +88,62 @@ mod tests {
         assert_eq!(*emitted.borrow(), 0);
     }
 
+    /// C4 — PGN 129025 has only latitude and longitude (Appendix B.1). It used
+    /// to stamp `GNSSFixType::GNSSFix` on every update, overwriting the real
+    /// method from 129029 twice a second: an autosteer gate on fix quality
+    /// never opened, and the machine kept steering on a receiver that had
+    /// dropped to dead reckoning.
+    #[test]
+    fn position_rapid_update_does_not_invent_a_fix_quality() {
+        let mut iface = NMEAInterface::default();
+
+        // A detailed fix (129029) establishes RTK quality, the satellite count
+        // and an altitude — none of which 129025 can carry.
+        let mut detail = vec![0xFFu8; 43];
+        detail[0] = 0x00;
+        detail[7..15].copy_from_slice(&(52_000_000_000_000_000i64).to_le_bytes());
+        detail[15..23].copy_from_slice(&(5_000_000_000_000_000i64).to_le_bytes());
+        detail[23..31].copy_from_slice(&(41_500_000i64).to_le_bytes());
+        // Low nibble GNSS system (0 = GPS), high nibble fix method (4 = RTK fixed).
+        detail[31] = (GNSSFixType::RTKFixed.as_u8() << 4) | GNSSSystem::GPS.as_u8();
+        detail[32] = 0xFC;
+        detail[33] = 21;
+        detail[34..36].copy_from_slice(&70u16.to_le_bytes());
+        detail[36..38].copy_from_slice(&90u16.to_le_bytes());
+        detail[38..42].copy_from_slice(&0i32.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_POSITION_DATA, detail));
+        assert_eq!(
+            iface.latest_position().unwrap().fix_type,
+            GNSSFixType::RTKFixed,
+            "precondition: the detailed fix established RTK"
+        );
+
+        // A rapid update moves the vehicle 1 m north and says nothing else.
+        let moved = GNSSPosition {
+            wgs: Wgs::new(52.000009, 5.0, 0.0),
+            ..Default::default()
+        };
+        iface.handle_message(&nmea_msg(
+            PGN_GNSS_POSITION_RAPID,
+            NMEAInterface::build_position(&moved).to_vec(),
+        ));
+
+        let cached = iface.latest_position().unwrap();
+        assert!((cached.wgs.latitude - 52.000009).abs() < 1e-6, "position updates");
+        assert_eq!(
+            cached.fix_type,
+            GNSSFixType::RTKFixed,
+            "a PG with no quality field must not downgrade the fix"
+        );
+        assert_eq!(cached.satellites_used, 21);
+        assert!(cached.hdop.is_some_and(|h| (h - 0.7).abs() < 1e-9));
+        assert_eq!(
+            cached.altitude_m,
+            Some(41.5),
+            "altitude is not a 129025 field and must survive"
+        );
+    }
+
     #[test]
     fn position_detail_rejects_reference_station_count_mismatches() {
         let mut iface = NMEAInterface::default();

@@ -101,8 +101,11 @@ impl TimSlot {
         resolution: 0.004,
         offset: -128.512,
         supports_float: true,
-        // Not marked Reserved in D.3.2.1; the default rule applies.
-        allows_accept_increase: true,
+        // D.3.2.1 lists "FBFE16 Reserved" for the aux valve. Only D.6.2.1
+        // (vehicle speed) defines this raw, and D.2.1 says: "If the value
+        // FBFE16 is not allowed for a TIM function, it shall be set to
+        // 'Reserved' in the message parameters definition."
+        allows_accept_increase: false,
         shape: SlotShape::Bidirectional,
     };
 
@@ -112,8 +115,8 @@ impl TimSlot {
         resolution: 0.125,
         offset: -4016.0,
         supports_float: false,
-        // Not marked Reserved in D.4.2.1; the default rule applies.
-        allows_accept_increase: true,
+        // D.4.2.1 lists "FBFE16 Reserved" for the PTO.
+        allows_accept_increase: false,
         shape: SlotShape::Bidirectional,
     };
 
@@ -154,7 +157,9 @@ impl TimSlot {
         resolution: 0.25,
         offset: -8032.0,
         supports_float: false,
-        allows_accept_increase: true,
+        // D.7.2.1 lists "FBFE16 Reserved" for curvature. Putting it on the wire
+        // here would place a Reserved raw on the one function that steers.
+        allows_accept_increase: false,
         shape: SlotShape::Curvature,
     };
 
@@ -271,9 +276,17 @@ impl TimSlot {
                 TimValue::ReleasedAwaitOperator | TimValue::ServerSetNegative => {
                     SPECIAL_RELEASED_AWAIT_OPERATOR
                 }
-                TimValue::ReleasedAcceptIncrease | TimValue::ServerSetPositive => {
+                // The decode side has always honoured `allows_accept_increase`;
+                // this arm did not, so the hitch emitted 0xFBFE even though
+                // D.5.2.1 marks it Reserved there. Fall back to 0xFBFD, which
+                // D.5.2.1 does define.
+                TimValue::ReleasedAcceptIncrease | TimValue::ServerSetPositive
+                    if self.allows_accept_increase =>
+                {
                     SPECIAL_RELEASED_ACCEPT_INCREASE
                 }
+                TimValue::ReleasedAcceptIncrease => SPECIAL_RELEASED_AWAIT_OPERATOR,
+                TimValue::ServerSetPositive => SPECIAL_RELEASED_ACCEPT_INCREASE,
                 TimValue::ReadyToControl => SPECIAL_READY_TO_CONTROL,
             };
         }
@@ -296,7 +309,12 @@ impl TimSlot {
             TimValue::ServerSetPositive => 0xFB00,
             TimValue::Float => 0xFB01,
             TimValue::ReleasedAwaitOperator => SPECIAL_RELEASED_AWAIT_OPERATOR,
-            TimValue::ReleasedAcceptIncrease => SPECIAL_RELEASED_ACCEPT_INCREASE,
+            TimValue::ReleasedAcceptIncrease if self.allows_accept_increase => {
+                SPECIAL_RELEASED_ACCEPT_INCREASE
+            }
+            // Reserved on this SLOT: release without claiming the operator has
+            // been told the value may increase.
+            TimValue::ReleasedAcceptIncrease => SPECIAL_RELEASED_AWAIT_OPERATOR,
             TimValue::ReadyToControl => SPECIAL_READY_TO_CONTROL,
             // Hitch-motion commands have no meaning on a bidirectional slot.
             TimValue::Stop | TimValue::LowerUntilStop | TimValue::RaiseUntilStop => {
@@ -395,21 +413,45 @@ mod tests {
                 slot.decode(SPECIAL_RELEASED_AWAIT_OPERATOR),
                 Some(TimValue::ReleasedAwaitOperator)
             );
-            // D.2.1 admits FBFE only where the function does not prohibit it;
-            // D.5.2.1 marks it Reserved for the hitch.
+            // D3 — FBFE is defined *only* for vehicle speed (D.6.2.1). The aux
+            // valve (D.3.2.1), PTO (D.4.2.1), hitch (D.5.2.1) and curvature
+            // (D.7.2.1) tables all list "FBFE16 Reserved", and D.2.1 says: "If
+            // the value FBFE16 is not allowed for a TIM function, it shall be
+            // set to 'Reserved' in the message parameters definition."
             assert_eq!(
                 slot.decode(SPECIAL_RELEASED_ACCEPT_INCREASE),
-                if slot == TimSlot::HITCH_POSITION {
-                    None
-                } else {
+                if slot == TimSlot::VEHICLE_SPEED {
                     Some(TimValue::ReleasedAcceptIncrease)
-                }
+                } else {
+                    None
+                },
+                "FBFE is defined only for vehicle speed"
+            );
+            // B7 — the encode side must honour the same rule; it did not, so a
+            // release put a Reserved raw on the wire.
+            assert_eq!(
+                slot.encode(TimValue::ReleasedAcceptIncrease),
+                if slot == TimSlot::VEHICLE_SPEED {
+                    SPECIAL_RELEASED_ACCEPT_INCREASE
+                } else {
+                    SPECIAL_RELEASED_AWAIT_OPERATOR
+                },
+                "a Reserved FBFE must never be transmitted"
             );
             // Reserved bands stay reserved.
             assert_eq!(slot.decode(0xFBF0), None);
             assert_eq!(slot.decode(0xFC00), None);
             assert_eq!(slot.decode(0xFFFF), None);
         }
+
+        // The steering SLOT is the one that matters most here.
+        let curvature = TimSlot::EXTERNAL_GUIDANCE_CURVATURE;
+        assert_eq!(curvature.decode(SPECIAL_RELEASED_ACCEPT_INCREASE), None);
+        assert_eq!(
+            curvature.encode(TimValue::ReleasedAcceptIncrease),
+            SPECIAL_RELEASED_AWAIT_OPERATOR,
+            "a Reserved raw must never reach the function that steers"
+        );
     }
 
     /// C29 — the hitch SLOT is not a bidirectional one. D.5.2.1 puts 0-100 %

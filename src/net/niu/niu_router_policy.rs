@@ -13,8 +13,9 @@ use super::identifier::Identifier;
 use super::message::Message;
 use super::name::Name;
 use super::pgn::pgn_is_valid;
-use super::pgn_defs::{PGN_ADDRESS_CLAIMED, PGN_NIU_NETWORK_MSG};
-use super::types::{Address, Pgn};
+use super::pgn_defs::{PGN_ACKNOWLEDGMENT, PGN_ADDRESS_CLAIMED, PGN_NIU_NETWORK_MSG};
+use crate::j1939::acknowledgment::Acknowledgment;
+use super::types::{Address, Pgn, Priority};
 
 const DEFAULT_LOOP_GUARD_WINDOW_MS: u32 = 250;
 const DEFAULT_LOOP_GUARD_MAX_RECENT_FORWARDS: usize = 256;
@@ -1218,9 +1219,16 @@ impl Niu {
     // ─── NIU control protocol ──────────────────────────────────────
 
     /// Process an incoming NIU Network Message (PGN `0xED00`).
-    pub fn handle_niu_message(&mut self, msg: &Message) {
+    /// Returns the Acknowledgment (PGN 59392) this command requires, addressed
+    /// to the commanding CF.
+    ///
+    /// ISO 11783-4 §6.6.2.3 says of each filter-database command that
+    /// "Acknowledgment of the command is provided with the Acknowledgment
+    /// Message (PGN 59392)". Nothing was ever emitted, so a configuring CF or
+    /// service tool could not tell an applied command from a dropped one.
+    pub fn handle_niu_message(&mut self, msg: &Message) -> Option<Message> {
         if msg.pgn != PGN_NIU_NETWORK_MSG {
-            return;
+            return None;
         }
         // A configuration command reconfigures *this* bridge, so it must be
         // addressed to it. Accepting a globally addressed one let any CF on
@@ -1229,10 +1237,12 @@ impl Niu {
             || msg.destination == NULL_ADDRESS
             || msg.destination == BROADCAST_ADDRESS
         {
-            return;
+            return None;
         }
         let Some(niu_msg) = NiuNetworkMsg::try_decode(&msg.data) else {
-            return;
+            // An undecodable control payload is a command this NIU cannot
+            // honour, so the requester is told rather than left waiting.
+            return Some(niu_acknowledgment(false, msg));
         };
         tracing::debug!(
             target: "machbus.niu",
@@ -1260,7 +1270,7 @@ impl Niu {
                         source = %format_args!("0x{:02X}", msg.source),
                         "refusing a wildcard NIU filter entry",
                     );
-                    return;
+                    return Some(niu_acknowledgment(false, msg));
                 }
                 let policy = match self.filter_mode() {
                     NiuFilterMode::BlockSpecific => ForwardPolicy::Block,
@@ -1300,7 +1310,25 @@ impl Niu {
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
         }
+        Some(niu_acknowledgment(true, msg))
     }
+}
+
+/// Build the PGN 59392 response to an NIU command, addressed to its sender.
+fn niu_acknowledgment(positive: bool, request: &Message) -> Message {
+    let ack = if positive {
+        Acknowledgment::ack(PGN_NIU_NETWORK_MSG, request.destination)
+    } else {
+        Acknowledgment::nack(PGN_NIU_NETWORK_MSG, request.destination)
+    };
+    let payload = ack.encode().unwrap_or([0xFFu8; 8]);
+    Message::with_addressing(
+        PGN_ACKNOWLEDGMENT,
+        payload.to_vec(),
+        request.destination,
+        request.source,
+        Priority::Default,
+    )
 }
 
 // ─── Address translation database ──────────────────────────────────────

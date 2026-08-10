@@ -812,6 +812,62 @@ mod tests {
         assert_eq!(NiuFilterDbResponse::decode(&[]), None);
     }
 
+    /// H14 — ISO 11783-4 §6.6.2.3 says of each filter-database command that
+    /// "Acknowledgment of the command is provided with the Acknowledgment
+    /// Message (PGN 59392)". Nothing was ever emitted, so a configuring CF
+    /// could not tell an applied command from a dropped one.
+    #[test]
+    fn niu_commands_are_acknowledged_to_their_sender() {
+        use crate::j1939::acknowledgment::{AckControl, Acknowledgment};
+        use crate::net::pgn_defs::PGN_ACKNOWLEDGMENT;
+
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: PGN_HEARTBEAT,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+
+        let reply = niu
+            .handle_niu_message(&niu_command(payload.clone(), 0x44, 0x20))
+            .expect("a command is acknowledged");
+        assert_eq!(reply.pgn, PGN_ACKNOWLEDGMENT);
+        assert_eq!(reply.destination, 0x44, "addressed back to the commander");
+        assert_eq!(reply.source, 0x20);
+        let decoded = Acknowledgment::decode(&reply.data).expect("a well-formed ACK");
+        assert_eq!(decoded.control, AckControl::PositiveAck);
+        assert_eq!(decoded.acknowledged_pgn, PGN_NIU_NETWORK_MSG);
+
+        // A refused command is NACKed, not silently dropped.
+        let mut wildcard = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: 0,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        wildcard.resize(8, 0xFF);
+        let refusal = niu
+            .handle_niu_message(&niu_command(wildcard, 0x44, 0x20))
+            .expect("a refusal is still answered");
+        assert_eq!(
+            Acknowledgment::decode(&refusal.data).unwrap().control,
+            AckControl::NegativeAck
+        );
+
+        // A globally addressed command is not this NIU's to answer at all.
+        assert!(
+            niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload, 0x44))
+                .is_none()
+        );
+    }
+
     #[test]
     fn handle_niu_message_ignores_malformed_payloads() {
         let mut niu = Niu::new(NiuConfig::default());
@@ -829,7 +885,7 @@ mod tests {
             vec![0x06, 0x01, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             vec![0x99, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
         ] {
-            niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+            let _ = niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
         }
 
         assert!(niu.filters().is_empty());

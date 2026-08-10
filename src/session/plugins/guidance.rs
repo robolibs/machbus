@@ -417,6 +417,24 @@ impl Plugin for Guidance {
                 ),
                 limit_status: info.guidance_limit_status.as_u8(),
             }));
+
+            // H18 — the limit status was decoded, published and otherwise
+            // ignored here, so a non-recoverable steering fault or an operator
+            // taking control left this controller still asserting intent.
+            use crate::isobus::implement::guidance::GuidanceLimitStatus as Limit;
+            if self.engaged
+                && matches!(
+                    info.guidance_limit_status,
+                    Limit::OperatorLimitedControlled | Limit::NonRecoverableFault
+                )
+            {
+                let was_engaged = self.engaged;
+                if self.request_stop(SafeStopTrigger::OperatorOverride) {
+                    ctx.emit(Event::Guidance(GuidanceEvent::StopRequested {
+                        was_engaged,
+                    }));
+                }
+            }
         }
     }
 

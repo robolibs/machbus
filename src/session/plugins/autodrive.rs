@@ -390,22 +390,37 @@ impl Plugin for AutoDrive {
             // loop needs, so mirror it into the automation status rather than
             // discarding it as the guidance plugin used to.
             if self.status.is_active() {
-                let next = match info.guidance_limit_status.as_u8() {
-                    2 => AutomationStatus::ActiveLimitedHigh,
-                    3 => AutomationStatus::ActiveLimitedLow,
-                    6 => AutomationStatus::Fault,
-                    _ => AutomationStatus::ActiveNotLimited,
-                };
-                if next == AutomationStatus::Fault {
-                    self.disengage(SafeStopTrigger::OperatorOverride);
-                    ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
-                        trigger: SafeStopTrigger::OperatorOverride,
-                    }));
-                } else if next != self.status {
-                    self.status = next;
-                    ctx.emit(Event::Autodrive(AutodriveEvent::StateChanged {
-                        status: next,
-                    }));
+                use crate::isobus::implement::guidance::GuidanceLimitStatus as Limit;
+                match info.guidance_limit_status {
+                    // The operator is limiting or has taken control, and a
+                    // non-recoverable fault is a fault. Both are the machine
+                    // telling this node to stop asking for the wheel. Status 1
+                    // used to fall through to "not limited", so an operator
+                    // intervention read as normal operation.
+                    Limit::OperatorLimitedControlled | Limit::NonRecoverableFault => {
+                        let trigger = SafeStopTrigger::OperatorOverride;
+                        if self.stop.trip(trigger) {
+                            self.enter_safe_state();
+                            ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop { trigger }));
+                        }
+                    }
+                    // Anti-windup information for an outer loop.
+                    Limit::LimitedHigh | Limit::LimitedLow | Limit::NotLimited => {
+                        let next = match info.guidance_limit_status {
+                            Limit::LimitedHigh => AutomationStatus::ActiveLimitedHigh,
+                            Limit::LimitedLow => AutomationStatus::ActiveLimitedLow,
+                            _ => AutomationStatus::ActiveNotLimited,
+                        };
+                        if next != self.status {
+                            self.status = next;
+                            ctx.emit(Event::Autodrive(AutodriveEvent::StateChanged {
+                                status: next,
+                            }));
+                        }
+                    }
+                    // Reserved and not-available say nothing about the limit, so
+                    // claiming "not limited" would be inventing a reading.
+                    Limit::Reserved1 | Limit::Reserved2 | Limit::NotAvailable => {}
                 }
             }
         }
@@ -867,6 +882,56 @@ mod tests {
         assert_eq!(
             s.get::<AutoDrive>().unwrap().stop_reason(),
             Some(SafeStopTrigger::OperatorOverride)
+        );
+    }
+
+    /// H26 — guidance limit status 1 is `OperatorLimitedControlled`: the
+    /// operator is limiting or has taken control. It used to fall through to
+    /// the catch-all and be mirrored as `ActiveNotLimited`, so an operator
+    /// intervention read as normal operation and the controller kept steering.
+    #[test]
+    fn an_operator_limited_status_stops_the_controller() {
+        for limit_status in [1u8, 6] {
+            let mut s = node();
+            let now = Instant::from_millis(5_000);
+            feed_info(&mut s, 0, now);
+            s.tick(now);
+            s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+            assert!(s.get::<AutoDrive>().unwrap().is_engaged());
+
+            feed_info(&mut s, limit_status, now.add_millis(50));
+            assert!(
+                !s.get::<AutoDrive>().unwrap().is_engaged(),
+                "limit status {limit_status} must stop the controller"
+            );
+            assert_eq!(
+                s.get::<AutoDrive>().unwrap().stop_reason(),
+                Some(SafeStopTrigger::OperatorOverride)
+            );
+        }
+    }
+
+    /// A reserved or not-available limit status says nothing about the limit,
+    /// so it must not be reported as "not limited" either.
+    #[test]
+    fn an_unknown_limit_status_leaves_the_state_alone() {
+        let mut s = node();
+        let now = Instant::from_millis(5_000);
+        feed_info(&mut s, 2, now);
+        s.tick(now);
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        feed_info(&mut s, 2, now.add_millis(50));
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().status(),
+            AutomationStatus::ActiveLimitedHigh
+        );
+
+        // 7 = not available: the previous reading stands.
+        feed_info(&mut s, 7, now.add_millis(100));
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().status(),
+            AutomationStatus::ActiveLimitedHigh,
+            "an unknown limit must not be reported as not-limited"
         );
     }
 

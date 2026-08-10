@@ -96,7 +96,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     malformed_client.connect().unwrap();
     malformed_client.handle_tc_message(&Message::new(
         PGN_ECU_TO_TC,
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3").to_vec(),
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle").to_vec(),
         0x33,
     ));
     assert_eq!(
@@ -107,7 +107,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     for invalid_source in [NULL_ADDRESS, BROADCAST_ADDRESS] {
         malformed_client.handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
-            parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3")
+            parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle")
                 .to_vec(),
             invalid_source,
         ));
@@ -119,7 +119,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     }
     malformed_client.handle_tc_message(&Message::new(
         PGN_TC_TO_ECU,
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3").to_vec(),
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle").to_vec(),
         0x33,
     ));
     malformed_client.update(1); // Working Set Master.
@@ -368,7 +368,7 @@ fn fixture_isobus_tc_ddi_database_snapshot_is_stable() {
 #[test]
 fn fixture_isobus_tc_process_data_status_and_error_paths_are_stable() {
     let tc_status =
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3");
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle");
     let tech_request =
         parse_named_hex_bytes(ISOBUS_TC_PROCESS_DATA_HEX, "tech_capabilities_request");
     let tech_caps = parse_named_hex_frame(

@@ -12,7 +12,7 @@ use machbus::isobus::tc::{
     DDI, DDOP, DDOPHelpers, DataDictionary, DeviceElement, DeviceElementType, DeviceObject,
     DeviceProcessData, DeviceProperty, DeviceValuePresentation, ObjectID,
     ProcessDataAcknowledgeErrorCodes, TC_STATUS_INTERVAL_MS, TCClientCapabilities,
-    TCClientTaskStatus, TCServerConfig, TaskControllerClient, TaskControllerServer, TriggerMethod,
+    TCServerConfig, TaskControllerClient, TaskControllerServer, TriggerMethod,
     ddi,
 };
 use machbus::isobus::vt::{
@@ -869,7 +869,7 @@ fn task_controller_client_message_encoding_matches_agisostack_examples() {
     assert_eq!(version_frame.destination(), 0xF7);
 
     assert_eq!(
-        TaskControllerClient::build_status(TCClientTaskStatus::Idle, 0, 0),
+        TaskControllerClient::build_client_task(false),
         [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00]
     );
 

@@ -5,7 +5,7 @@ use machbus::isobus::tc::{
     MeasurementTriggerRuntime, ObjectPoolActivationError, ObjectPoolDeletionErrors,
     ObjectPoolErrorCodes, PeerControlAssignment, PeerControlInterface, PrescriptionMap,
     PrescriptionZone, ProcessDataAcknowledgeErrorCodes, ProcessDataCommands, ServerOptions,
-    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig, TCClientTaskStatus,
+    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig,
     TCGEOInterface, TCServerConfig, TCState, TaskControllerClient, TaskControllerServer,
     TriggerMethod, geo_ddi, prescription_rate_from_engineering,
     prescription_rate_process_data_payload, prescription_rate_to_engineering, tc_cmd,
@@ -714,14 +714,16 @@ fn tc_status_frames_preserve_busy_source_and_client_server_binding() {
     assert_eq!(idle[4] & 0x08, 0);
     assert_eq!(idle[5], 0x00);
     assert_eq!(idle[6], 0x00);
-    assert_eq!(idle[7], 3);
+    // F1 — B.8.1 byte 8 is Reserved; the channel count belongs to the B.5.3
+    // version/capabilities frame.
+    assert_eq!(idle[7], 0xFF);
 
     server.set_command_busy_for(0x42, ProcessDataCommands::RequestValue.as_u8());
     let busy = server.update(TC_STATUS_INTERVAL_MS).unwrap();
     assert_ne!(busy[4] & 0x08, 0);
     assert_eq!(busy[5], 0x42);
     assert_eq!(busy[6], ProcessDataCommands::RequestValue.as_u8());
-    assert_eq!(busy[7], 3);
+    assert_eq!(busy[7], 0xFF);
 
     server.set_command_busy(false);
     let cleared = server.update(TC_STATUS_INTERVAL_MS).unwrap();
@@ -753,16 +755,18 @@ fn tc_status_frames_preserve_busy_source_and_client_server_binding() {
         "wrong-source TC status must not move the lifecycle state"
     );
 
-    let status = TaskControllerClient::build_status(
-        TCClientTaskStatus::Active,
-        0x33,
-        ProcessDataCommands::RequestValue.as_u8(),
-    );
-    assert_eq!(&status[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]);
-    assert_eq!(status[4], TCClientTaskStatus::Active.as_u8());
-    assert_eq!(status[5], 0x33);
-    assert_eq!(status[6], ProcessDataCommands::RequestValue.as_u8());
-    assert_eq!(status[7], 0x00);
+    // F5 — B.8.2: "Byte 2: Element number, set to not available FF16. Bytes
+    // 3, 4: DDI, set to not available FFFF16. Bytes 5 to 8: Bit 1 Actual TC or
+    // DL status: task totals active (as received in Task Controller Status
+    // message, Byte 5, Bit 1)."
+    //
+    // Bytes 5-8 are one 32-bit field carrying only that mirrored bit. This used
+    // to assert the B.8.1 *server* layout — a status enum, a command address
+    // and a command code — none of which B.8.2 defines.
+    let idle = TaskControllerClient::build_client_task(false);
+    assert_eq!(idle, [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00]);
+    let running = TaskControllerClient::build_client_task(true);
+    assert_eq!(running, [0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00]);
 }
 
 #[test]

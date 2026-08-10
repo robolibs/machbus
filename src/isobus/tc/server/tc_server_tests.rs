@@ -79,8 +79,10 @@ mod tests {
             );
             s.start().unwrap();
 
+            // F1 — B.8.1 byte 8 is Reserved. The channel count belongs to the
+            // B.5.3 version/capabilities frame, and is asserted there.
             let status = s.update(TC_STATUS_INTERVAL_MS).unwrap();
-            assert_eq!(status[7], channels);
+            assert_eq!(status[7], 0xFF);
 
             let out = s.handle_client_message(&ecu_msg(
                 vec![
@@ -468,7 +470,39 @@ mod tests {
         assert!(s.update(TC_STATUS_INTERVAL_MS - 1).is_none());
         let bytes = s.update(2).unwrap();
         assert_eq!(bytes[0], 0xF0 | ProcessDataCommands::Status.as_u8());
-        assert_eq!(bytes[1], 7);
+        // F1 — B.8.1: "Byte 2: Element number, set to not available FF16.
+        // Bytes 3, 4: DDI, set to not available FFFF16." These carried the TC
+        // number and version.
+        assert_eq!(&bytes[1..4], &[0xFF, 0xFF, 0xFF]);
+    }
+
+    /// F1 — B.8.1 byte 5 is the TC/DL status bitfield, not the capability
+    /// options. A TC configured as TC-BAS (`server_options` bit 0x01)
+    /// broadcast "task totals active" from power-up with no task running, and
+    /// B.8.1 makes a 0→1 transition of that bit reset every client's totals.
+    #[test]
+    fn status_byte_five_reports_tc_state_not_capability_options() {
+        let mut s = TaskControllerServer::new(valid_config().with_options(0x01));
+        s.start().unwrap();
+
+        let idle = s.update(TC_STATUS_INTERVAL_MS).unwrap();
+        assert_eq!(
+            idle[4], 0x00,
+            "no task is running, so no status bit may be set"
+        );
+
+        s.set_task_totals_active(true);
+        assert_eq!(s.update(TC_STATUS_INTERVAL_MS).unwrap()[4] & 0x01, 0x01);
+
+        s.set_task_totals_active(false);
+        s.set_nvm_busy(true, false);
+        let nvm = s.update(TC_STATUS_INTERVAL_MS).unwrap()[4];
+        assert_eq!(nvm & 0x01, 0x00);
+        assert_eq!(nvm & 0x02, 0x02);
+
+        s.set_nvm_busy(false, false);
+        s.set_out_of_memory(true);
+        assert_eq!(s.update(TC_STATUS_INTERVAL_MS).unwrap()[4] & 0x80, 0x80);
     }
 
     #[test]
@@ -486,7 +520,7 @@ mod tests {
         assert_eq!(idle[4] & 0x08, 0x00);
         assert_eq!(idle[5], 0x00);
         assert_eq!(idle[6], 0x00);
-        assert_eq!(idle[7], 16);
+        assert_eq!(idle[7], 0xFF, "B.8.1 byte 8 is Reserved");
 
         s.set_command_busy_for(0x88, tc_cmd::OBJECT_POOL_TRANSFER);
         let busy = s.update(TC_STATUS_INTERVAL_MS).unwrap();

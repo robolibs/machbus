@@ -274,6 +274,15 @@ pub struct TaskControllerServer {
     structure_label: [u8; 7],
     localization_label: [u8; 7],
     command_busy: bool,
+    /// B.8.1 byte 5 bit 1: "Task totals active, a task is started or resumed".
+    /// A 0→1 transition tells every connected client to reset its task totals
+    /// and start counting, so this must never be set by anything but a task.
+    task_totals_active: bool,
+    /// B.8.1 byte 5 bit 2 / bit 3: busy saving to / reading from NVM.
+    nvm_write_busy: bool,
+    nvm_read_busy: bool,
+    /// B.8.1 byte 5 bit 8.
+    out_of_memory: bool,
     current_command_source_address: Address,
     current_command_byte: u8,
     measurement_triggers: Vec<MeasurementTriggerRuntime>,
@@ -306,6 +315,10 @@ impl TaskControllerServer {
             structure_label: [0xFF; 7],
             localization_label: [0xFF; 7],
             command_busy: false,
+            task_totals_active: false,
+            nvm_write_busy: false,
+            nvm_read_busy: false,
+            out_of_memory: false,
             current_command_source_address: 0,
             current_command_byte: 0,
             measurement_triggers: Vec::new(),
@@ -748,13 +761,41 @@ impl TaskControllerServer {
         None
     }
 
+    /// B.8.1 Task Controller Status.
+    ///
+    /// Byte 2 and bytes 3-4 are the element number and DDI, both "set to not
+    /// available" — they carried the TC number and version. Byte 5 is the
+    /// TC/DL status bitfield — it carried the *capability options*, so a TC
+    /// configured as TC-BAS (`server_options` bit 0x01) broadcast "task totals
+    /// active" from power-up with no task running, and B.8.1 makes a 0→1
+    /// transition of that bit mean every client resets its task totals.
     fn encode_tc_status(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = 0xF0 | ProcessDataCommands::Status.as_u8();
-        data[1] = self.tc_number;
-        data[2] = 0x00;
-        data[3] = self.tc_version;
-        data[4] = self.server_options | if self.command_busy { 0x08 } else { 0x00 };
+        data[1] = 0xFF;
+        data[2] = 0xFF;
+        data[3] = 0xFF;
+
+        let mut status = 0u8;
+        if self.task_totals_active {
+            status |= 0x01;
+        }
+        if self.nvm_write_busy {
+            status |= 0x02;
+        }
+        if self.nvm_read_busy {
+            status |= 0x04;
+        }
+        if self.command_busy {
+            status |= 0x08;
+        }
+        if self.out_of_memory {
+            status |= 0x80;
+        }
+        data[4] = status;
+
+        // Bytes 6 and 7 are "valid only if Byte 5, Bit 4 is set, or else
+        // transmit value = 0".
         data[5] = if self.command_busy {
             self.current_command_source_address
         } else {
@@ -765,8 +806,35 @@ impl TaskControllerServer {
         } else {
             0x00
         };
-        data[7] = self.num_channels;
+        data[7] = 0xFF;
         data
+    }
+
+    /// Which TC instance this is.
+    ///
+    /// No ISO 11783-10 Annex B message carries this: it used to be transmitted
+    /// in TC Status byte 2, which B.8.1 reserves as "element number, set to not
+    /// available". It remains configuration an integrator can read back — a
+    /// multi-TC bus distinguishes instances by NAME, not by a status byte.
+    #[must_use]
+    pub const fn tc_number(&self) -> u8 {
+        self.tc_number
+    }
+
+    /// Whether a task is running, so task totals may accumulate (B.8.1 bit 1).
+    pub const fn set_task_totals_active(&mut self, active: bool) {
+        self.task_totals_active = active;
+    }
+
+    /// Report the non-volatile-memory busy flags (B.8.1 bits 2 and 3).
+    pub const fn set_nvm_busy(&mut self, writing: bool, reading: bool) {
+        self.nvm_write_busy = writing;
+        self.nvm_read_busy = reading;
+    }
+
+    /// Report that the TC is out of memory (B.8.1 bit 8).
+    pub const fn set_out_of_memory(&mut self, out_of_memory: bool) {
+        self.out_of_memory = out_of_memory;
     }
 
     /// Feed an inbound `PGN_ECU_TO_TC` message; returns the outbound

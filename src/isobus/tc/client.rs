@@ -29,6 +29,9 @@ use crate::net::types::{Address, Pgn};
 /// of byte 0 plus byte 1, i.e. a 12-bit unsigned field.
 pub const MAX_TC_PROCESS_DATA_ELEMENT_NUMBER: u16 = 0x0FFF;
 
+/// §6.6.3: "a cyclic Client Task message at an interval of 2 s".
+pub const CLIENT_TASK_INTERVAL_MS: u32 = 2000;
+
 /// Client task status byte used in the TC client status payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -241,6 +244,11 @@ pub struct TaskControllerClient {
     state: StateMachine<TCState>,
     ddop: DDOP,
     timer_ms: u32,
+    /// Separate from `timer_ms`, which inbound TC Status resets: coupling the
+    /// two would silence the Client Task cadence whenever the TC is chatty.
+    client_task_timer_ms: u32,
+    /// Mirrored from TC Status byte 5 bit 1 (B.8.2).
+    task_totals_active: bool,
     tc_address: Address,
     tc_version: u8,
     /// What this client advertises in its version response, and the ceiling on
@@ -263,6 +271,8 @@ impl TaskControllerClient {
             state: StateMachine::new(TCState::Disconnected),
             ddop: DDOP::default(),
             timer_ms: 0,
+            client_task_timer_ms: 0,
+            task_totals_active: false,
             tc_address: NULL_ADDRESS,
             tc_version: 0,
             capabilities: TCClientCapabilities::default(),
@@ -406,23 +416,28 @@ impl TaskControllerClient {
         fixed_mux_payload(tc_cmd::VERSION_REQUEST)
     }
 
-    /// Build the TC-client status payload. The first four bytes are the
-    /// process-data not-available sentinel (`FF FF FF FF`); bytes 4..6 carry
-    /// status, command-address, and command code; byte 7 is reserved zero.
+    /// Build the B.8.2 Client Task payload.
+    ///
+    /// "Byte 1: Client Task ... Byte 2: Element number, set to not available
+    /// FF16. Bytes 3, 4: DDI, set to not available FFFF16. Bytes 5 to 8: Bit 1
+    /// Actual TC or DL status: task totals active (as received in Task
+    /// Controller Status message, Byte 5, Bit 1)."
+    ///
+    /// Bytes 5-8 are one 32-bit field whose only defined content is that
+    /// mirrored bit. This used to reproduce the B.8.1 *server* layout here —
+    /// a status enum, a command address and a command code — none of which
+    /// B.8.2 defines, so a conformant TC read the client's echoed totals bit
+    /// out of a byte carrying something else entirely.
     #[must_use]
-    pub fn build_status(
-        status: TCClientTaskStatus,
-        command_address: Address,
-        command: u8,
-    ) -> [u8; 8] {
+    pub const fn build_client_task(task_totals_active: bool) -> [u8; 8] {
         [
             0xFF,
             0xFF,
             0xFF,
             0xFF,
-            status.as_u8(),
-            command_address,
-            command,
+            task_totals_active as u8,
+            0x00,
+            0x00,
             0x00,
         ]
     }
@@ -608,6 +623,28 @@ impl TaskControllerClient {
                 // connection is gone; drop to Disconnected so the app reconnects.
                 if self.timer_ms >= self.config.timeout_ms {
                     self.transition(TCState::Disconnected);
+                    return out;
+                }
+                // F2 — §6.6.3: "All clients that maintain a connection with a TC
+                // shall indicate their presence by transmitting to the TC a
+                // cyclic Client Task message at an interval of 2 s ... If the TC
+                // does not receive this message for at least 6 s, it assumes an
+                // uncontrolled shutdown of the client."
+                //
+                // Nothing was emitted here at all, so six seconds after the
+                // DDOP activated, every conformant TC declared the client dead
+                // and tore the connection down.
+                //
+                // Note this uses its own timer: `timer_ms` is reset by inbound
+                // TC Status and would otherwise couple the two watchdogs.
+                self.client_task_timer_ms = self.client_task_timer_ms.saturating_add(elapsed_ms);
+                if self.client_task_timer_ms >= CLIENT_TASK_INTERVAL_MS {
+                    self.client_task_timer_ms = 0;
+                    out.push(TCClientOutbound::to(
+                        PGN_ECU_TO_TC,
+                        Self::build_client_task(self.task_totals_active).to_vec(),
+                        self.tc_address,
+                    ));
                 }
             }
             _ => {}
@@ -805,6 +842,11 @@ impl TaskControllerClient {
 
     fn handle_tc_status(&mut self, msg: &Message) {
         self.tc_address = msg.source;
+        // B.8.2: the Client Task message echoes "task totals active (as
+        // received in Task Controller Status message, Byte 5, Bit 1)".
+        if let Some(&status) = msg.data.get(4) {
+            self.task_totals_active = status & 0x01 != 0;
+        }
         match self.state() {
             TCState::WaitForServerStatus => {
                 self.transition(TCState::SendWorkingSetMaster);
@@ -1115,6 +1157,64 @@ mod tests {
         ));
         assert_eq!(c.state(), TCState::Connected);
         c
+    }
+
+    /// F2 — ISO 11783-10 §6.6.3: "All clients that maintain a connection with a
+    /// TC shall indicate their presence by transmitting to the TC a cyclic
+    /// Client Task message at an interval of 2 s ... If the TC does not receive
+    /// this message for at least 6 s, it assumes an uncontrolled shutdown of
+    /// the client."
+    ///
+    /// In the Connected state the client emitted nothing at all, so six seconds
+    /// after the DDOP activated, every conformant TC declared the client dead
+    /// and closed the connection.
+    #[test]
+    fn a_connected_client_sends_the_cyclic_client_task_message() {
+        let mut c = connected_client();
+
+        // Nothing is due before the 2 s cadence.
+        let early = c.update(CLIENT_TASK_INTERVAL_MS - 1);
+        assert!(
+            !early
+                .iter()
+                .any(|o| o.data.first() == Some(&0xFF) && o.data[4] == 0x00 && o.data.len() == 8),
+            "no Client Task before the interval"
+        );
+
+        let due = c.update(1);
+        let task = due
+            .iter()
+            .find(|o| o.pgn == PGN_ECU_TO_TC && o.data.len() == 8 && o.data[0] == 0xFF)
+            .expect("a Client Task message is due");
+        assert_eq!(
+            task.data.as_slice(),
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00],
+            "B.8.2 layout with task totals inactive"
+        );
+
+        // It keeps flowing, so the TC's 6 s watchdog never expires.
+        let mut sent = 0;
+        for _ in 0..3 {
+            // Inbound TC Status keeps the *client's* watchdog fed; the Client
+            // Task cadence must be independent of it.
+            c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+            if c.update(CLIENT_TASK_INTERVAL_MS)
+                .iter()
+                .any(|o| o.data.len() == 8 && o.data[0] == 0xFF)
+            {
+                sent += 1;
+            }
+        }
+        assert_eq!(sent, 3, "the cadence must not depend on inbound traffic");
+
+        // B.8.2: the totals bit is mirrored from TC Status byte 5 bit 1.
+        c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0x01, 0, 0, 0], 0x33));
+        let mirrored = c.update(CLIENT_TASK_INTERVAL_MS);
+        let task = mirrored
+            .iter()
+            .find(|o| o.data.len() == 8 && o.data[0] == 0xFF)
+            .expect("a Client Task message is due");
+        assert_eq!(task.data[4], 0x01, "task totals active is echoed back");
     }
 
     #[test]

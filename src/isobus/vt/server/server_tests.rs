@@ -253,13 +253,16 @@ mod tests {
         let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
         transfer.extend(pool.serialize().unwrap());
         s.handle_ecu_message(&ecu_msg(transfer, 0x42));
-        assert!(s.clients()[0].pool_uploaded);
-        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
+        // E5 — the transfer is staged; C.2.2 b)1) allows any number of sessions
+        // before End of Object Pool, so nothing is live until that arrives.
+        assert!(!s.clients()[0].pool_uploaded);
 
         // End of pool ⇒ no errors and the working set becomes active.
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x00);
         assert_eq!(out[0].data[6], 0x00);
+        assert!(s.clients()[0].pool_uploaded);
+        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
         assert_eq!(s.state(), VTServerState::Connected);
         assert_eq!(s.active_working_set(), 0x42);
     }
@@ -284,20 +287,33 @@ mod tests {
             "unknown object type must not create client"
         );
 
+        // E5 — C.2.2 b)1): transfers are staged and only End of Object Pool
+        // closes the upload, so the pool is not live until then.
         let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
         transfer.extend(valid_pool().serialize().unwrap());
         s.handle_ecu_message(&ecu_msg(transfer, 0x42));
+        assert!(
+            !s.clients()[0].pool_uploaded,
+            "a transfer is staged, not applied"
+        );
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(out[0].data[1], 0x00);
         let valid_pool_size = valid_pool().size();
         assert_eq!(s.clients()[0].pool.size(), valid_pool_size);
         assert!(s.clients()[0].pool_uploaded);
 
+        // A malformed replacement upload must not damage the live pool.
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         s.handle_ecu_message(&ecu_msg(
             vec![cmd::OBJECT_POOL_TRANSFER, 0x01, 0x00, 0x00],
             0x42,
         ));
-        assert_eq!(s.clients()[0].pool.size(), valid_pool_size);
-        assert!(s.clients()[0].pool_uploaded);
+        assert_eq!(
+            s.clients()[0].pool.size(),
+            valid_pool_size,
+            "a staged transfer must not touch the live pool"
+        );
     }
 
     #[test]
@@ -316,7 +332,10 @@ mod tests {
 
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x01);
-        assert_eq!(out[0].data[6], 0x02);
+        // E8 — C.2.5: bit 1 says the pool references an object it does not
+        // contain, bit 3 that the VT deleted it. This used to report bit 1
+        // alone, and never actually deleted the rejected pool.
+        assert_eq!(out[0].data[6], 0x02 | 0x08);
         assert_eq!(s.state(), VTServerState::WaitForPoolUpload);
         assert_eq!(s.active_working_set(), NULL_ADDRESS);
         assert!(!s.clients()[0].pool_activated);
@@ -329,7 +348,10 @@ mod tests {
         let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x01);
-        assert_eq!(out[0].data[6], 0x02);
+        // E8 — nothing was transferred: "any other error" (bit 2), plus bit 3
+        // for the deletion. Reporting a missing object reference sent the
+        // Working Set hunting for a bad reference that does not exist.
+        assert_eq!(out[0].data[6], 0x04 | 0x08);
     }
 
     #[test]
@@ -427,6 +449,79 @@ mod tests {
         assert!(
             !s.clients().iter().any(|c| c.client_address == addr),
             "a repeated Initiating bit is an unexpected shutdown"
+        );
+    }
+
+    /// E5 — C.2.2 b)1): "The Working Set Master can send several single packet,
+    /// TP or ETP sessions or a combination of any of these to transfer the
+    /// entire pool. This can be required depending on the size of buffers
+    /// designed into the Working Set Master. Any number of sessions can be sent
+    /// before the End of Object Pool message is sent."
+    ///
+    /// Each session used to be deserialized on arrival and to *replace* the
+    /// pool, so only the last one survived: any ECU whose transmit buffer is
+    /// smaller than its pool — the case this clause exists for — silently lost
+    /// everything before it, and then failed End of Object Pool.
+    #[test]
+    fn a_pool_split_across_sessions_is_assembled_before_activation() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
+
+        let bytes = valid_pool().serialize().unwrap();
+        assert!(bytes.len() > 8, "the fixture pool needs splitting to matter");
+        let split = bytes.len() / 3;
+
+        // Three sessions, none of which is a whole pool on its own.
+        for chunk in [&bytes[..split], &bytes[split..split * 2], &bytes[split * 2..]] {
+            let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
+            transfer.extend_from_slice(chunk);
+            assert!(
+                s.handle_ecu_message(&ecu_msg(transfer, 0x42)).is_empty(),
+                "a transfer session has no Annex F response"
+            );
+        }
+
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(
+            out[0].data[1], 0x00,
+            "a pool sent in three sessions must assemble into one"
+        );
+        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
+        assert!(s.clients()[0].pool_activated);
+    }
+
+    /// C.2.6: "Only those objects that need to be changed are transmitted" —
+    /// a runtime update replaces the objects it carries and leaves the rest.
+    #[test]
+    fn a_runtime_pool_update_merges_rather_than_replacing() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        activate_valid_pool(&mut s, 0x42);
+        let original = s.clients()[0].pool.size();
+
+        // Re-open the upload window and send a single changed object.
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
+        let update = ObjectPool::default().with_object(
+            create_output_string(
+                0x10,
+                &OutputStringBody {
+                    value: b"new".to_vec(),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
+        transfer.extend(update.serialize().unwrap());
+        s.handle_ecu_message(&ecu_msg(transfer, 0x42));
+
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(out[0].data[1], 0x00, "a runtime update is accepted");
+        assert_eq!(
+            s.clients()[0].pool.size(),
+            original,
+            "a runtime update must not discard the objects it does not carry"
         );
     }
 

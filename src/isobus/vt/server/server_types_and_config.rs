@@ -303,6 +303,20 @@ struct DecodedAuxInputStatus {
     setpoint: u16,
 }
 
+/// Why an End of Object Pool was or was not accepted (C.2.5).
+///
+/// The response used to hardcode "references to missing objects" for every
+/// failure, so a Working Set whose pool used an unsupported attribute went
+/// hunting for a non-existent bad reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EndOfPoolOutcome {
+    Accepted,
+    /// Nothing was transferred before End of Object Pool.
+    NoPool,
+    /// The staged bytes did not deserialize, or the merged pool is invalid.
+    Malformed,
+}
+
 /// What a command handler did, in terms Annex F can encode.
 ///
 /// Handlers return this rather than raw error bits because the bit *positions*

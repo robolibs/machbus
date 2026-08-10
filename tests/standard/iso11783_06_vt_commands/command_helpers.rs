@@ -1773,6 +1773,14 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, 0x42))
             .is_empty()
     );
+    // E5 — the transfer is staged; End of Object Pool is what applies it.
+    assert!(!server.clients()[0].pool_uploaded);
+    let out = server.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        fixed_command(cmd::END_OF_POOL),
+        0x42,
+    ));
+    assert_eq!(out[0].data[1], 0x00);
     assert!(server.clients()[0].pool_uploaded);
     assert_eq!(server.clients()[0].pool.size(), 2);
 }

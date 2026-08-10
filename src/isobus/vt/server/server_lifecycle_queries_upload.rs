@@ -797,6 +797,8 @@ impl VTServer {
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }
 
+    /// E5 — C.2.2 b)1): a pool may arrive as any number of sessions, and only
+    /// End of Object Pool closes it. Accumulate here; deserialize once there.
     fn handle_object_pool_transfer(&mut self, msg: &Message) {
         if msg.data.len() < 2 {
             return;
@@ -807,18 +809,7 @@ impl VTServer {
         if !client.pool_upload_allowed {
             return;
         }
-        let Ok(pool) = ObjectPool::deserialize(&msg.data[1..]) else {
-            return;
-        };
-        if pool.is_empty() || pool.validate().is_err() {
-            return;
-        }
-        client.pool = pool;
-        client.pool_uploaded = true;
-        client.pool_upload_allowed = false;
-        client.pool_activation_pending = true;
-        client.pool_activated = false;
-        client.object_state = ServerObjectState::default();
+        client.pool_staging.extend_from_slice(&msg.data[1..]);
     }
 
     fn handle_store_version(&mut self, msg: &Message) -> Vec<OutboundFrame> {
@@ -928,27 +919,44 @@ impl VTServer {
         }
         let mut data = [0xFFu8; 8];
         data[0] = cmd::END_OF_POOL;
-        let accepted = match self.find_client_mut(msg.source) {
-            Some(c)
-                if c.pool_activation_pending
-                    && c.pool_uploaded
-                    && !c.pool.is_empty()
-                    && c.pool.validate().is_ok() =>
-            {
-                c.pool_activated = true;
-                c.pool_upload_allowed = false;
-                c.pool_activation_pending = false;
-                initialise_working_set_special_controls(&c.pool, &mut c.object_state);
-                true
-            }
+        let outcome = match self.find_client_mut(msg.source) {
+            None => EndOfPoolOutcome::NoPool,
             Some(c) => {
+                let staged = core::mem::take(&mut c.pool_staging);
                 c.pool_upload_allowed = false;
                 c.pool_activation_pending = false;
-                false
+                if staged.is_empty() {
+                    // C.2.2 b)3): End of Object Pool with nothing transferred.
+                    EndOfPoolOutcome::NoPool
+                } else {
+                    match ObjectPool::deserialize(&staged) {
+                        Err(_) => EndOfPoolOutcome::Malformed,
+                        Ok(incoming) if incoming.is_empty() => EndOfPoolOutcome::NoPool,
+                        Ok(incoming) => {
+                            // C.2.6: a runtime update replaces the objects it
+                            // carries and leaves the rest of the pool alone.
+                            let mut merged = c.pool.clone();
+                            for object in incoming.objects() {
+                                merged = merged.with_object(object.clone());
+                            }
+                            if merged.validate().is_err() {
+                                EndOfPoolOutcome::Malformed
+                            } else {
+                                c.pool = merged;
+                                c.pool_uploaded = true;
+                                c.pool_activated = true;
+                                initialise_working_set_special_controls(
+                                    &c.pool,
+                                    &mut c.object_state,
+                                );
+                                EndOfPoolOutcome::Accepted
+                            }
+                        }
+                    }
+                }
             }
-            None => false,
         };
-        if accepted {
+        if matches!(outcome, EndOfPoolOutcome::Accepted) {
             data[1] = 0x00;
             data[6] = 0x00;
             if !matches!(self.state(), VTServerState::Connected) {
@@ -959,8 +967,24 @@ impl VTServer {
             }
             self.on_client_connected.emit(&msg.source);
         } else {
+            // E8 — C.2.5: "When the VT replies with an error of any type, the
+            // VT should delete the object pool from volatile memory storage".
+            // Byte 7 bit 3 then truthfully reports that deletion. The old code
+            // always claimed bit 1 (a missing object reference) regardless of
+            // what actually went wrong.
+            if let Some(c) = self.find_client_mut(msg.source) {
+                c.pool = ObjectPool::default();
+                c.pool_uploaded = false;
+                c.pool_activated = false;
+                c.object_state = ServerObjectState::default();
+            }
             data[1] = 0x01;
-            data[6] = 0x02;
+            data[6] = match outcome {
+                // Bit 1: the pool references an object it does not contain.
+                EndOfPoolOutcome::Malformed => 0x02 | 0x08,
+                // Bit 2: any other error — here, nothing was transferred.
+                _ => 0x04 | 0x08,
+            };
         }
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }

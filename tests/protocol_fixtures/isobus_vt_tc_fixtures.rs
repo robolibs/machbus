@@ -673,8 +673,9 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         Priority::Default,
     ));
     assert!(no_reply.is_empty());
-    assert!(server.clients()[0].pool_uploaded);
-    assert_eq!(server.clients()[0].pool.serialize().unwrap(), pool_bytes);
+    // E5 — C.2.2 b)1): the transfer is staged and only End of Object Pool
+    // closes the upload, so the pool is not live yet.
+    assert!(!server.clients()[0].pool_uploaded);
 
     let eop_response = server.handle_ecu_message(&Message::with_addressing(
         PGN_ECU_TO_VT,
@@ -688,6 +689,8 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         eop_response[0].data,
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_success")
     );
+    assert!(server.clients()[0].pool_uploaded);
+    assert_eq!(server.clients()[0].pool.serialize().unwrap(), pool_bytes);
     assert_eq!(server.state(), VTServerState::Connected);
     assert_eq!(server.active_working_set(), 0x42);
 
@@ -764,7 +767,7 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ));
     assert_eq!(
         rejected_eop[0].data,
-        parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_pool_error")
+        parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_no_pool_error")
     );
 
     assert_eq!(

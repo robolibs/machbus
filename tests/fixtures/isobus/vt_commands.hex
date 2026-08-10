@@ -27,7 +27,11 @@ object_pool_transfer_partial_header=110100
 object_pool_transfer_unknown_type=110100FE0000
 end_of_object_pool_request=12FFFFFFFFFFFFFF
 end_of_object_pool_success=1200FFFFFFFF00FF
-end_of_object_pool_pool_error=1201FFFFFFFF02FF
+# C.2.5 byte 7: bit 1 = the pool references an object it does not contain,
+# bit 2 = any other error, bit 3 = the VT deleted the rejected pool. This case
+# is End of Object Pool with nothing transferred, so it is bit 2 (+ bit 3), not
+# a missing reference — which is what the old vector claimed for every failure.
+end_of_object_pool_no_pool_error=1201FFFFFFFF0CFF
 unsupported_graphics_context=FDB8FFFFFFFFFFFF
 
 client_select_input_object_1234_option02=A2341202FFFFFFFF

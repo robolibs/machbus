@@ -455,6 +455,16 @@ pub struct ServerWorkingSet {
     /// message (Annex G.3, once per second). §4.6.9: three seconds of silence
     /// is an unexpected shutdown of the Working Set Master.
     pub since_maintenance_ms: u32,
+    /// Bytes accumulated from Object Pool Transfer messages, awaiting End of
+    /// Object Pool.
+    ///
+    /// C.2.2 b)1): "The Working Set Master can send several single packet, TP
+    /// or ETP sessions or a combination of any of these to transfer the entire
+    /// pool ... Any number of sessions can be sent before the End of Object
+    /// Pool message is sent." Deserializing each session on arrival kept only
+    /// the last one, so any ECU whose transmit buffer is smaller than its pool
+    /// — the case that clause exists for — silently lost everything before it.
+    pub pool_staging: Vec<u8>,
     /// The ISO 11783-6 version this working set reports (G.3 byte 3), or `None`
     /// before its first maintenance message.
     pub declared_version: Option<u8>,
@@ -479,6 +489,7 @@ impl Default for ServerWorkingSet {
             pool_activated: false,
             last_status_ms: 0,
             since_maintenance_ms: 0,
+            pool_staging: Vec::new(),
             declared_version: None,
             seen_initiating: false,
             stored_versions: Vec::new(),

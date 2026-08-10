@@ -33,6 +33,7 @@ use crate::net::pgn_defs::{
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
+use crate::session::plugins::shortcut_button::ISB_TIMEOUT_MS;
 use crate::session::sys::{
     AutodriveEvent, AutodriveRefusal, AutomationStatus, BusEvent, DriveCommand, Event,
     SafeStopTrigger, StopLatch,
@@ -83,6 +84,13 @@ pub struct AutoDrive {
     seen_seq: u64,
     seq_changed_at: Option<Instant>,
     stale_ms: u32,
+    /// Last Auxiliary Shortcut Button report and when it arrived. The button
+    /// was handled only as a latch edge, so its *held* state was unknown:
+    /// `clear_stop()` could re-engage while the operator still held stop, and
+    /// an ISB transmitter that went silent read as permission rather than as
+    /// the loss of stop authority it is.
+    isb_stop_asserted: bool,
+    last_isb_at: Option<Instant>,
 }
 
 impl Default for AutoDrive {
@@ -111,6 +119,8 @@ impl AutoDrive {
             seen_seq: 0,
             seq_changed_at: None,
             stale_ms: COMMAND_STALE_MS,
+            isb_stop_asserted: false,
+            last_isb_at: None,
         }
     }
 
@@ -246,28 +256,53 @@ impl AutoDrive {
 
     /// Release a latched stop. Deliberately explicit — the fault clearing is
     /// not by itself consent to move.
+    ///
+    /// Refused while the operator is still asserting stop on the Auxiliary
+    /// Shortcut Button: clearing there produced a window of commanded motion
+    /// against a stop that was being held down.
     pub fn clear_stop(&mut self) {
+        if self.isb_stop_asserted {
+            return;
+        }
         self.stop.clear();
         if self.status == AutomationStatus::Fault {
             self.status = AutomationStatus::NotReady;
         }
     }
 
+    /// `true` while the operator is commanding stop on the Auxiliary Shortcut
+    /// Button, or a previously-seen ISB source has gone silent.
+    #[must_use]
+    pub const fn is_isb_stop_asserted(&self) -> bool {
+        self.isb_stop_asserted
+    }
+
     fn check_preconditions(&self) -> Result<(), AutodriveRefusal> {
-        if self.stop.is_latched() {
+        if self.stop.is_latched() || self.isb_stop_asserted {
             return Err(AutodriveRefusal::StopLatched);
         }
         if !self.link_alive {
             return Err(AutodriveRefusal::LinkDown);
         }
         let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
-        if info.lockout == MechanicalLockout::Active {
-            return Err(AutodriveRefusal::MechanicalLockout);
+        self.machine_violation(info).map_or(Ok(()), Err)
+    }
+
+    /// The machine-reported conditions that forbid steering. Split out so they
+    /// can be re-checked on every Machine Info broadcast: checking them once at
+    /// engage meant the operator could drop the engage switch or assert the
+    /// mechanical lockout mid-drive and this node kept asking for the wheel.
+    const fn machine_violation(&self, info: GuidanceMachineInfo) -> Option<AutodriveRefusal> {
+        if matches!(info.lockout, MechanicalLockout::Active) {
+            return Some(AutodriveRefusal::MechanicalLockout);
         }
-        if info.remote_engage_switch_status == GenericSaeBs02SlotValue::DisabledOffPassive {
-            return Err(AutodriveRefusal::OperatorNotEngaged);
+        if matches!(
+            info.remote_engage_switch_status,
+            GenericSaeBs02SlotValue::DisabledOffPassive
+        ) {
+            return Some(AutodriveRefusal::OperatorNotEngaged);
         }
-        Ok(())
+        None
     }
 
     fn set_status(&mut self, status: AutomationStatus) {
@@ -307,9 +342,14 @@ impl Plugin for AutoDrive {
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         if msg.pgn == PGN_SHORTCUT_BUTTON
             && let Some(decoded) = decode_message(msg)
-            && decoded.state == ShortcutButtonState::StopImplementOperations
         {
-            if self.stop.trip(SafeStopTrigger::IsbStop) {
+            self.last_isb_at = Some(ctx.now());
+            // Error is not permission: only an explicit "permit" clears stop.
+            self.isb_stop_asserted = !matches!(
+                decoded.state,
+                ShortcutButtonState::PermitAllImplementsToOperate
+            );
+            if self.isb_stop_asserted && self.stop.trip(SafeStopTrigger::IsbStop) {
                 self.enter_safe_state();
                 ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
                     trigger: SafeStopTrigger::IsbStop,
@@ -324,6 +364,23 @@ impl Plugin for AutoDrive {
             self.latest = Some(info);
             self.last_info_at = Some(ctx.now());
             self.link_alive = true;
+
+            // Preconditions are a continuing contract, not an entry check: the
+            // operator dropping the engage switch or asserting the mechanical
+            // lockout mid-drive must stop this node asking for the wheel.
+            if self.status.is_active()
+                && let Some(refusal) = self.machine_violation(info)
+            {
+                let trigger = match refusal {
+                    AutodriveRefusal::MechanicalLockout => SafeStopTrigger::IsbStop,
+                    _ => SafeStopTrigger::OperatorOverride,
+                };
+                if self.stop.trip(trigger) {
+                    self.enter_safe_state();
+                    ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop { trigger }));
+                }
+                return;
+            }
 
             // The machine's own limit status is the anti-windup signal an outer
             // loop needs, so mirror it into the automation status rather than
@@ -384,6 +441,22 @@ impl Plugin for AutoDrive {
             }));
         }
         self.link_alive = alive;
+
+        // An ISB source that was seen once and then went silent has taken the
+        // operator's stop authority with it. `shortcut_button.rs` already
+        // asserts this rule; this controller used to contradict it inside the
+        // same preset, so cutting the ISB cable left the machine steering.
+        if let Some(seen) = self.last_isb_at
+            && now.millis_since(seen) >= ISB_TIMEOUT_MS
+        {
+            self.isb_stop_asserted = true;
+            if self.stop.trip(SafeStopTrigger::IsbStop) {
+                self.enter_safe_state();
+                ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                    trigger: SafeStopTrigger::IsbStop,
+                }));
+            }
+        }
 
         // A live application refreshes its setpoint; one that has died does not.
         // Without this the cadence re-transmits "intended to steer" at the last
@@ -658,6 +731,128 @@ mod tests {
             .unwrap()
             .command(DriveCommand::halt())
             .unwrap();
+    }
+
+    fn feed_isb(s: &mut Session, state: ShortcutButtonState, at: Instant) {
+        let frame = Frame::new(
+            Identifier::encode(Priority::Default, PGN_SHORTCUT_BUTTON, 0x26, BROADCAST_ADDRESS),
+            // Bytes 1-6 reserved (FF), byte 7 transition count, byte 8 state in
+            // bits 1-2 with the rest reserved.
+            [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFC | state as u8],
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
+
+    /// C13 — `clear_stop()` cleared a stop the operator was still asserting,
+    /// giving a window of commanded motion against a held-down button.
+    #[test]
+    fn clear_stop_is_refused_while_the_button_is_held() {
+        let mut s = node();
+        let mut now = Instant::from_millis(5_000);
+        feed_info(&mut s, 0, now);
+        s.tick(now);
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+
+        feed_isb(&mut s, ShortcutButtonState::StopImplementOperations, now);
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::IsbStop)
+        );
+
+        // Still held: clearing must not take, and engage must stay refused.
+        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert!(s.get::<AutoDrive>().unwrap().is_isb_stop_asserted());
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::IsbStop),
+            "a stop being actively asserted must not be clearable"
+        );
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().engage(),
+            Err(AutodriveRefusal::StopLatched)
+        );
+
+        // Released: now the explicit clear is honoured.
+        now = now.add_millis(50);
+        feed_isb(
+            &mut s,
+            ShortcutButtonState::PermitAllImplementsToOperate,
+            now,
+        );
+        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert!(!s.get::<AutoDrive>().unwrap().is_isb_stop_asserted());
+        assert_eq!(s.get::<AutoDrive>().unwrap().stop_reason(), None);
+    }
+
+    /// C36 — cutting the ISB cable left the machine steering with no stop
+    /// authority. Seen once then lost is a stop, not permission.
+    #[test]
+    fn losing_the_isb_transmitter_stops_the_machine() {
+        let mut s = node();
+        let mut now = Instant::from_millis(5_000);
+        feed_info(&mut s, 0, now);
+        s.tick(now);
+        feed_isb(
+            &mut s,
+            ShortcutButtonState::PermitAllImplementsToOperate,
+            now,
+        );
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        assert!(s.get::<AutoDrive>().unwrap().is_engaged());
+
+        // The ISB node disappears; Machine Info keeps arriving so the guidance
+        // link watchdog cannot be what trips.
+        for _ in 0..8 {
+            now = now.add_millis(50);
+            feed_info(&mut s, 0, now);
+            s.tick(now);
+        }
+
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::IsbStop),
+            "a silent ISB source is a loss of stop authority"
+        );
+        assert!(!s.get::<AutoDrive>().unwrap().is_engaged());
+    }
+
+    /// C11 — preconditions were checked once at engage, so the operator
+    /// dropping the engage switch mid-drive did not stop this node asking for
+    /// the wheel.
+    #[test]
+    fn dropping_the_engage_switch_mid_drive_disengages() {
+        let mut s = node();
+        let now = Instant::from_millis(5_000);
+        feed_info(&mut s, 0, now);
+        s.tick(now);
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+        assert!(s.get::<AutoDrive>().unwrap().is_engaged());
+
+        // Byte 5 bits 6..7 carry the remote engage switch; 0b00 is
+        // disabled/off/passive — the operator letting go.
+        let mut data = MACHINE_INFO;
+        data[4] &= 0x3F;
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GUIDANCE_MACHINE_INFO,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            data,
+            8,
+        );
+        s.feed(0, &frame, now.add_millis(50));
+
+        assert!(
+            !s.get::<AutoDrive>().unwrap().is_engaged(),
+            "the operator's engage switch dropping must disengage"
+        );
+        assert_eq!(
+            s.get::<AutoDrive>().unwrap().stop_reason(),
+            Some(SafeStopTrigger::OperatorOverride)
+        );
     }
 
     /// P2.2 — the codec clamps an out-of-range curvature to the SLOT limit,

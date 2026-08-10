@@ -31,7 +31,13 @@ pub const TP_TIMEOUT_T1_MS: u32 = 750;
 pub const TP_TIMEOUT_T2_MS: u32 = 1250;
 pub const TP_TIMEOUT_T3_MS: u32 = 1250;
 pub const TP_TIMEOUT_T4_MS: u32 = 1050;
-pub const ETP_TIMEOUT_T1_MS: u32 = 750;
+// ISO 11783-3 §5.11.4.1: ETP uses the same timeout values as TP. The engine
+// used to apply T1 to every waiting state, so a peer using the full T2/T3
+// budget was aborted 500 ms early.
+pub const ETP_TIMEOUT_T1_MS: u32 = TP_TIMEOUT_T1_MS;
+pub const ETP_TIMEOUT_T2_MS: u32 = TP_TIMEOUT_T2_MS;
+pub const ETP_TIMEOUT_T3_MS: u32 = TP_TIMEOUT_T3_MS;
+pub const ETP_TIMEOUT_T4_MS: u32 = TP_TIMEOUT_T4_MS;
 
 /// Minimum spacing between BAM data-transfer packets (J1939-21).
 pub const TP_BAM_INTER_PACKET_MS: u32 = 50;

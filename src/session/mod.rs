@@ -49,10 +49,11 @@ pub use plugin::{Plugin, PluginCtx};
 // The public event surface — `session` is the single facade, so the unified
 // event enum and every subsystem event type are re-exported here.
 pub use sys::{
-    AuxiliaryEvent, BusEvent, ClaimEvent, DiagEvent, DmMemoryEvent, Event, EventQueue, FsEvent,
-    FsServerEvent, GnssEvent, GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent,
-    LanguageCommandEvent, MaintainPowerEvent, OverflowPolicy, PowertrainEvent, PowertrainSnapshot,
-    Pto, ScEvent, ShortcutButtonEvent, TcEvent, TcServerEvent, TimEvent, VtEvent, VtServerEvent,
+    AutodriveRefusal, AutomationStatus, AuxiliaryEvent, BusEvent, ClaimEvent, DiagEvent,
+    DmMemoryEvent, DriveCommand, Event, EventQueue, FsEvent, FsServerEvent, GnssEvent,
+    GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent, LanguageCommandEvent, MaintainPowerEvent,
+    OverflowPolicy, PowertrainEvent, PowertrainSnapshot, Pto, SafeStopTrigger, ScEvent,
+    ShortcutButtonEvent, StopLatch, TcEvent, TcServerEvent, TimEvent, VtEvent, VtServerEvent,
 };
 
 use plugin::{CtxAction, SendCmd};
@@ -94,9 +95,16 @@ pub struct Session {
     cf: crate::net::InternalCfHandle,
     plugins: Vec<Box<dyn Plugin>>,
     inbox: Rc<RefCell<VecDeque<Message>>>,
+    /// Source addresses seen violating our claim, queued by the network layer.
+    violations: Rc<RefCell<Vec<Address>>>,
     events: VecDeque<Event>,
     last_tick: Option<Instant>,
     last_claim: ClaimState,
+    /// Address held while `last_claim` was `Claimed`, so a later loss can
+    /// report which address went away.
+    last_claimed_address: Address,
+    /// Earliest wake-up any plugin asked for on the last [`Session::tick`].
+    next_deadline: Option<Instant>,
 }
 
 impl Session {
@@ -153,14 +161,50 @@ impl Session {
         let name = self.local_name();
         let mut sends = Vec::new();
         let mut actions = Vec::new();
+        let mut deadline: Option<Instant> = None;
         for plugin in &mut self.plugins {
             let mut ctx =
                 PluginCtx::new(addr, name, now, &mut sends, &mut self.events, &mut actions);
-            plugin.on_tick(&mut ctx);
+            if let Some(at) = plugin.on_tick(&mut ctx) {
+                deadline = Some(deadline.map_or(at, |cur: Instant| cur.min(at)));
+            }
         }
+        self.next_deadline = deadline;
         self.flush(sends);
         self.apply_actions(actions);
+        self.raise_address_violation_dtcs();
         self.detect_claim();
+    }
+
+    /// Turn queued address violations into active DTCs so they appear in the
+    /// next DM1, per ISO 11783-5 §4.4.4.3.
+    fn raise_address_violation_dtcs(&mut self) {
+        let pending: Vec<Address> = core::mem::take(&mut *self.violations.borrow_mut());
+        if pending.is_empty() {
+            return;
+        }
+        for source in pending {
+            let dtc = crate::j1939::diagnostic::Dtc::address_violation(source);
+            if let Some(diagnostics) = self.get_mut::<plugins::Diagnostics>() {
+                diagnostics.raise(dtc);
+            } else {
+                // No diagnostics plugged: still surface it, so the violation is
+                // not silently lost.
+                self.events
+                    .push_back(Event::Diag(sys::DiagEvent::Raised(dtc)));
+            }
+        }
+    }
+
+    /// Earliest instant a plugged subsystem asked to be ticked again, as of the
+    /// last [`Self::tick`].
+    ///
+    /// This is **advisory**: a host loop may sleep until this instant to avoid
+    /// spinning, but ticking more often is always safe and ticking later only
+    /// makes cadences late. `None` means no subsystem has pending work.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.next_deadline
     }
 
     // ── outputs ──
@@ -168,6 +212,12 @@ impl Session {
     /// Next `(port, frame)` the core wants to transmit, or `None` when drained.
     pub fn poll_transmit(&mut self) -> Option<(u8, Frame)> {
         self.net.take_outbound()
+    }
+
+    /// Queue an event from outside the plugin set (the driver uses this for
+    /// bus-level conditions it observes on the transport, such as bus-off).
+    pub(crate) fn push_event(&mut self, event: Event) {
+        self.events.push_back(event);
     }
 
     /// Next application event, or `None` when drained.
@@ -237,13 +287,33 @@ impl Session {
     }
 
     fn advance_time(&mut self, now: Instant) {
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        // Always drive the network on the first call (to kick off timers) and
-        // whenever wall time advanced.
-        if self.last_tick.is_none() || elapsed > 0 {
-            self.net.update(elapsed);
+        let Some(last) = self.last_tick else {
+            // First call: kick off timers without consuming any time.
+            self.net.update(0);
+            self.last_tick = Some(now);
+            return;
+        };
+
+        // A non-monotonic clock would otherwise saturate to a 0 ms delta and
+        // stall every timer silently. Surface it and resynchronise instead.
+        if now.as_micros() < last.as_micros() {
+            self.events
+                .push_back(Event::Bus(BusEvent::ClockWentBackwards {
+                    by_micros: last.as_micros() - now.as_micros(),
+                }));
+            self.last_tick = Some(now);
+            return;
         }
-        self.last_tick = Some(now);
+
+        let elapsed = now.millis_since(last);
+        if elapsed > 0 {
+            self.net.update(elapsed);
+            // Advance only by the milliseconds actually consumed so the
+            // sub-millisecond remainder survives into the next call. Setting
+            // `last_tick = now` here would discard it, and a pump faster than
+            // 1 kHz would then never accumulate a whole millisecond.
+            self.last_tick = Some(last.add_millis(u64::from(elapsed)));
+        }
     }
 
     fn route_inbox(&mut self, now: Instant) {
@@ -269,9 +339,20 @@ impl Session {
 
     fn flush(&mut self, sends: Vec<SendCmd>) {
         for cmd in sends {
-            let _ = self
+            // A send refused because the CF has not claimed an address used to
+            // vanish here. Safety-relevant subsystems queue commands through
+            // this path, so a silent drop lets an application believe it is
+            // steering while nothing reaches the bus.
+            if self
                 .net
-                .send(cmd.pgn, &cmd.data, self.cf, cmd.dst, cmd.prio);
+                .send(cmd.pgn, &cmd.data, self.cf, cmd.dst, cmd.prio)
+                .is_err()
+            {
+                self.events.push_back(Event::Bus(BusEvent::SendFailed {
+                    pgn: cmd.pgn,
+                    dst: cmd.dst,
+                }));
+            }
         }
     }
 
@@ -296,15 +377,35 @@ impl Session {
 
     fn detect_claim(&mut self) {
         let state = self.claim_state();
-        if state != self.last_claim {
-            if state == ClaimState::Claimed {
+        if state == self.last_claim {
+            return;
+        }
+
+        match state {
+            ClaimState::Claimed => {
                 self.events
                     .push_back(Event::AddressClaim(ClaimEvent::Claimed {
                         address: self.address(),
                     }));
             }
-            self.last_claim = state;
+            // Leaving Claimed means arbitration was lost or the CF went off
+            // the bus. Either way anything queued from here on is dropped by
+            // `flush`, so the application has to know.
+            _ if self.last_claim == ClaimState::Claimed => {
+                self.events.push_back(Event::AddressClaim(match state {
+                    ClaimState::None => ClaimEvent::Disconnected,
+                    _ => ClaimEvent::Lost {
+                        previous_address: self.last_claimed_address,
+                    },
+                }));
+            }
+            _ => {}
         }
+
+        if state == ClaimState::Claimed {
+            self.last_claimed_address = self.address();
+        }
+        self.last_claim = state;
     }
 }
 
@@ -384,14 +485,28 @@ impl SessionBuilder {
                 .subscribe(move |m| q.borrow_mut().push_back(m.clone()));
         }
 
+        // ISO 11783-5 §4.4.4.3 requires an address violation to activate a DTC
+        // (SPN 2000 + SA, FMI 31). The network layer detected violations and
+        // emitted an event that nothing consumed, and `Dtc::address_violation`
+        // had no callers at all.
+        let violations: Rc<RefCell<Vec<Address>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let q = violations.clone();
+            net.on_address_violation
+                .subscribe(move |sa| q.borrow_mut().push(*sa));
+        }
+
         Ok(Session {
             net,
             cf,
             plugins: self.plugins,
             inbox,
+            violations,
             events: VecDeque::new(),
             last_tick: None,
             last_claim: ClaimState::None,
+            last_claimed_address: crate::net::NULL_ADDRESS,
+            next_deadline: None,
         })
     }
 }
@@ -408,6 +523,112 @@ mod tests {
             .with_identity_number(identity)
             .with_function_code(0x80)
             .with_self_configurable(true)
+    }
+
+    /// F0.3 — `flush` used to swallow the send error, so an application could
+    /// command steering before the address claim completed and observe nothing
+    /// at all: no error, no event, and no frame on the bus.
+    #[test]
+    fn send_refused_before_claim_is_reported() {
+        use super::plugins::Guidance;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        let mut session = Session::builder(test_name(23), 0x80)
+            .plug(Guidance::new())
+            .build()
+            .unwrap();
+        // Deliberately not claimed: no `start()`, no ticks to completion.
+        session
+            .get_mut::<Guidance>()
+            .unwrap()
+            .command_curvature(20.0);
+        session.tick(Instant::from_millis(10));
+
+        assert!(
+            !session.is_claimed(),
+            "precondition: the CF has not claimed an address"
+        );
+        let reported = std::iter::from_fn(|| session.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Bus(BusEvent::SendFailed { pgn, .. }) if pgn == PGN_GUIDANCE_SYSTEM_CMD
+            )
+        });
+        assert!(
+            reported,
+            "a command dropped for want of an address must surface as SendFailed"
+        );
+    }
+
+    /// F0.1 — a pump faster than 1 kHz used to freeze every timer: each call
+    /// saw a 0 ms delta and `last_tick` was still advanced to `now`, so the
+    /// sub-millisecond remainder was discarded and never accumulated.
+    #[test]
+    fn sub_millisecond_pump_still_advances_timers() {
+        let mut session = Session::builder(test_name(20), 0x80).build().unwrap();
+        session.start().unwrap();
+
+        // 100 µs steps: every individual step is a 0 ms delta.
+        let mut now = Instant::ZERO;
+        for _ in 0..20_000 {
+            now = now.add_micros(100);
+            session.tick(now);
+            if session.is_claimed() {
+                break;
+            }
+        }
+
+        assert!(
+            session.is_claimed(),
+            "address claiming must complete under a >1 kHz pump (2 s simulated)"
+        );
+    }
+
+    /// F0.1 — the residue must survive across calls, not be rounded away.
+    #[test]
+    fn sub_millisecond_residue_accumulates_into_whole_milliseconds() {
+        let mut session = Session::builder(test_name(21), 0x80).build().unwrap();
+        session.start().unwrap();
+
+        // The first tick only establishes the baseline; the ten 100 µs steps
+        // after it are the one millisecond under test.
+        let mut now = Instant::ZERO;
+        session.tick(now);
+        for _ in 0..10 {
+            now = now.add_micros(100);
+            session.tick(now);
+        }
+
+        assert_eq!(
+            session.last_tick,
+            Some(Instant::ZERO.add_millis(1)),
+            "ten 100 µs steps must consume exactly 1 ms, leaving no residue"
+        );
+    }
+
+    /// F0.1 — a backwards clock previously saturated to a 0 ms delta and
+    /// stalled every watchdog silently.
+    #[test]
+    fn backwards_clock_is_reported_and_resynchronises() {
+        let mut session = Session::builder(test_name(22), 0x80).build().unwrap();
+        session.start().unwrap();
+        session.tick(Instant::from_millis(1_000));
+        while session.poll_event().is_some() {}
+
+        session.tick(Instant::from_millis(400));
+
+        let reported = std::iter::from_fn(|| session.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Bus(BusEvent::ClockWentBackwards { by_micros }) if by_micros == 600_000
+            )
+        });
+        assert!(reported, "a backwards clock must surface as a bus event");
+        assert_eq!(
+            session.last_tick,
+            Some(Instant::from_millis(400)),
+            "timers resynchronise to the new instant rather than stalling"
+        );
     }
 
     fn claim(session: &mut Session) {
@@ -466,6 +687,7 @@ mod tests {
                 spn: 1234,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             });
 
         // Advance past the broadcast interval; expect a DM1 frame on the wire.
@@ -725,6 +947,7 @@ mod tests {
                 spn,
                 fmi,
                 occurrence_count: 1,
+                conversion_method: false,
             }],
         };
         let v = list.encode();
@@ -732,5 +955,44 @@ mod tests {
         let n = v.len().min(8);
         out[..n].copy_from_slice(&v[..n]);
         out
+    }
+
+    /// 6B — ISO 11783-5 §4.4.4.3 requires an address violation to activate a
+    /// DTC (SPN 2000 + SA, FMI 31). The network layer detected violations and
+    /// emitted an event nothing consumed; `Dtc::address_violation` had no
+    /// callers anywhere in the crate.
+    #[test]
+    fn address_violation_activates_a_dtc() {
+        use super::plugins::Diagnostics;
+        use crate::net::pgn_defs::PGN_TIME_DATE;
+        use crate::net::{Frame, Identifier, Priority};
+
+        let mut session = Session::builder(test_name(24), 0x80)
+            .plug(Diagnostics::every(1000))
+            .build()
+            .unwrap();
+        claim(&mut session);
+        let our_address = session.address();
+
+        // Another CF transmits from the address we hold.
+        let intruder = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_TIME_DATE,
+                our_address,
+                crate::net::BROADCAST_ADDRESS,
+            ),
+            [0xFF; 8],
+            8,
+        );
+        session.feed(0, &intruder, Instant::from_millis(9_000));
+        session.tick(Instant::from_millis(9_010));
+
+        let expected = crate::j1939::diagnostic::Dtc::address_violation(our_address);
+        let active = session.get::<Diagnostics>().unwrap().active();
+        assert!(
+            active.iter().any(|d| d.spn == expected.spn),
+            "the violation must become an active DTC so it reaches the next DM1"
+        );
     }
 }

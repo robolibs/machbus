@@ -58,6 +58,8 @@ pub enum Event {
     FsServer(super::fs_server::FsServerEvent),
     /// TC *server* events — server FSM transitions.
     TcServer(super::tc_server::TcServerEvent),
+    /// Combined autonomous-driving lifecycle.
+    Autodrive(super::autodrive::AutodriveEvent),
     /// Catch-all for inbound PGNs that no subsystem claimed. Useful
     /// for diagnostic dumps or when running the session core in pure
     /// pass-through mode.
@@ -92,6 +94,17 @@ pub enum BusEvent {
         port: u8,
         action: crate::net::fault_confinement::FaultConfinementAction,
     },
+    /// A queued send was refused by the network layer and never reached the
+    /// bus — most often because the control function has not claimed an
+    /// address. Safety-relevant commands travel this path, so treat it as a
+    /// command that did *not* take effect.
+    SendFailed { pgn: Pgn, dst: Address },
+    /// The clock handed to [`Session::tick`] moved backwards. Timers were
+    /// resynchronised to the new instant; anything waiting on a deadline may
+    /// fire late. Safety-relevant subsystems treat this as a fault.
+    ///
+    /// [`Session::tick`]: crate::session::Session::tick
+    ClockWentBackwards { by_micros: u64 },
 }
 
 /// Bounded event queue used by [`Session::poll_event`].

@@ -89,6 +89,10 @@ impl Drop for Subscription {
 /// `None` when no frame is currently available.
 pub use crate::net::CanTransport as Transport;
 
+/// Ports polled for CAN error-confinement state each pump. ISO 11783 machines
+/// have a handful of segments; this bounds the loop without an allocation.
+const MAX_POLLED_PORTS: u8 = 4;
+
 /// Adapts a single CAN endpoint (one `port`) into a [`Transport`].
 pub struct EndpointTransport<L: can_adapter::Link> {
     port: u8,
@@ -185,6 +189,9 @@ pub struct Driver<T: Transport> {
     transport: T,
     callbacks: Rc<RefCell<CallbackRegistry>>,
     origin: Option<std::time::Instant>,
+    /// Per-port CAN error-confinement tracking. Ports are few, so a small
+    /// vector keyed by port number is enough.
+    confinement: Vec<(u8, crate::net::fault_confinement::FaultConfinementMonitor)>,
 }
 
 impl<T> Driver<T>
@@ -198,6 +205,7 @@ where
             transport,
             callbacks: Rc::new(RefCell::new(CallbackRegistry::default())),
             origin: None,
+            confinement: Vec::new(),
         }
     }
 
@@ -249,12 +257,48 @@ where
     ///
     /// # Errors
     /// Propagates transport send failures.
+    ///
+    /// Poll each port's CAN error-confinement state and queue a
+    /// [`BusEvent::ConfinementChanged`] on every transition.
+    ///
+    /// Bus-off was previously unobservable: the transport exposed no bus state,
+    /// so a controller that had stopped transmitting looked exactly like a
+    /// quiet bus and no fail-safe reaction could fire.
+    fn poll_bus_state(
+        transport: &T,
+        confinement: &mut Vec<(u8, crate::net::fault_confinement::FaultConfinementMonitor)>,
+        session: &mut Session,
+    ) {
+        for port in 0..MAX_POLLED_PORTS {
+            let Some(state) = transport.bus_state(port) else {
+                continue;
+            };
+            if !confinement.iter().any(|(p, _)| *p == port) {
+                confinement.push((
+                    port,
+                    crate::net::fault_confinement::FaultConfinementMonitor::new(),
+                ));
+            }
+            let monitor = confinement
+                .iter_mut()
+                .find(|(p, _)| *p == port)
+                .map(|(_, m)| m)
+                .expect("just inserted");
+            if let Some(action) = monitor.observe(state) {
+                session.push_event(Event::Bus(
+                    crate::session::sys::BusEvent::ConfinementChanged { port, action },
+                ));
+            }
+        }
+    }
+
     pub fn pump_at(&mut self, now: Instant) -> Result<usize> {
         {
             let mut session = self.session.borrow_mut();
             while let Some((port, frame)) = self.transport.recv() {
                 session.feed(port, &frame, now);
             }
+            Self::poll_bus_state(&self.transport, &mut self.confinement, &mut session);
             session.tick(now);
             while let Some((port, frame)) = session.poll_transmit() {
                 self.transport.send(port, &frame).map_err(Into::into)?;
@@ -281,6 +325,7 @@ where
         while let Some((port, frame)) = self.transport.recv() {
             session.feed(port, &frame, now);
         }
+        Self::poll_bus_state(&self.transport, &mut self.confinement, &mut session);
         session.tick(now);
         while let Some((port, frame)) = session.poll_transmit() {
             self.transport.send(port, &frame).map_err(Into::into)?;
@@ -422,6 +467,7 @@ mod tests {
                 spn: 1234,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             });
             d.active().len()
         });
@@ -453,6 +499,7 @@ mod tests {
                 spn: 2000,
                 fmi: Fmi::ConditionExists,
                 occurrence_count: 1,
+                conversion_method: false,
             }],
         };
         let mut payload = [0xFFu8; 8];

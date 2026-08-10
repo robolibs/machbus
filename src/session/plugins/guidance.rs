@@ -35,6 +35,7 @@ use crate::net::pgn_defs::{
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
+use crate::session::plugins::gnss::GnssHazards;
 use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
     AutodriveRefusal, BusEvent, Event, GuidanceEvent, SafeStopTrigger, StopLatch,
@@ -113,6 +114,9 @@ pub struct Guidance {
     /// used to trip only on an explicit stop state and never noticed an ISB
     /// source going silent, so cutting the ISB cable left it steering.
     isb: IsbGuard,
+    /// Live GNSS hazards, so `clear_stop()` cannot re-arm steering against a
+    /// receiver that is still stale or a fix that still cannot be steered on.
+    gnss: GnssHazards,
     /// Bumped by every application command. The setters have no clock, so
     /// freshness is timed in `on_tick` by watching this change.
     command_seq: u64,
@@ -168,7 +172,7 @@ impl Guidance {
         if !self.link_alive {
             return Err(AutodriveRefusal::LinkDown);
         }
-        if self.isb.is_asserted() {
+        if self.isb.is_asserted() || self.gnss.is_live() {
             return Err(AutodriveRefusal::StopLatched);
         }
         let info = self.latest.ok_or(AutodriveRefusal::LinkDown)?;
@@ -201,7 +205,7 @@ impl Guidance {
     /// Shortcut Button, or while a seen ISB source is silent — clearing there
     /// opened a window of commanded motion against a held-down stop.
     pub fn clear_stop(&mut self) {
-        if self.isb.is_asserted() {
+        if self.isb.is_asserted() || self.gnss.is_live() {
             return;
         }
         self.stop.clear();
@@ -511,6 +515,7 @@ impl Plugin for Guidance {
     /// know to call it kept steering through bus-off, a lost address claim and
     /// a heartbeat error alike.
     fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        self.gnss.observe(event);
         let trigger = SafeStopTrigger::from_event(event).or_else(|| match event {
             Event::Bus(BusEvent::SendFailed { pgn, .. }) if COMMAND_PGNS.contains(pgn) => {
                 Some(SafeStopTrigger::SendFailed(*pgn))

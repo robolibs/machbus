@@ -46,6 +46,41 @@ const FAST_PACKET: &[Pgn] = &[PGN_GNSS_POSITION_DATA];
 pub const DEFAULT_POSITION_STALE_MS: u32 = 1500;
 
 /// GNSS / NMEA 2000 plugin.
+/// The GNSS hazards that must survive a `clear_stop()`.
+///
+/// `plugins::gnss` emits `PositionStale` / `FixDegraded` **once per
+/// transition**, which is right for an event stream but meant a controller that
+/// cleared its latch while the hazard was still live never heard about it
+/// again: one clear permanently disarmed the GNSS safety net with no
+/// indication. Tracking the live state here — rather than only the edge — is
+/// what makes the clear refusable.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GnssHazards {
+    position_stale: bool,
+    fix_degraded: bool,
+}
+
+impl GnssHazards {
+    /// Fold a session event in. Returns `true` while a hazard is live.
+    pub fn observe(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Gnss(GnssEvent::PositionStale { .. }) => self.position_stale = true,
+            Event::Gnss(GnssEvent::FixDegraded { .. }) => self.fix_degraded = true,
+            Event::Gnss(GnssEvent::FixRestored { .. }) => self.fix_degraded = false,
+            // A position arriving at all is what un-stales the receiver.
+            Event::Gnss(GnssEvent::Position(_)) => self.position_stale = false,
+            _ => {}
+        }
+        self.is_live()
+    }
+
+    /// `true` while the receiver is stale or the fix cannot be steered on.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        self.position_stale || self.fix_degraded
+    }
+}
+
 pub struct Gnss {
     iface: NMEAInterface,
     collected: Rc<RefCell<Vec<GnssEvent>>>,

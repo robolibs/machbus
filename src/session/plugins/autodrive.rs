@@ -34,6 +34,7 @@ use crate::net::pgn_defs::{
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
+use crate::session::plugins::gnss::GnssHazards;
 use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
     AutodriveEvent, AutodriveRefusal, AutomationStatus, BusEvent, DriveCommand, Event,
@@ -102,6 +103,9 @@ pub struct AutoDrive {
     /// an ISB transmitter that went silent read as permission rather than as
     /// the loss of stop authority it is.
     isb: IsbGuard,
+    /// Live GNSS hazards, so `clear_stop()` cannot re-arm autonomy against a
+    /// receiver that is still stale or a fix that still cannot be steered on.
+    gnss: GnssHazards,
 }
 
 impl Default for AutoDrive {
@@ -131,6 +135,7 @@ impl AutoDrive {
             seq_changed_at: None,
             stale_ms: COMMAND_STALE_MS,
             isb: IsbGuard::new(),
+            gnss: GnssHazards::default(),
         }
     }
 
@@ -271,7 +276,7 @@ impl AutoDrive {
     /// Shortcut Button: clearing there produced a window of commanded motion
     /// against a stop that was being held down.
     pub fn clear_stop(&mut self) {
-        if self.isb.is_asserted() {
+        if self.isb.is_asserted() || self.gnss.is_live() {
             return;
         }
         self.stop.clear();
@@ -288,7 +293,7 @@ impl AutoDrive {
     }
 
     fn check_preconditions(&self) -> Result<(), AutodriveRefusal> {
-        if self.stop.is_latched() || self.isb.is_asserted() {
+        if self.stop.is_latched() || self.isb.is_asserted() || self.gnss.is_live() {
             return Err(AutodriveRefusal::StopLatched);
         }
         if !self.link_alive {
@@ -440,6 +445,7 @@ impl Plugin for AutoDrive {
     /// claim, a heartbeat fault and a refused command could all be detected by
     /// the session and never stop the machine.
     fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        self.gnss.observe(event);
         let trigger = SafeStopTrigger::from_event(event).or_else(|| match event {
             Event::Bus(BusEvent::SendFailed { pgn, .. }) if COMMAND_PGNS.contains(pgn) => {
                 Some(SafeStopTrigger::SendFailed(*pgn))
@@ -622,6 +628,62 @@ mod tests {
     /// A3.6 — the full lifecycle in one place. No test previously exercised
     /// guidance and speed together, or the engage → steer → drop-out sequence
     /// end to end.
+    /// C3 — the GNSS antenna cable is cut mid-field. `plugins::gnss` emits
+    /// `PositionStale` **once**, AutoDrive latches and halts, and the operator
+    /// presses the UI "clear stop". Clearing there re-armed autonomy with no
+    /// fix, and because the trigger is edge-emitted it could never fire again:
+    /// one clear permanently disarmed the GNSS safety net with no indication.
+    ///
+    /// ISO 11783-9 §4.7.2 — "The implement shall not start unexpectedly."
+    #[test]
+    fn clear_stop_is_refused_while_a_gnss_hazard_is_live() {
+        use crate::session::sys::GnssEvent;
+
+        let mut auto = AutoDrive::new();
+        let mut hazards = GnssHazards::default();
+
+        // The cable is cut: one PositionStale, and nothing after it.
+        let stale = Event::Gnss(GnssEvent::PositionStale {
+            silent_for_ms: 1_500,
+        });
+        assert!(hazards.observe(&stale), "a stale receiver is a live hazard");
+        assert!(auto.stop.trip(SafeStopTrigger::PositionStale));
+        assert_eq!(auto.stop_reason(), Some(SafeStopTrigger::PositionStale));
+
+        // The operator clears. The hazard has not gone away, so neither does
+        // the latch — and no second PositionStale is ever coming.
+        auto.gnss = hazards;
+        auto.clear_stop();
+        assert_eq!(
+            auto.stop_reason(),
+            Some(SafeStopTrigger::PositionStale),
+            "clearing must not re-arm against a receiver that is still stale"
+        );
+
+        // A position arriving is what actually resolves it.
+        let recovered = Event::Gnss(GnssEvent::Position(Default::default()));
+        assert!(!hazards.observe(&recovered));
+    }
+
+    /// The same rule for a fix that cannot be steered on, which recovers via
+    /// `FixRestored` rather than by a position arriving.
+    #[test]
+    fn a_degraded_fix_stays_live_until_it_is_restored() {
+        use crate::nmea::GNSSFixType;
+        use crate::session::sys::GnssEvent;
+
+        let mut hazards = GnssHazards::default();
+        assert!(hazards.observe(&Event::Gnss(GnssEvent::FixDegraded {
+            fix_type: GNSSFixType::NoFix,
+        })));
+        // A position still arrives while the fix is unusable, so it must not by
+        // itself clear the hazard.
+        assert!(hazards.observe(&Event::Gnss(GnssEvent::Position(Default::default()))));
+        assert!(!hazards.observe(&Event::Gnss(GnssEvent::FixRestored {
+            fix_type: GNSSFixType::RTKFixed,
+        })));
+    }
+
     #[test]
     fn arm_engage_steer_then_lose_the_link() {
         let mut s = node();

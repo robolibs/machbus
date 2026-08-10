@@ -22,7 +22,7 @@
 //! is the application's job; this plugin moves the resulting command on the wire.
 
 use crate::isobus::implement::guidance::{
-    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout,
+    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout, curvature_within_range,
 };
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
@@ -216,12 +216,39 @@ impl Guidance {
     /// wire convention; out-of-range values are clamped by the codec. Queued and
     /// flushed on the next tick as a Guidance System Command (PGN 0xAD00). The
     /// command only steers while the controller is [`engage`](Self::engage)d.
+    /// A curvature the codec cannot encode is commanded as **straight**, not
+    /// clamped to full lock and not sent as not-available beside an
+    /// intent-to-steer. Use [`try_command_curvature`](Self::try_command_curvature)
+    /// to see the refusal instead of the safe substitution.
     pub fn command_curvature(&mut self, curvature_per_km: f64) {
-        if self.commanded_curvature != curvature_per_km {
+        let safe = if curvature_within_range(curvature_per_km) {
+            curvature_per_km
+        } else {
+            0.0
+        };
+        if self.commanded_curvature != safe {
             self.dirty = true;
         }
-        self.commanded_curvature = curvature_per_km;
+        self.commanded_curvature = safe;
         self.command_seq = self.command_seq.wrapping_add(1);
+    }
+
+    /// [`command_curvature`](Self::command_curvature) that reports an
+    /// unencodable value rather than substituting straight ahead (G7).
+    ///
+    /// # Errors
+    /// [`AutodriveRefusal::CurvatureOutOfRange`] when the value is non-finite
+    /// or outside the SLOT, where the codec would otherwise clamp it to full
+    /// lock.
+    pub fn try_command_curvature(
+        &mut self,
+        curvature_per_km: f64,
+    ) -> Result<(), AutodriveRefusal> {
+        if !curvature_within_range(curvature_per_km) {
+            return Err(AutodriveRefusal::CurvatureOutOfRange);
+        }
+        self.command_curvature(curvature_per_km);
+        Ok(())
     }
 
     /// Command a turn of the given **radius in metres** (a convenience over

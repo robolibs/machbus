@@ -21,7 +21,7 @@
 //! job; [`crate::geo::guidance`] has the geometry for it.
 
 use crate::isobus::implement::guidance::{
-    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout,
+    GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout, curvature_within_range,
 };
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
@@ -215,6 +215,19 @@ impl AutoDrive {
         }
         if !self.status.is_active() {
             return Err(AutodriveRefusal::StatusNotActive);
+        }
+        // The codec clamps out-of-range curvature to the SLOT limit, which is
+        // full lock. Refusing here keeps the wire encoder from being the only
+        // range check on a steering command (G7).
+        if let Some(curvature) = cmd.curvature_km_inv
+            && !curvature_within_range(curvature)
+        {
+            return Err(AutodriveRefusal::CurvatureOutOfRange);
+        }
+        if let Some(speed) = cmd.speed_mps
+            && !speed.is_finite()
+        {
+            return Err(AutodriveRefusal::SpeedNotFinite);
         }
         if let (Some(speed), Some(curvature)) = (cmd.speed_mps, cmd.curvature_km_inv)
             && curvature != 0.0
@@ -645,5 +658,51 @@ mod tests {
             .unwrap()
             .command(DriveCommand::halt())
             .unwrap();
+    }
+
+    /// P2.2 — the codec clamps an out-of-range curvature to the SLOT limit,
+    /// which is full lock. A transient numerical excursion must be refused,
+    /// not silently turned into a maximum-curvature steering command at speed.
+    #[test]
+    fn an_unencodable_curvature_is_refused_rather_than_clamped() {
+        let mut s = node();
+        let now = Instant::from_millis(5_000);
+        feed_info(&mut s, 0, now);
+        s.tick(now);
+        s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
+
+        for bad in [1.0e9, -1.0e9, f64::INFINITY, f64::NAN] {
+            assert_eq!(
+                s.get_mut::<AutoDrive>().unwrap().command(DriveCommand {
+                    curvature_km_inv: Some(bad),
+                    speed_mps: Some(2.0),
+                }),
+                Err(AutodriveRefusal::CurvatureOutOfRange),
+                "{bad} must be refused"
+            );
+        }
+
+        // A non-finite speed is refused on the same principle.
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().command(DriveCommand {
+                curvature_km_inv: Some(10.0),
+                speed_mps: Some(f64::NAN),
+            }),
+            Err(AutodriveRefusal::SpeedNotFinite)
+        );
+
+        // The extremes of the encodable range are still accepted.
+        for good in [0.0, 8031.75, -8032.0] {
+            assert!(
+                s.get_mut::<AutoDrive>()
+                    .unwrap()
+                    .command(DriveCommand {
+                        curvature_km_inv: Some(good),
+                        speed_mps: Some(2.0),
+                    })
+                    .is_ok(),
+                "{good} is encodable and must be accepted"
+            );
+        }
     }
 }

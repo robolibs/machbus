@@ -172,6 +172,13 @@ pub enum AutodriveRefusal {
     NotClaimed,
     /// The function's automation status is not one that accepts setpoints.
     StatusNotActive,
+    /// The commanded curvature is not finite, or lies outside the encodable
+    /// SLOT range so the codec would silently clamp it to full lock. Letting
+    /// the wire encoder be the only range check turns a transient numerical
+    /// excursion into a full-lock steering command at speed.
+    CurvatureOutOfRange,
+    /// The commanded speed is not a finite number.
+    SpeedNotFinite,
 }
 
 impl AutodriveRefusal {
@@ -188,6 +195,8 @@ impl AutodriveRefusal {
             Self::StopLatched => "stop_latched",
             Self::NotClaimed => "not_claimed",
             Self::StatusNotActive => "status_not_active",
+            Self::CurvatureOutOfRange => "curvature_out_of_range",
+            Self::SpeedNotFinite => "speed_not_finite",
         }
     }
 }

@@ -946,6 +946,28 @@ impl PySession {
         Ok(())
     }
 
+    /// The reason a safe stop is latched (a short stable identifier such as
+    /// `"bus_off"`), or `None` when nothing is latched.
+    fn guidance_stop_reason(&mut self) -> PyResult<Option<String>> {
+        Ok(self
+            .guidance()?
+            .stop_reason()
+            .map(|trigger| trigger.as_str().to_owned()))
+    }
+
+    /// `True` while a safe stop is latched, so `guidance_engage` will refuse.
+    fn guidance_is_stop_latched(&mut self) -> PyResult<bool> {
+        Ok(self.guidance()?.is_stop_latched())
+    }
+
+    /// Release a latched safe stop. Deliberately explicit: clearing the fault is
+    /// not by itself consent to move, and `guidance_engage` still has to
+    /// succeed afterwards. Without this the latch had no exit from Python.
+    fn guidance_clear_stop(&mut self) -> PyResult<()> {
+        self.guidance()?.clear_stop();
+        Ok(())
+    }
+
     /// `True` if the controller is currently requesting steering (its own intent,
     /// not the steering ECU's readiness).
     fn guidance_is_engaged(&mut self) -> PyResult<bool> {

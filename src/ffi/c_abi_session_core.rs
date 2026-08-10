@@ -1817,6 +1817,50 @@ pub extern "C" fn machbus_session_guidance_disengage(h: *mut MachbusSession) -> 
     true
 }
 
+/// The reason the guidance controller latched a safe stop, as a
+/// [`MachbusSafeStopTrigger`] code, or `0` when no stop is latched.
+///
+/// Without this a C caller could see the machine refuse to engage and have no
+/// way to learn why.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_stop_reason(h: *const MachbusSession) -> u32 {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<Guidance>())
+        .and_then(Guidance::stop_reason)
+        .map_or(0, |trigger| trigger.as_code())
+}
+
+/// Release a latched safe stop. Deliberately explicit: clearing the fault is
+/// not by itself consent to move, and [`machbus_session_guidance_engage`] still
+/// has to succeed afterwards.
+///
+/// Returns `false` when the guidance subsystem is not plugged. Without this the
+/// latch was a trap door for C and Python callers — reachable, with no exit.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_clear_stop(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let g = plugin_mut!(h, Guidance);
+    g.clear_stop();
+    clear_last_error();
+    true
+}
+
+/// Whether a safe stop is latched on the guidance controller.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_guidance_is_stop_latched(h: *const MachbusSession) -> bool {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<Guidance>())
+        .is_some_and(Guidance::is_stop_latched)
+}
+
 /// Whether the controller is currently requesting steering (its own intent, not
 /// the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
 #[unsafe(no_mangle)]

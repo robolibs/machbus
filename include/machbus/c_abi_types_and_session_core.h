@@ -296,6 +296,11 @@ typedef struct MakeDef MakeDef;
 typedef struct PowertrainClaim PowertrainClaim;
 
 /**
+ * The special-value layout a TIM function uses above its scaled band.
+ */
+typedef struct SlotShape SlotShape;
+
+/**
  * Scale and offset for one TIM function's value SLOT.
  */
 typedef struct TimSlot TimSlot;
@@ -1183,6 +1188,30 @@ bool machbus_session_guidance_engage(MachbusSession *h);
  * subsystem.
  */
 bool machbus_session_guidance_disengage(MachbusSession *h);
+
+/**
+ * The reason the guidance controller latched a safe stop, as a
+ * [`MachbusSafeStopTrigger`] code, or `0` when no stop is latched.
+ *
+ * Without this a C caller could see the machine refuse to engage and have no
+ * way to learn why.
+ */
+uint32_t machbus_session_guidance_stop_reason(const MachbusSession *h);
+
+/**
+ * Release a latched safe stop. Deliberately explicit: clearing the fault is
+ * not by itself consent to move, and [`machbus_session_guidance_engage`] still
+ * has to succeed afterwards.
+ *
+ * Returns `false` when the guidance subsystem is not plugged. Without this the
+ * latch was a trap door for C and Python callers — reachable, with no exit.
+ */
+bool machbus_session_guidance_clear_stop(MachbusSession *h);
+
+/**
+ * Whether a safe stop is latched on the guidance controller.
+ */
+bool machbus_session_guidance_is_stop_latched(const MachbusSession *h);
 
 /**
  * Whether the controller is currently requesting steering (its own intent, not

@@ -23,6 +23,11 @@ pub const TIM_STATUS_PRIORITY: u8 = 4;
 /// Status repetition rate (C.2, C.3).
 pub const TIM_STATUS_INTERVAL_MS: u32 = 100;
 /// Three missed status messages is a communication error.
+///
+/// No in-crate watchdog reads this: the crate implements no receive-side TIM
+/// client, so nothing here observes a peer's status stream. The command path is
+/// guarded instead by `TimAuthority`'s `DEFAULT_COMMS_TIMEOUT_MS`, which is the
+/// same 300 ms and *is* ticked.
 pub const TIM_STATUS_TIMEOUT_MS: u32 = 300;
 
 /// Message code for `TIM_ServerStatus_Msg` (A.2.3).

@@ -21,10 +21,6 @@ use crate::net::types::Pgn;
 pub enum SafeStopTrigger {
     /// No Agricultural Guidance Machine Info within the link timeout.
     GuidanceLinkTimeout,
-    /// No TIM status message within the AEF status timeout.
-    TimStatusTimeout,
-    /// A TIM function request went unanswered past its timeout.
-    FunctionRequestTimeout,
     /// ISO 11783-7 §8 heartbeat reported a sequence or communication error.
     HeartbeatError,
     /// Operator pressed the Auxiliary Shortcut Button (stop all implements).
@@ -61,8 +57,9 @@ impl SafeStopTrigger {
     pub const fn as_code(self) -> u32 {
         match self {
             Self::GuidanceLinkTimeout => 1,
-            Self::TimStatusTimeout => 2,
-            Self::FunctionRequestTimeout => 3,
+            // 2 and 3 were TimStatusTimeout / FunctionRequestTimeout. They had
+            // no producer (G8) and were removed; the codes stay retired so the
+            // C ABI values of everything below do not shift.
             Self::HeartbeatError => 4,
             Self::IsbStop => 5,
             Self::BusOff => 6,
@@ -82,8 +79,6 @@ impl SafeStopTrigger {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GuidanceLinkTimeout => "guidance_link_timeout",
-            Self::TimStatusTimeout => "tim_status_timeout",
-            Self::FunctionRequestTimeout => "function_request_timeout",
             Self::HeartbeatError => "heartbeat_error",
             Self::IsbStop => "isb_stop",
             Self::BusOff => "bus_off",
@@ -172,8 +167,6 @@ mod tests {
 
         let all = [
             SafeStopTrigger::GuidanceLinkTimeout,
-            SafeStopTrigger::TimStatusTimeout,
-            SafeStopTrigger::FunctionRequestTimeout,
             SafeStopTrigger::HeartbeatError,
             SafeStopTrigger::IsbStop,
             SafeStopTrigger::BusOff,
@@ -190,8 +183,6 @@ mod tests {
         for trigger in all {
             let producer = match trigger {
                 SafeStopTrigger::GuidanceLinkTimeout => "guidance/autodrive on_tick link watchdog",
-                SafeStopTrigger::TimStatusTimeout => "plugins::tim status watchdog",
-                SafeStopTrigger::FunctionRequestTimeout => "isobus::tim function request timeout",
                 SafeStopTrigger::HeartbeatError => "SafeStopTrigger::from_event, heartbeat faults",
                 SafeStopTrigger::IsbStop => "guidance/autodrive on_frame, shortcut button",
                 SafeStopTrigger::BusOff => "SafeStopTrigger::from_event, ConfinementChanged",

@@ -21,8 +21,9 @@ use alloc::vec::Vec;
 
 use aes::Aes128;
 use cmac::{Cmac, Mac};
-use der::Decode;
+use der::{Decode, Encode};
 use sha2::{Digest, Sha256};
+use rsa::pkcs8::DecodePublicKey;
 use x509_cert::Certificate;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -65,15 +66,31 @@ pub enum AuthError {
     AuthenticationStatusLost = 0x10,
     /// The received authentication status is invalid (0x12).
     AuthenticationStatusInvalid = 0x12,
+    /// The certificate chain does not link up (0x17). Distinguished Names are
+    /// attacker-controlled text, so a DN mismatch is a structural failure, not
+    /// a failed signature.
+    CertificateChainInvalid = 0x17,
     /// The public ECC key is not valid for curve 25519 (0x14). A peer that
     /// sends an all-zero (or other small-order) point drives the shared secret
     /// to zero, which would key the CMAC with zeros and let anyone on the bus
     /// complete the handshake.
     EccPublicKeyValidationFailed = 0x14,
+    /// The root certificate is listed on the CRL (0x19).
+    RootCertificateRevoked = 0x19,
+    /// The lab certificate is listed on the CRL (0x1A).
+    LabCertificateRevoked = 0x1A,
+    /// The manufacturer certificate is listed on the CRL (0x1B).
+    ManufacturerCertificateRevoked = 0x1B,
+    /// The manufacturer series certificate is listed on the CRL (0x1C).
+    ManufacturerSeriesCertificateRevoked = 0x1C,
+    /// The device certificate is listed on the CRL (0x1D).
+    DeviceCertificateRevoked = 0x1D,
     /// Challenge length was neither 32 nor 16 bytes (0x23).
     ChallengeLengthInvalid = 0x23,
-    /// The peer's certificate appears on the revocation list.
-    CertificateRevoked = 0x24,
+    /// Challenge data not equal to 32 bytes (random) or 16 bytes (signed)
+    /// (0x24). This code used to be used for "certificate revoked", which told
+    /// a peer with a revoked certificate entirely the wrong thing.
+    ChallengeDataCorrupt = 0x24,
 }
 
 impl AuthError {
@@ -126,6 +143,21 @@ impl CertificateRole {
             Self::Device => AuthError::DeviceCertificateSignatureInvalid,
         }
     }
+
+    /// The error code to report when this link appears on the CRL (Table 20).
+    ///
+    /// Each role has its own code — a peer needs to know *which* certificate in
+    /// its chain was revoked to do anything about it.
+    #[must_use]
+    pub const fn revoked_error(self) -> AuthError {
+        match self {
+            Self::Root => AuthError::RootCertificateRevoked,
+            Self::TestLab => AuthError::LabCertificateRevoked,
+            Self::Manufacturer => AuthError::ManufacturerCertificateRevoked,
+            Self::ManufacturerSeries => AuthError::ManufacturerSeriesCertificateRevoked,
+            Self::Device => AuthError::DeviceCertificateRevoked,
+        }
+    }
 }
 
 /// A parsed X.509 certificate chain.
@@ -170,25 +202,68 @@ impl CertificateChain {
 
     /// Check that each certificate's issuer matches the previous subject.
     ///
-    /// This is the structural half of chain validation. Signature verification
-    /// needs the issuer's public key and the algorithm it was signed with; a
-    /// caller that has a trust store performs that step and reports
-    /// [`CertificateRole::signature_error`] on failure.
+    /// A cheap pre-filter only. Distinguished Names are attacker-controlled
+    /// text; matching them proves nothing on its own, which is why this reports
+    /// [`AuthError::CertificateChainInvalid`] rather than a signature code —
+    /// a DN mismatch is not a failed signature.
     ///
     /// # Errors
-    /// The signature-invalid code for the first link whose issuer does not
-    /// match its parent's subject.
+    /// [`AuthError::CertificateChainInvalid`] for the first link whose issuer
+    /// does not match its parent's subject.
     pub fn check_issuer_linkage(&self) -> Result<(), AuthError> {
-        for (index, pair) in self.certificates.windows(2).enumerate() {
+        for pair in self.certificates.windows(2) {
             let issuer_subject = &pair[0].tbs_certificate.subject;
             let child_issuer = &pair[1].tbs_certificate.issuer;
             if issuer_subject != child_issuer {
-                let role = CertificateRole::CHAIN
-                    .get(index + 1)
-                    .copied()
-                    .unwrap_or(CertificateRole::Device);
-                return Err(role.signature_error());
+                return Err(AuthError::CertificateChainInvalid);
             }
+        }
+        Ok(())
+    }
+
+    /// Verify every link's signature against its parent's public key, and the
+    /// root against `trust_anchor`.
+    ///
+    /// AEF 023 §4.3.1: "the xPCs are exchanged, verified, and used to validate
+    /// the identity of the participants. The TIM functionality shall be used
+    /// only if both checks are positive." Table 4 step (3a): "If none of the
+    /// received certificates is listed in the CRL, both parties verify the
+    /// validity of the certificate chain." Annex F.2.1 names RSASSA-PSS per
+    /// RFC 3447.
+    ///
+    /// `trust_anchor` is the AEF root public key, in DER `SubjectPublicKeyInfo`
+    /// form. It is a parameter rather than a compiled-in constant on purpose:
+    /// verifying the top of the chain against a key the *peer* supplied proves
+    /// nothing, and the integrator is the one who provisions the real anchor.
+    ///
+    /// Without this, `accept_chain` admitted any chain whose Distinguished
+    /// Names happened to link up — one `openssl` invocation away from a full
+    /// handshake against a forged device identity.
+    ///
+    /// # Errors
+    /// The per-role signature-invalid code for the first link that fails.
+    pub fn verify_signatures(&self, trust_anchor: &[u8]) -> Result<(), AuthError> {
+        let Some(root) = self.certificates.first() else {
+            return Err(AuthError::DeviceCertificateDataCorrupt);
+        };
+
+        // The root must be the one we already trust. Comparing the encoded
+        // SubjectPublicKeyInfo keeps this independent of DN text entirely.
+        let root_spki = root
+            .tbs_certificate
+            .subject_public_key_info
+            .to_der()
+            .map_err(|_| CertificateRole::Root.signature_error())?;
+        if root_spki.as_slice() != trust_anchor {
+            return Err(CertificateRole::Root.signature_error());
+        }
+
+        for (index, pair) in self.certificates.windows(2).enumerate() {
+            let role = CertificateRole::CHAIN
+                .get(index + 1)
+                .copied()
+                .unwrap_or(CertificateRole::Device);
+            verify_link(&pair[0], &pair[1]).map_err(|()| role.signature_error())?;
         }
         Ok(())
     }
@@ -196,10 +271,52 @@ impl CertificateChain {
     /// `true` when any certificate's serial number appears in `revoked`.
     #[must_use]
     pub fn is_revoked(&self, revoked: &CertificateRevocationList) -> bool {
-        self.certificates
-            .iter()
-            .any(|c| revoked.contains(c.tbs_certificate.serial_number.as_bytes()))
+        self.revoked_role(revoked).is_some()
     }
+
+    /// Which link is revoked, if any, so the caller can report the Table 20
+    /// code for that specific role rather than a generic "revoked".
+    #[must_use]
+    pub fn revoked_role(&self, revoked: &CertificateRevocationList) -> Option<CertificateRole> {
+        self.certificates.iter().enumerate().find_map(|(i, c)| {
+            revoked
+                .contains(c.tbs_certificate.serial_number.as_bytes())
+                .then(|| {
+                    CertificateRole::CHAIN
+                        .get(i)
+                        .copied()
+                        .unwrap_or(CertificateRole::Device)
+                })
+        })
+    }
+}
+
+/// Verify `child`'s signature using `parent`'s public key.
+///
+/// AEF Annex F.2.1 names RSASSA-PSS (RFC 3447) with SHA-256. Anything else —
+/// including a certificate whose signature algorithm is not PSS — fails: an
+/// algorithm the peer chose is not a trust decision this side gets to accept.
+#[cfg(feature = "tim-auth")]
+fn verify_link(parent: &Certificate, child: &Certificate) -> Result<(), ()> {
+    use rsa::pss::{Signature, VerifyingKey};
+    use rsa::signature::Verifier;
+
+    let spki = parent
+        .tbs_certificate
+        .subject_public_key_info
+        .to_der()
+        .map_err(|_| ())?;
+    let public = rsa::RsaPublicKey::from_public_key_der(&spki).map_err(|_| ())?;
+    // RFC 3447 / AEF F.2.1: at least a 2048-bit modulus.
+    use rsa::traits::PublicKeyParts;
+    if public.n().bits() < 2048 {
+        return Err(());
+    }
+
+    let tbs = child.tbs_certificate.to_der().map_err(|_| ())?;
+    let signature = Signature::try_from(child.signature.raw_bytes()).map_err(|_| ())?;
+    let verifying: VerifyingKey<Sha256> = VerifyingKey::new(public);
+    verifying.verify(&tbs, &signature).map_err(|_| ())
 }
 
 /// A certificate revocation list. AEF §4.4.7 requires support for at least
@@ -306,23 +423,39 @@ impl TimAuthentication {
         self.state == AuthState::Authenticated
     }
 
-    /// Validate a peer's certificate chain against a revocation list.
+    /// Validate a peer's certificate chain against a trust anchor and a
+    /// revocation list.
+    ///
+    /// AEF 023 §4.3.1: "the xPCs are exchanged, verified, and used to validate
+    /// the identity of the participants. The TIM functionality shall be used
+    /// only if both checks are positive."
+    ///
+    /// `trust_anchor` is the AEF root public key as DER `SubjectPublicKeyInfo`,
+    /// provisioned by the integrator. This used to check only that the chain's
+    /// Distinguished Names linked to each other, which any peer can arrange
+    /// with one `openssl` invocation — the chain was never verified against
+    /// anything this side already trusted.
     ///
     /// # Errors
     /// The AEF error code for the first problem found.
     pub fn accept_chain(
         &mut self,
         chain: &CertificateChain,
+        trust_anchor: &[u8],
         revoked: &CertificateRevocationList,
     ) -> Result<(), AuthError> {
         if chain.is_empty() {
             return self.fail(AuthError::DeviceCertificateDataCorrupt);
         }
+        // Cheap structural pre-filter, then the check that actually matters.
         if let Err(e) = chain.check_issuer_linkage() {
             return self.fail(e);
         }
-        if chain.is_revoked(revoked) {
-            return self.fail(AuthError::CertificateRevoked);
+        if let Err(e) = chain.verify_signatures(trust_anchor) {
+            return self.fail(e);
+        }
+        if let Some(role) = chain.revoked_role(revoked) {
+            return self.fail(role.revoked_error());
         }
         self.state = AuthState::CertificatesExchanged;
         Ok(())
@@ -761,10 +894,70 @@ mod tests {
         let mut auth = TimAuthentication::new();
         let empty = CertificateChain::parse_der(&[]).unwrap();
         assert_eq!(
-            auth.accept_chain(&empty, &CertificateRevocationList::new()),
+            auth.accept_chain(&empty, &[], &CertificateRevocationList::new()),
             Err(AuthError::DeviceCertificateDataCorrupt)
         );
         assert!(!auth.is_authenticated());
+    }
+
+    /// D1 — the finding that survived at critical severity.
+    ///
+    /// `accept_chain` verified only that the chain's Distinguished Names linked
+    /// to each other. DNs are attacker-controlled text: anyone could mint a
+    /// chain whose names match and whose top claims to be the AEF root, and the
+    /// handshake proceeded against a forged device identity. Both chains below
+    /// pass the DN check; only one of them is signed by the key we trust.
+    #[test]
+    fn a_forged_chain_that_links_by_name_is_rejected() {
+        const VECTORS: &str = include_str!("../../../tests/fixtures/tim/certificate_chain.hex");
+
+        fn vector(name: &str) -> Vec<u8> {
+            let line = VECTORS
+                .lines()
+                .find(|l| l.starts_with(&alloc::format!("{name}=")))
+                .unwrap_or_else(|| panic!("vector {name} is missing"));
+            let hex = &line[name.len() + 1..];
+            (0..hex.len() / 2)
+                .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+                .collect()
+        }
+
+        let anchor = vector("root_spki");
+        let crl = CertificateRevocationList::new();
+
+        // The genuine chain verifies.
+        let root = vector("root");
+        let device = vector("device");
+        let good = CertificateChain::parse_der(&[&root, &device]).expect("a real chain parses");
+        good.check_issuer_linkage().expect("names link");
+        let mut auth = TimAuthentication::new();
+        assert_eq!(auth.accept_chain(&good, &anchor, &crl), Ok(()));
+
+        // The forged chain has the same subject/issuer names throughout, so the
+        // old structural check accepted it outright.
+        let evil_root = vector("evil_root");
+        let evil_device = vector("evil_device");
+        let forged =
+            CertificateChain::parse_der(&[&evil_root, &evil_device]).expect("a forged chain parses");
+        forged
+            .check_issuer_linkage()
+            .expect("the forgery links by name — that is the whole point");
+
+        let mut auth = TimAuthentication::new();
+        assert_eq!(
+            auth.accept_chain(&forged, &anchor, &crl),
+            Err(AuthError::RootCertificateSignatureInvalid),
+            "a chain that links by name but not by signature must be refused"
+        );
+        assert!(!auth.is_authenticated());
+
+        // A genuine chain still fails when the caller trusts a different root:
+        // the anchor, not the peer, decides.
+        let mut auth = TimAuthentication::new();
+        assert_eq!(
+            auth.accept_chain(&good, &vector("evil_root"), &crl),
+            Err(AuthError::RootCertificateSignatureInvalid)
+        );
     }
 
     #[test]
@@ -780,5 +973,25 @@ mod tests {
             CertificateRole::Root.signature_error(),
             AuthError::RootCertificateSignatureInvalid
         );
+
+        // D4 — Table 20 gives each link its own revocation code. They used to
+        // all report 0x24, which the table defines as "Challenge data corrupt":
+        // a peer with a revoked certificate was told the wrong thing entirely.
+        assert_eq!(AuthError::RootCertificateRevoked.as_u8(), 0x19);
+        assert_eq!(AuthError::LabCertificateRevoked.as_u8(), 0x1A);
+        assert_eq!(AuthError::ManufacturerCertificateRevoked.as_u8(), 0x1B);
+        assert_eq!(
+            AuthError::ManufacturerSeriesCertificateRevoked.as_u8(),
+            0x1C
+        );
+        assert_eq!(AuthError::DeviceCertificateRevoked.as_u8(), 0x1D);
+        assert_eq!(AuthError::ChallengeDataCorrupt.as_u8(), 0x24);
+        assert_eq!(
+            CertificateRole::ManufacturerSeries.revoked_error(),
+            AuthError::ManufacturerSeriesCertificateRevoked
+        );
+
+        // D1 — a DN mismatch is a structural failure, not a failed signature.
+        assert_eq!(AuthError::CertificateChainInvalid.as_u8(), 0x17);
     }
 }

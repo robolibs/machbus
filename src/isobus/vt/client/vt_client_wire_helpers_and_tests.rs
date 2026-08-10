@@ -451,7 +451,15 @@ mod tests {
         for msg in &sent {
             assert_eq!(msg.len(), 8);
             assert_eq!(msg[0], cmd::WORKING_SET_MAINTENANCE);
-            assert_eq!(msg[2], 5, "byte 3 is the working set's version");
+            // E6 — G.3 byte 3: "The ISO11783-6 version that this Working Set
+            // meets ... It shall not be the version of the VT." This asserted
+            // 5, the version the *terminal* reported, which is precisely the
+            // field mix-up: the default working set is built to version 4.
+            assert_eq!(
+                msg[2],
+                VTVersion::Version4.as_u8(),
+                "byte 3 is the working set's own version, not the VT's"
+            );
             assert!(
                 msg[3..8].iter().all(|&b| b == 0xFF),
                 "bytes 4-8 are reserved and set to FF"

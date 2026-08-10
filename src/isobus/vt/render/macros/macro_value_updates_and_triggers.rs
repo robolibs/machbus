@@ -328,7 +328,7 @@ impl MacroTriggerIndex {
                 triggers
                     .entry((obj.id, mref.event_id))
                     .or_default()
-                    .push(ObjectID::new(u16::from(mref.macro_id)));
+                    .push(ObjectID::new(mref.macro_id));
             }
         }
         Self { triggers }

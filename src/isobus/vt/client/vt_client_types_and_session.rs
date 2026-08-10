@@ -202,7 +202,16 @@ pub struct VTClient {
     since_vt_status_ms: u32,
     pending_end_of_pool_delay_ms: u32,
     vt_address: Address,
+    /// The version the *terminal* reported in its Get Memory response.
     vt_version: u16,
+    /// The ISO 11783-6 version this **working set** complies with (G.3 byte 3).
+    ///
+    /// Fixed at construction from the configured preference and never written
+    /// again. It used to be the same field as `vt_version`, so the moment Get
+    /// Memory returned, a working set built to version 4 started claiming
+    /// whatever the terminal was — and G.3 says the terminal then applies that
+    /// version's rules to it.
+    ws_version: u8,
     extended_version_label: String,
     vt_supports_extended_versions: bool,
     unsupported_functions: Vec<u8>,
@@ -283,6 +292,7 @@ impl VTClient {
             pending_end_of_pool_delay_ms: 0,
             vt_address: NULL_ADDRESS,
             vt_version: 0,
+            ws_version: config.preferred_version.as_u8(),
             extended_version_label: String::new(),
             vt_supports_extended_versions: false,
             unsupported_functions: Vec::new(),
@@ -402,8 +412,13 @@ impl VTClient {
         self.vt_version
     }
 
-    pub fn set_vt_version_preference(&mut self, version: VTVersion) {
-        self.vt_version = version.as_u8() as u16;
+    /// Set the version this **working set** declares in Annex G.3 byte 3.
+    ///
+    /// This used to write `vt_version` — the terminal's reported version — so
+    /// it changed what the client believed the *VT* was rather than what the
+    /// working set claims about itself.
+    pub const fn set_working_set_version(&mut self, version: VTVersion) {
+        self.ws_version = version.as_u8();
     }
 
     // ─── Language ─────────────────────────────────────────────────────
@@ -1520,7 +1535,11 @@ impl VTClient {
         let mut data = [0xFFu8; 8];
         data[0] = cmd::WORKING_SET_MAINTENANCE;
         data[1] = u8::from(!self.maintenance_initiated);
-        data[2] = self.vt_version as u8;
+        // G.3 byte 3: "The ISO11783-6 version that this Working Set meets ...
+        // It shall not be the version of the VT." This reported the terminal's
+        // version, so a v4 working set connecting to a v6 terminal announced
+        // itself as v6 and was held to v6 rules it does not implement.
+        data[2] = self.ws_version;
         self.maintenance_initiated = true;
         data
     }

@@ -293,7 +293,7 @@ impl VTObject {
     }
 
     /// Add a macro reference (event id + macro id).
-    pub fn add_macro(&mut self, event_id: u8, macro_id: u8) -> &mut Self {
+    pub fn add_macro(&mut self, event_id: u8, macro_id: u16) -> &mut Self {
         self.macros.push(MacroRef::new(event_id, macro_id));
         self
     }
@@ -1060,7 +1060,7 @@ impl VTObject {
             // ISO 11783-6 parent tail — both counts precede both lists:
             //   `[num_objects:u8][num_macros:u8][object records][macro records]`.
             data.push(self.children_pos.len() as u8);
-            data.push(self.macros.len() as u8);
+            data.push(macro_grouping_count(&self.macros));
             for cref in &self.children_pos {
                 push_u16_le(&mut data, cref.id);
                 if record_size == 6 {
@@ -1069,15 +1069,13 @@ impl VTObject {
                 }
             }
             for mref in &self.macros {
-                data.push(mref.event_id);
-                data.push(mref.macro_id);
+                push_macro_ref(&mut data, *mref);
             }
         } else if leaf_has_macro_tail(self.r#type) {
             // Leaf objects carry only the trailing `[num_macros][macro refs]`.
-            data.push(self.macros.len() as u8);
+            data.push(macro_grouping_count(&self.macros));
             for mref in &self.macros {
-                data.push(mref.event_id);
-                data.push(mref.macro_id);
+                push_macro_ref(&mut data, *mref);
             }
         }
         Ok(data)
@@ -1092,11 +1090,10 @@ impl VTObject {
         push_u16_le(&mut data, self.id);
         data.push(self.r#type.as_u8());
         data.extend_from_slice(&self.body[..split]);
-        data.push(self.macros.len() as u8);
+        data.push(macro_grouping_count(&self.macros));
         data.extend_from_slice(&self.body[split..]);
         for mref in &self.macros {
-            data.push(mref.event_id);
-            data.push(mref.macro_id);
+            push_macro_ref(&mut data, *mref);
         }
         data
     }
@@ -1141,7 +1138,7 @@ impl VTObject {
         data.push(body.selectable);
         push_u16_le(&mut data, body.active_mask);
         data.push(self.children_pos.len() as u8);
-        data.push(self.macros.len() as u8);
+        data.push(macro_grouping_count(&self.macros));
         data.push(body.languages.len() as u8);
         for cref in &self.children_pos {
             push_u16_le(&mut data, cref.id);
@@ -1149,8 +1146,7 @@ impl VTObject {
             data.extend_from_slice(&cref.y.to_le_bytes());
         }
         for mref in &self.macros {
-            data.push(mref.event_id);
-            data.push(mref.macro_id);
+            push_macro_ref(&mut data, *mref);
         }
         for language in &body.languages {
             data.extend_from_slice(language);

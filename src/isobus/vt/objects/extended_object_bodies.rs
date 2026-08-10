@@ -517,12 +517,7 @@ fn split_working_set_body(raw_body: &[u8]) -> Option<(Vec<u8>, Vec<ChildRef>, Ve
         children.push(ChildRef::new(id, x, y));
         offset += 6;
     }
-    let mut macros = Vec::with_capacity(macro_count);
-    offset = macros_offset;
-    for _ in 0..macro_count {
-        macros.push(MacroRef::new(raw_body[offset], raw_body[offset + 1]));
-        offset += 2;
-    }
+    let macros = decode_macro_refs(&raw_body[macros_offset..], macro_count);
 
     let mut body = Vec::with_capacity(4 + language_bytes);
     body.extend_from_slice(&raw_body[..4]);
@@ -568,11 +563,7 @@ fn split_child_list_at(
         children.push(ChildRef::new(id, x, y));
         offset += record_size;
     }
-    let mut macros = Vec::with_capacity(macro_count);
-    for _ in 0..macro_count {
-        macros.push(MacroRef::new(raw_body[offset], raw_body[offset + 1]));
-        offset += 2;
-    }
+    let macros = decode_macro_refs(&raw_body[offset..], macro_count);
     Some((raw_body[..child_list_offset].to_vec(), children, macros))
 }
 
@@ -595,13 +586,68 @@ fn split_picture_graphic(raw_body: &[u8]) -> Option<(Vec<u8>, Vec<ChildRef>, Vec
     let mut body = Vec::with_capacity(13 + data_len);
     body.extend_from_slice(&raw_body[..13]);
     body.extend_from_slice(&raw_body[14..data_end]);
-    let mut macros = Vec::with_capacity(num_macros);
-    let mut o = data_end;
-    for _ in 0..num_macros {
-        macros.push(MacroRef::new(raw_body[o], raw_body[o + 1]));
-        o += 2;
-    }
+    let macros = decode_macro_refs(&raw_body[data_end..], num_macros);
     Some((body, Vec::new(), macros))
+}
+
+/// Decode the trailing macro-reference list.
+///
+/// §4.6.22.3, VT version 5 and later: "An Event ID of 255 in the first byte of
+/// the Macro reference indicates that two groupings shall be concatenated to a
+/// single grouping with a 16-bit Macro Object ID reference."
+///
+/// The count is in *groupings* of two bytes, so a 16-bit reference consumes two
+/// of them and the total byte length is unchanged. Reading every grouping as an
+/// 8-bit reference turned the clause's own Example 2 — `FF 58 04 1B`, meaning
+/// event 4 on macro 7000 — into two bogus triggers that fired macro 0x58 and
+/// macro 0x1B.
+fn decode_macro_refs(bytes: &[u8], groupings: usize) -> Vec<MacroRef> {
+    let mut macros = Vec::with_capacity(groupings);
+    let mut o = 0;
+    let mut left = groupings;
+    while left > 0 && o + 1 < bytes.len() {
+        if bytes[o] == EXTENDED_MACRO_REF_MARKER && left >= 2 && o + 3 < bytes.len() {
+            macros.push(MacroRef::new(
+                bytes[o + 2],
+                u16::from_le_bytes([bytes[o + 1], bytes[o + 3]]),
+            ));
+            o += 4;
+            left -= 2;
+        } else {
+            macros.push(MacroRef::new(bytes[o], u16::from(bytes[o + 1])));
+            o += 2;
+            left -= 1;
+        }
+    }
+    macros
+}
+
+/// An Event ID of 255 marks a 16-bit Macro Object ID reference (§4.6.22.3).
+pub(crate) const EXTENDED_MACRO_REF_MARKER: u8 = 0xFF;
+
+/// Serialize one macro reference, using the §4.6.22.3 16-bit form when the
+/// Object ID does not fit in a byte.
+pub(crate) fn push_macro_ref(data: &mut Vec<u8>, mref: MacroRef) {
+    if let Ok(small) = u8::try_from(mref.macro_id) {
+        data.push(mref.event_id);
+        data.push(small);
+    } else {
+        let [low, high] = mref.macro_id.to_le_bytes();
+        data.push(EXTENDED_MACRO_REF_MARKER);
+        data.push(low);
+        data.push(mref.event_id);
+        data.push(high);
+    }
+}
+
+/// The number of two-byte *groupings* a macro list occupies. A 16-bit
+/// reference is two groupings, which is what the preceding count records.
+pub(crate) fn macro_grouping_count(macros: &[MacroRef]) -> u8 {
+    macros
+        .iter()
+        .map(|m| usize::from(m.macro_id > u16::from(u8::MAX)) + 1)
+        .sum::<usize>()
+        .min(usize::from(u8::MAX)) as u8
 }
 
 /// Split a leaf object body into `(body, [], macros)`: the first `body_len`
@@ -616,12 +662,7 @@ fn split_leaf_macro_tail(
     if body_len.checked_add(1)?.checked_add(macro_bytes)? != raw_body.len() {
         return None;
     }
-    let mut macros = Vec::with_capacity(macro_count);
-    let mut o = body_len + 1;
-    for _ in 0..macro_count {
-        macros.push(MacroRef::new(raw_body[o], raw_body[o + 1]));
-        o += 2;
-    }
+    let macros = decode_macro_refs(&raw_body[body_len + 1..], macro_count);
     Some((raw_body[..body_len].to_vec(), Vec::new(), macros))
 }
 

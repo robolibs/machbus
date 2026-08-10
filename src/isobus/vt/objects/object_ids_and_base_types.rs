@@ -160,13 +160,24 @@ impl From<ObjectID> for ChildRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MacroRef {
     pub event_id: u8,
-    pub macro_id: u8,
+    /// The referenced Macro object's ID.
+    ///
+    /// 16-bit because ISO 11783-6 §4.6.22.3 says so from VT version 5:
+    /// "Version 5 and later VTs, in addition to the 8-bit Macro Object IDs,
+    /// shall support Macros with an Object ID in the range of 0 to 65534 ...
+    /// An Event ID of 255 in the first byte of the Macro reference indicates
+    /// that two groupings shall be concatenated to a single grouping with a
+    /// 16-bit Macro Object ID reference."
+    ///
+    /// Decoding those four bytes as two 8-bit references registered two wrong
+    /// triggers and executed the wrong macro object.
+    pub macro_id: u16,
 }
 
 impl MacroRef {
     #[inline]
     #[must_use]
-    pub const fn new(event_id: u8, macro_id: u8) -> Self {
+    pub const fn new(event_id: u8, macro_id: u16) -> Self {
         Self { event_id, macro_id }
     }
 }

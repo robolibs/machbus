@@ -320,7 +320,7 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1006,7 +1006,7 @@ fn implement_exit_reason_public_decoders_reject_noncanonical_bytes() {
     }
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1085,7 +1085,7 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
     assert_eq!(decoded_selected.source, SpeedSource::GroundBased);
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1097,9 +1097,16 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         PtoStatus::decode(&pto_bytes, false).unwrap().limit_status,
         LimitStatus::SystemLimited
     );
-    let mut bad_pto_speed = pto_bytes;
-    bad_pto_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(PtoStatus::decode(&bad_pto_speed, false), None);
+    // K2 — ISO 11783-9 §4.4.2.1 requires a tractor with no PTO fitted to
+    // broadcast not-available here. Dropping the frame hid the engagement,
+    // economy mode, limit status and exit code in the same byte (G4).
+    let mut no_pto_fitted = pto_bytes;
+    no_pto_fitted[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = PtoStatus::decode(&no_pto_fitted, false)
+        .expect("an unfitted PTO must not drop the whole PG");
+    assert_eq!(decoded.shaft_speed_rpm, Signal::NotAvailable);
+    assert_eq!(decoded.limit_status, LimitStatus::SystemLimited);
+    assert_eq!(decoded.exit_code, ExitReasonCode::Fault);
 
     let hitch = HitchStatus {
         position_percent: Signal::Value(100.0),
@@ -1264,7 +1271,7 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     assert_eq!(MachineSelectedSpeedFull::decode(&reserved_selected), None);
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1272,11 +1279,21 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
         is_rear: false,
     };
     let pto_bytes = pto.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = pto_bytes;
-        bad[0..2].copy_from_slice(&raw.to_le_bytes());
-        assert_eq!(PtoStatus::decode(&bad, false), None);
+    // The indicator bands are reported; only a reserved raw is a decode failure.
+    for (raw, expected) in [
+        (0xFE00_u16, Signal::Error),
+        (0xFFFF, Signal::NotAvailable),
+    ] {
+        let mut special = pto_bytes;
+        special[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = PtoStatus::decode(&special, false)
+            .unwrap_or_else(|| panic!("PTO speed raw {raw:#06X} must not drop the PG"));
+        assert_eq!(decoded.shaft_speed_rpm, expected);
+        assert_eq!(decoded.engagement, 1);
     }
+    let mut reserved_pto = pto_bytes;
+    reserved_pto[0..2].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(PtoStatus::decode(&reserved_pto, false), None);
 
     let hitch = HitchStatus {
         position_percent: Signal::Value(100.0),

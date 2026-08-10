@@ -209,7 +209,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     assert_eq!(decoded_hitch.exit_code, ExitReasonCode::OperatorCmd);
 
     let front_pto_status = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: sig(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -968,7 +968,7 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     let pto_status_max =
         parse_named_hex_frame(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, "pto_status_rear_max");
     let pto_status_max_msg = PtoStatus {
-        shaft_speed_rpm: 1.0e9,
+        shaft_speed_rpm: sig(1.0e9),
         engagement: 2,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,

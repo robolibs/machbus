@@ -217,7 +217,7 @@ fn implement_status_broadcast_reaches_peer() {
         imp.broadcast_pto_status(
             Pto::Rear,
             PtoStatus {
-                shaft_speed_rpm: 540.0,
+                shaft_speed_rpm: Signal::Value(540.0),
                 ..PtoStatus::default()
             },
         );

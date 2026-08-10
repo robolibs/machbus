@@ -52,10 +52,6 @@ fn scaled_u16_non_na(value: f64, resolution: f64) -> u16 {
     }
 }
 
-fn u16_signal_raw_is_valid(raw: u16) -> bool {
-    raw <= VALID_MAX_U16_SIGNAL_RAW
-}
-
 /// A J1939 measured parameter, which carries three distinct outcomes the wire
 /// keeps separate: a real measurement, the transmitter reporting its own fault,
 /// and the parameter simply not being provided.
@@ -656,7 +652,11 @@ impl HitchStatus {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PtoStatus {
     /// Shaft speed; 0.125 rpm per bit.
-    pub shaft_speed_rpm: f64,
+    ///
+    /// ISO 11783-9 §4.4.2.1 *requires* a tractor with no PTO fitted to
+    /// broadcast this as not-available, so it cannot be a plain `f64`: the
+    /// crate could neither decode such a frame nor transmit one.
+    pub shaft_speed_rpm: Signal<f64>,
     /// 2 bits: 0 = disengaged, 1 = engaged, 2 = error, 3 = N/A.
     pub engagement: u8,
     pub limit_status: LimitStatus,
@@ -672,7 +672,7 @@ pub struct PtoStatus {
 impl Default for PtoStatus {
     fn default() -> Self {
         Self {
-            shaft_speed_rpm: 0.0,
+            shaft_speed_rpm: Signal::NotAvailable,
             engagement: 0x03,
             limit_status: LimitStatus::NotAvailable,
             exit_code: ExitReasonCode::NotAvailable,
@@ -695,7 +695,7 @@ impl PtoStatus {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let rpm = scaled_u16_non_na(self.shaft_speed_rpm, 0.125);
+        let rpm = encode_u16_signal(self.shaft_speed_rpm, 0.125);
         data[0] = (rpm & 0xFF) as u8;
         data[1] = ((rpm >> 8) & 0xFF) as u8;
         data[2] = (self.engagement & 0x03)
@@ -711,11 +711,11 @@ impl PtoStatus {
             return None;
         }
         let rpm = (data[0] as u16) | ((data[1] as u16) << 8);
-        if !u16_signal_raw_is_valid(rpm) {
-            return None;
-        }
+        // G4: "no PTO fitted" is a reading, not a malformed frame. Dropping it
+        // hid the engagement, economy mode, limit status and exit code carried
+        // in the same byte.
         Some(Self {
-            shaft_speed_rpm: rpm as f64 * 0.125,
+            shaft_speed_rpm: u16_signal(rpm, 0.125)?,
             engagement: data[2] & 0x03,
             economy_mode: (data[2] >> 2) & 0x03,
             limit_status: LimitStatus::try_from_u8((data[2] >> 4) & 0x03)?,
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn pto_status_round_trip_and_pgn() {
         let m = PtoStatus {
-            shaft_speed_rpm: 540.0,
+            shaft_speed_rpm: Signal::Value(540.0),
             engagement: 1,
             limit_status: LimitStatus::SystemLimited,
             exit_code: ExitReasonCode::Fault,
@@ -837,7 +837,7 @@ mod tests {
         };
         let bytes = m.encode();
         let decoded = PtoStatus::decode(&bytes, false).unwrap();
-        assert!((decoded.shaft_speed_rpm - 540.0).abs() < 0.125);
+        assert!((decoded.shaft_speed_rpm.value().unwrap() - 540.0).abs() < 0.125);
         assert_eq!(decoded.engagement, 1);
         assert_eq!(decoded.limit_status, LimitStatus::SystemLimited);
         assert_eq!(decoded.exit_code, ExitReasonCode::Fault);
@@ -913,7 +913,7 @@ mod tests {
         assert_eq!(&selected_high[..6], &[0xFF, 0xFA, 0xFF, 0xFF, 0xFF, 0xFA]);
 
         let pto_high = PtoStatus {
-            shaft_speed_rpm: 1.0e9,
+            shaft_speed_rpm: Signal::Value(1.0e9),
             ..Default::default()
         }
         .encode();

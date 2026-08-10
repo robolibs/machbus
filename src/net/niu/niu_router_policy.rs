@@ -1501,17 +1501,23 @@ impl Router {
             return None;
         }
 
-        // No translation for source ⇒ forward as-is (matches C++).
-        let Some(new_source) = translated_source else {
-            self.niu
-                .remember_forwarded_frame(&frame, origin.other(), now_ms);
-            return Some(frame);
-        };
+        // Source and destination translate independently. Returning the frame
+        // untouched when only the source lacked a mapping forwarded it with the
+        // *untranslated* destination, so a destination-specific command — a
+        // stop, a setpoint, a diagnostic write — was delivered to whichever CF
+        // happened to hold that address on the far segment while the intended
+        // recipient heard nothing.
+        let new_source = translated_source.unwrap_or(source);
         let new_dest = if is_broadcast {
             destination
         } else {
-            translated_dest?
+            translated_dest.unwrap_or(destination)
         };
+        if new_source == source && new_dest == destination {
+            self.niu
+                .remember_forwarded_frame(&frame, origin.other(), now_ms);
+            return Some(frame);
+        }
         let new_id = Identifier::encode(frame.priority(), frame.pgn(), new_source, new_dest);
         let mut translated = frame;
         translated.id = new_id;

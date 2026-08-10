@@ -746,6 +746,29 @@ mod tests {
         assert_eq!(out.destination(), 0x52);
     }
 
+    /// C7 — source and destination translate independently. When only the
+    /// source had no mapping the frame was forwarded untouched, carrying the
+    /// *untranslated* destination: a destination-specific command reached
+    /// whichever CF held that address on the far segment while the intended
+    /// recipient heard nothing. If the command was a stop, the stop was lost.
+    #[test]
+    fn router_translates_destination_even_when_the_source_does_not() {
+        let mut router = Router::new(NiuConfig::default());
+        router.niu_mut().start().unwrap();
+        // Only the destination CF is known to the translation database.
+        let dest_name = Name::default().with_identity_number(0x200);
+        router.add_translation(dest_name, 0x42, 0x52).unwrap();
+
+        let f = make_frame(PGN_REQUEST, 0x10, 0x42);
+        let out = router.process_frame(f, Side::Tractor, 0).expect("forwards");
+        assert_eq!(
+            out.destination(),
+            0x52,
+            "the destination's mapping applies regardless of the source's"
+        );
+        assert_eq!(out.source(), 0x10, "an unmapped source passes through");
+    }
+
     #[test]
     fn router_loop_guard_remembers_translated_output_frame() {
         let mut router = Router::new(NiuConfig::default());

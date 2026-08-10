@@ -243,7 +243,13 @@ impl AddressClaimer {
         if cf.claim_state() == ClaimState::Failed {
             return frames;
         }
-        if claimed_address != cf.address() && claimed_address != cf.preferred_address() {
+        // §4.5.3: "A CF shall transmit an address claim if it receives an
+        // address-claimed message with an SA matching **its own**". Treating a
+        // claim for our merely *preferred* address as a contest meant an
+        // unrelated CF taking an address we were not using knocked us off the
+        // one we validly held: steering and speed setpoints stopped for the
+        // ~400 ms of a fresh claim, repeatable indefinitely.
+        if claimed_address != cf.address() {
             return frames; // not contesting our address
         }
         if other_name == cf.name() {
@@ -592,6 +598,43 @@ mod tests {
         assert_eq!(frames[0].pgn(), PGN_ADDRESS_CLAIMED);
         assert_eq!(frames[0].source(), 0x80);
         assert!(cf.cf().state == CfState::Offline || cf.cf().state == CfState::Online);
+    }
+
+    /// C14 — §4.5.3 triggers a contest on "an address-claimed message with an
+    /// SA matching **its own**". Treating a claim for the CF's merely
+    /// *preferred* address as a contest let an unrelated CF knock this one off
+    /// an address it validly held: guidance and speed setpoints stopped for the
+    /// duration of a fresh claim, repeatably.
+    #[test]
+    fn a_claim_for_our_preferred_address_does_not_displace_us() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
+        let mut clm = AddressClaimer::new(0);
+        let _ = clm.start(&mut cf);
+        let _ = clm.update(&mut cf, 300);
+        assert_eq!(cf.claim_state(), ClaimState::Claimed);
+
+        // We ended up on a different address than we preferred.
+        cf.set_address(0x81);
+        assert_eq!(cf.preferred_address(), 0x80);
+
+        // A stronger CF claims 0x80 — which we are not using.
+        let stronger = name_with_identity(0x001, true);
+        let frames = clm.handle_claim(&mut cf, 0x80, stronger);
+
+        assert!(
+            frames.is_empty(),
+            "a claim for an address we do not hold is not a contest"
+        );
+        assert_eq!(cf.cf().address, 0x81, "our held address is untouched");
+        assert_eq!(cf.claim_state(), ClaimState::Claimed);
+        assert!(cf.cf().is_online());
+
+        // A claim for the address we *do* hold still contests.
+        let frames = clm.handle_claim(&mut cf, 0x81, stronger);
+        assert!(
+            !frames.is_empty(),
+            "a claim for our own SA must still be answered"
+        );
     }
 
     #[test]

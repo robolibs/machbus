@@ -130,6 +130,23 @@ impl SCClient {
             self.status_pending = false;
             return Some(self.encode_client_status_now());
         }
+
+        // B8 — ISO 11783-14 F.3: the status is sent "once per second during the
+        // 'Ready' state or if SCC is disabled, and 5 messages per second during
+        // the active 'Recording', 'Recording Completion', 'Play Back' or
+        // 'Abort' states". Emitting only on change left the client silent
+        // whenever nothing was happening, so the master's 600 ms F.3 timeout
+        // expired and it declared the client dead mid-play-back. `SCMaster`
+        // already runs this cadence; the client never did.
+        let interval = match self.iso_sequence_state() {
+            SCSequenceState::PlayBack | SCSequenceState::Recording | SCSequenceState::Abort => {
+                self.config.active_status_interval_ms
+            }
+            _ => self.config.idle_status_interval_ms,
+        };
+        if self.time_since_last_status_ms >= interval {
+            return Some(self.encode_client_status_now());
+        }
         None
     }
 

@@ -407,6 +407,54 @@ fn sequence_control_client_busy_spacing_and_timeout_are_protocol_visible() {
     assert!(client.is(SCState::Error));
 }
 
+/// B8 — ISO 11783-14 F.3: the SCClientStatus is "sent immediately on state
+/// change of any of the bytes 2 to 5, once per second during the 'Ready' state
+/// or if SCC is disabled, and 5 messages per second during the active
+/// 'Recording', 'Recording Completion', 'Play Back' or 'Abort'" states.
+///
+/// The client used to emit only on change, so a conformant SCM applying its
+/// 600 ms F.3 timeout declared the client dead as soon as nothing changed —
+/// which is most of a play back. `SCMaster` has always run this cadence.
+#[test]
+fn sequence_control_client_emits_the_periodic_status_cadence() {
+    let mut client = SCClient::new(SCClientConfig::default());
+    // A fresh client is deliberately un-throttled so it announces itself at
+    // once; take that first status out of the way.
+    assert!(client.update(0).is_some(), "a new client announces itself");
+
+    // Ready / disabled: once per second.
+    assert!(
+        client.update(999).is_none(),
+        "no status is due before the 1 s idle cadence"
+    );
+    assert!(
+        client.update(1).is_some(),
+        "an idle client must still announce itself once per second"
+    );
+
+    // Drive it into Play Back and check the 5 Hz cadence.
+    client
+        .try_handle_master_status(&master_status(0x10, master_ready()))
+        .unwrap();
+    client
+        .try_handle_master_status(&master_status(0x10, master_playback(7)))
+        .unwrap();
+    assert!(client.is(SCState::Active));
+    // Drain whatever the transitions themselves queued.
+    while client.update(100).is_some() {}
+
+    let mut emitted = 0;
+    for _ in 0..10 {
+        if client.update(100).is_some() {
+            emitted += 1;
+        }
+    }
+    assert_eq!(
+        emitted, 5,
+        "Play Back requires 5 messages per second, not one per state change"
+    );
+}
+
 #[test]
 fn sequence_control_client_inactive_master_status_resets_local_session_state() {
     let mut client = SCClient::new(
@@ -433,10 +481,15 @@ fn sequence_control_client_inactive_master_status_resets_local_session_state() {
         "local busy changes remain represented by a normal client status"
     );
     assert!(client.is_busy());
-    assert!(
-        client.update(200).is_none(),
-        "busy timeout must not fire before the configured boundary"
+    // B8 — the client now emits the F.3 cadence (5/s while in Play Back), so
+    // this tick produces a *status*, not an abort. What must not have happened
+    // is the busy timeout firing.
+    assert_eq!(
+        client.update(200),
+        Some(client_playback(7)),
+        "the periodic status must keep flowing and the busy timeout must not fire"
     );
+    assert!(client.is(SCState::Active));
 
     let disabled_reply = client
         .try_handle_master_status(&master_status(0x10, master_inactive()))

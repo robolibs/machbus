@@ -22,6 +22,8 @@ pub const SC_STATUS_TIMEOUT_READY_MS: u32 = 3000;
 pub const SC_STATUS_MIN_SPACING_MS: u32 = 100;
 /// 5 Hz cadence during active states.
 pub const SC_STATUS_ACTIVE_RATE_MS: u32 = 200;
+/// 1 Hz cadence while Ready or disabled.
+pub const SC_STATUS_IDLE_RATE_MS: u32 = 1000;
 /// Maximum Sequence Control step id that can be represented on the wire.
 ///
 /// The SC status payload carries a selected sequence number in byte 3. Values
@@ -378,6 +380,13 @@ impl SCMasterConfig {
 pub struct SCClientConfig {
     pub min_status_spacing_ms: u32,
     pub busy_pause_timeout_ms: u32,
+    /// Cadence while Recording / PlayBack / Abort (F.3: "5 messages per
+    /// second"). The client used to emit a status only on change, so a
+    /// conformant SCM's 600 ms timeout expired the moment nothing was
+    /// happening — which is most of a play back.
+    pub active_status_interval_ms: u32,
+    /// Cadence while Ready or disabled (F.3: "once per second").
+    pub idle_status_interval_ms: u32,
 }
 
 impl Default for SCClientConfig {
@@ -385,6 +394,8 @@ impl Default for SCClientConfig {
         Self {
             min_status_spacing_ms: SC_STATUS_MIN_SPACING_MS,
             busy_pause_timeout_ms: SC_STATUS_TIMEOUT_ACTIVE_MS,
+            active_status_interval_ms: SC_STATUS_ACTIVE_RATE_MS,
+            idle_status_interval_ms: SC_STATUS_IDLE_RATE_MS,
         }
     }
 }

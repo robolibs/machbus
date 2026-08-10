@@ -214,6 +214,9 @@ impl AssignmentResponse {
     }
 }
 
+/// A `TIM_ClientStatus_Msg` is expected at least this often (Annex C.3).
+pub const CLIENT_STATUS_TIMEOUT_MS: u32 = 300;
+
 /// Server-side per-function exclusive assignment table (§5.5.1).
 #[derive(Debug, Default)]
 pub struct AssignmentTable {
@@ -224,6 +227,15 @@ pub struct AssignmentTable {
     supported: Vec<TimFunctionId>,
     /// A request is being processed; further ones get `ServerBusy` (§5.5.3).
     busy: bool,
+    /// Per-client time since the last `TIM_ClientStatus_Msg`, in milliseconds.
+    ///
+    /// §5.5.3: "a timeout of OR heartbeat counter error in TIM_ClientStatus_Msg
+    /// ... it shall release all TIM function assignments of that TIM client",
+    /// with a 300 ms timeout (C.3). `release_all` existed and was reachable
+    /// from none of those triggers, so a client that died mid-field kept
+    /// steering and speed assigned to itself forever and no other client could
+    /// take over.
+    liveness: Vec<(u8, u32)>,
     /// Clients that have completed mutual authentication.
     ///
     /// AEF §4.3 makes successful mutual authentication the precondition for TIM
@@ -239,8 +251,42 @@ impl AssignmentTable {
             owners: Vec::new(),
             supported: supported.to_vec(),
             busy: false,
+            liveness: Vec::new(),
             authenticated: Vec::new(),
         }
+    }
+
+    /// Record a `TIM_ClientStatus_Msg` from `client`, resetting its watchdog.
+    pub fn note_client_status(&mut self, client: u8) {
+        if let Some(entry) = self.liveness.iter_mut().find(|(a, _)| *a == client) {
+            entry.1 = 0;
+        } else {
+            self.liveness.push((client, 0));
+        }
+    }
+
+    /// A heartbeat-counter error from `client` — §5.5.3 releases immediately,
+    /// without waiting out the timeout.
+    pub fn note_client_heartbeat_error(&mut self, client: u8) {
+        self.release_all(client);
+        self.liveness.retain(|(a, _)| *a != client);
+    }
+
+    /// Advance the per-client status watchdogs. Returns the clients whose
+    /// assignments were released because their status message timed out.
+    pub fn tick(&mut self, elapsed_ms: u32) -> Vec<u8> {
+        let mut released = Vec::new();
+        for (client, age) in &mut self.liveness {
+            *age = age.saturating_add(elapsed_ms);
+            if *age >= CLIENT_STATUS_TIMEOUT_MS {
+                released.push(*client);
+            }
+        }
+        for client in &released {
+            self.owners.retain(|(_, a)| a != client);
+            self.liveness.retain(|(a, _)| a != client);
+        }
+        released
     }
 
     /// Record that `client` completed mutual authentication (AEF §4.3).
@@ -433,6 +479,73 @@ mod tests {
             table.owner(TimFunctionId::ExternalGuidance).is_none(),
             "authority cannot outlive the authentication that granted it"
         );
+    }
+
+    /// H70 — §5.5.3: "a timeout of OR heartbeat counter error in
+    /// TIM_ClientStatus_Msg ... it shall release all TIM function assignments
+    /// of that TIM client". `release_all` was reachable from none of those
+    /// triggers, so a client that died mid-field kept steering and speed
+    /// assigned to itself forever and no other client could take over.
+    #[test]
+    fn a_silent_client_loses_its_assignments() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![
+                    (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                    (TimFunctionId::VehicleSpeed, RequestType::Assign),
+                ],
+            },
+            CLIENT_A,
+        );
+        table.note_client_status(CLIENT_A);
+        assert_eq!(
+            table.owner(TimFunctionId::ExternalGuidance),
+            Some(CLIENT_A)
+        );
+
+        // While it keeps talking, it keeps its assignments.
+        for _ in 0..10 {
+            assert!(table.tick(100).is_empty());
+            table.note_client_status(CLIENT_A);
+        }
+        assert_eq!(table.owner(TimFunctionId::VehicleSpeed), Some(CLIENT_A));
+
+        // It goes quiet past the 300 ms window.
+        let mut released = Vec::new();
+        for _ in 0..4 {
+            released.extend(table.tick(100));
+        }
+        assert_eq!(released, vec![CLIENT_A]);
+        assert!(table.owner(TimFunctionId::ExternalGuidance).is_none());
+        assert!(table.owner(TimFunctionId::VehicleSpeed).is_none());
+
+        // And the function is now free for another client to take.
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_B,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+    }
+
+    /// A heartbeat-counter error releases immediately, without waiting out the
+    /// timeout.
+    #[test]
+    fn a_heartbeat_error_releases_without_waiting() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        table.note_client_status(CLIENT_A);
+        assert_eq!(table.owner(TimFunctionId::RearHitch), Some(CLIENT_A));
+
+        table.note_client_heartbeat_error(CLIENT_A);
+        assert!(table.owner(TimFunctionId::RearHitch).is_none());
     }
 
     /// A release is always honoured: refusing to let go is never the safe

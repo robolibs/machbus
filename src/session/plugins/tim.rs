@@ -257,6 +257,13 @@ impl Plugin for Tim {
         if !msg.has_usable_envelope_for_pgn(pgn) {
             return;
         }
+        // Any well-formed frame from a subscribed TIM PGN is evidence the peer
+        // is still there. `TimAuthority::keepalive` existed with no caller
+        // anywhere in the crate, so the AEF communication watchdog revoked
+        // every grant 300 ms after it was made: guarded hitch and PTO commands
+        // stopped reaching the bus while the implement held its last commanded
+        // position, with nothing to say why.
+        self.authority.keepalive();
         match pgn {
             PGN_FRONT_PTO | PGN_REAR_PTO => {
                 if let Some(state) = PtoState::decode(msg) {
@@ -382,4 +389,95 @@ fn tim_error(err: TimValidationError) -> Error {
     Error::invalid_state(format!(
         "TIM authority/interlock guard rejected command: {err:?}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isobus::tim::{TimAuthorityState, TimOption};
+    use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Name, Priority};
+    use crate::session::Session;
+
+    fn node() -> Session {
+        let name = Name::default()
+            .with_identity_number(0x77)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let mut s = Session::builder(name, 0x80)
+            .plug(Tim::new(TimAuthority::new(TimOptionSet::from_options(
+                &[TimOption::FrontPtoEngagementCwIsSupported],
+            ))))
+            .build()
+            .unwrap();
+        s.start().unwrap();
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            s.tick(now);
+            while s.poll_transmit().is_some() {}
+            if s.is_claimed() {
+                break;
+            }
+        }
+        s
+    }
+
+    fn feed_pto_status(s: &mut Session, at: Instant) {
+        let frame = Frame::new(
+            Identifier::encode(Priority::Default, PGN_FRONT_PTO, 0xF0, BROADCAST_ADDRESS),
+            [0xFFu8; 8],
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
+
+    /// C25 — `TimAuthority::keepalive` had no caller anywhere in the crate, so
+    /// the AEF communication watchdog revoked every grant 300 ms after it was
+    /// made. Guarded hitch and PTO commands stopped reaching the bus while the
+    /// implement held its last commanded position, with nothing to say why.
+    #[test]
+    fn a_talking_peer_keeps_the_tim_authority_alive() {
+        let mut s = node();
+        let mut now = Instant::from_millis(10_000);
+        // Sync the plugin's tick baseline before granting, so the watchdog is
+        // not carrying the idle gap left by the address-claim phase.
+        s.tick(now);
+        feed_pto_status(&mut s, now);
+
+        s.get_mut::<Tim>()
+            .unwrap()
+            .set_interlocks(TimInterlocks::all_clear());
+        s.get_mut::<Tim>()
+            .unwrap()
+            .request_authority(TimOptionSet::from_options(&[TimOption::FrontPtoEngagementCwIsSupported]))
+            .unwrap();
+        s.get_mut::<Tim>().unwrap().grant_authority().unwrap();
+        assert_eq!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted
+        );
+
+        // The peer keeps broadcasting well past the 300 ms window.
+        for _ in 0..20 {
+            now = now.add_millis(100);
+            feed_pto_status(&mut s, now);
+            s.tick(now);
+        }
+        assert_eq!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted,
+            "a peer that is still talking must not have its authority revoked"
+        );
+
+        // It goes quiet: the watchdog must then revoke.
+        for _ in 0..8 {
+            now = now.add_millis(100);
+            s.tick(now);
+        }
+        assert_ne!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted,
+            "loss of communication still revokes the grant"
+        );
+    }
 }

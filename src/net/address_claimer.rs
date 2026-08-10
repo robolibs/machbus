@@ -53,6 +53,17 @@ pub struct AddressClaimer {
     /// Time since the most recent claim was sent, in ms.
     claim_guard_timer_ms: u32,
 
+    /// §4.4.2.4 — a cannot-claim response is queued, waiting for RTxD.
+    ///
+    /// "A random transmit delay (RTxD) shall be inserted between the reception
+    /// of a message triggering the cannot-claim-source-address response and the
+    /// sending of the response in order to minimize the possibility of two such
+    /// responses causing bus errors." Answering immediately meant every
+    /// address-failed CF on the segment replied to the same global request in
+    /// the same instant.
+    cannot_claim_pending: bool,
+    cannot_claim_delay_timer_ms: u32,
+
     /// §4.4.3 — re-claim queued, waiting for RTxD to elapse.
     reclaim_pending: bool,
     reclaim_delay_timer_ms: u32,
@@ -87,6 +98,8 @@ impl AddressClaimer {
             rtxd_ms,
             attempted_claim: false,
             claim_guard_timer_ms: 0,
+            cannot_claim_pending: false,
+            cannot_claim_delay_timer_ms: 0,
             reclaim_pending: false,
             reclaim_delay_timer_ms: 0,
             reclaim_address: NULL_ADDRESS,
@@ -154,6 +167,18 @@ impl AddressClaimer {
     /// transition the CF to [`ClaimState::Claimed`].
     pub fn update(&mut self, cf: &mut InternalCf, elapsed_ms: u32) -> Vec<Frame> {
         let mut frames = Vec::new();
+
+        if self.cannot_claim_pending {
+            self.cannot_claim_delay_timer_ms =
+                self.cannot_claim_delay_timer_ms.saturating_add(elapsed_ms);
+            if self.cannot_claim_delay_timer_ms >= self.rtxd_ms {
+                self.cannot_claim_pending = false;
+                self.cannot_claim_delay_timer_ms = 0;
+                if cf.claim_state() == ClaimState::Failed {
+                    frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                }
+            }
+        }
 
         if self.reclaim_pending {
             self.reclaim_delay_timer_ms = self.reclaim_delay_timer_ms.saturating_add(elapsed_ms);
@@ -372,7 +397,14 @@ impl AddressClaimer {
                 frames.push(make_claim_frame(cf.name(), cf.address()));
             }
             ClaimState::Failed => {
-                frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                // Deferred by RTxD; `update` emits it. With no delay every
+                // failed CF answers a global request simultaneously.
+                if self.rtxd_ms == 0 {
+                    frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                } else {
+                    self.cannot_claim_pending = true;
+                    self.cannot_claim_delay_timer_ms = 0;
+                }
             }
             _ => {}
         }
@@ -635,6 +667,43 @@ mod tests {
             !frames.is_empty(),
             "a claim for our own SA must still be answered"
         );
+    }
+
+    /// H31 — §4.4.2.4: "A random transmit delay (RTxD) shall be inserted
+    /// between the reception of a message triggering the
+    /// cannot-claim-source-address response and the sending of the response in
+    /// order to minimize the possibility of two such responses causing bus
+    /// errors." Answering immediately had every failed CF on the segment reply
+    /// to one global request in the same instant.
+    #[test]
+    fn a_cannot_claim_response_waits_out_the_random_transmit_delay() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, false), 0, 0x80);
+        let mut clm = AddressClaimer::with_timeout(250, 40);
+        let _ = clm.start(&mut cf);
+
+        // A stronger NAME takes our address. `self_configurable` is NAME bit
+        // 63, so a self-configurable peer is *weaker*, not stronger — both
+        // sides here are non-configurable and the lower identity wins.
+        let stronger = name_with_identity(0x001, false);
+        let _ = clm.handle_claim(&mut cf, 0x80, stronger);
+        assert_eq!(cf.claim_state(), ClaimState::Failed);
+
+        let immediate = clm.handle_request_for_claim(&mut cf);
+        assert!(
+            immediate.is_empty(),
+            "the response must not go out in the same instant as the request"
+        );
+
+        // Nothing before the delay expires...
+        assert!(clm.update(&mut cf, 39).is_empty());
+        // ...and exactly one cannot-claim after it.
+        let delayed = clm.update(&mut cf, 1);
+        assert_eq!(delayed.len(), 1);
+        assert_eq!(delayed[0].pgn(), PGN_ADDRESS_CLAIMED);
+        assert_eq!(delayed[0].source(), NULL_ADDRESS);
+
+        // It is a one-shot, not a repeating cadence.
+        assert!(clm.update(&mut cf, 500).is_empty());
     }
 
     #[test]

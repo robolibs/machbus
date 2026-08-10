@@ -141,7 +141,10 @@ fn network_management_request_address_claim_response_follows_claim_state() {
     assert_eq!(cf.claim_state(), ClaimState::Failed);
     assert_eq!(cf.address(), NULL_ADDRESS);
 
-    let failed_reply = claimer.handle_request_for_claim(&mut cf);
+    // §4.4.2.4 defers the cannot-claim response by RTxD so that several failed
+    // CFs do not answer one global request in the same instant.
+    assert!(claimer.handle_request_for_claim(&mut cf).is_empty());
+    let failed_reply = claimer.update(&mut cf, ADDRESS_CLAIM_RTXD_MAX_MS);
     assert_eq!(failed_reply.len(), 1);
     assert_eq!(failed_reply[0].source(), NULL_ADDRESS);
     assert_eq!(failed_reply[0].payload(), &cf.name().to_bytes());
@@ -468,7 +471,8 @@ fn network_management_rejects_unclaimable_local_preferred_addresses_before_claim
             "invalid preferred-address startup must not retry by timer"
         );
 
-        let request_reply = claimer.handle_request_for_claim(&mut cf);
+        assert!(claimer.handle_request_for_claim(&mut cf).is_empty());
+        let request_reply = claimer.update(&mut cf, ADDRESS_CLAIM_RTXD_MAX_MS);
         assert_eq!(request_reply.len(), 1);
         assert_eq!(request_reply[0].source(), NULL_ADDRESS);
         assert_eq!(request_reply[0].payload(), &local_name.to_bytes());

@@ -11,7 +11,8 @@
 //! [`Diagnostics::raise`] / [`Diagnostics::clear`].
 
 use crate::j1939::diagnostic::{DiagnosticLamps, DmDtcList, Dtc};
-use crate::net::pgn_defs::{PGN_DM1, PGN_REQUEST};
+use crate::j1939::acknowledgment::Acknowledgment;
+use crate::net::pgn_defs::{PGN_ACKNOWLEDGMENT, PGN_DM1, PGN_REQUEST};
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{DiagEvent, Event};
@@ -113,6 +114,23 @@ impl Plugin for Diagnostics {
                             BROADCAST_ADDRESS,
                             Priority::Default,
                         );
+                    } else if msg.destination != BROADCAST_ADDRESS {
+                        // ISO 11783-3 §5.4.x: "A response is always required
+                        // from a specified destination (not global), even if it
+                        // is a NACK indicating that the particular PGN value is
+                        // not supported" — and conversely "A global request
+                        // shall not be responded to with a NACK". Staying
+                        // silent left the requester waiting out its timeout with
+                        // no way to tell "unsupported" from "no reply".
+                        let nack = Acknowledgment::nack(requested, ctx.address());
+                        if let Ok(payload) = nack.encode() {
+                            ctx.send(
+                                PGN_ACKNOWLEDGMENT,
+                                payload.to_vec(),
+                                msg.source,
+                                Priority::Default,
+                            );
+                        }
                     }
                 }
             }
@@ -187,6 +205,60 @@ mod tests {
             }
         }
         out
+    }
+
+    /// H37 — ISO 11783-3: "A response is always required from a specified
+    /// destination (not global), even if it is a NACK indicating that the
+    /// particular PGN value is not supported", and "A global request shall not
+    /// be responded to with a NACK when a particular PGN is not supported".
+    /// Staying silent left the requester waiting out its timeout, unable to
+    /// tell "unsupported" from "no reply".
+    #[test]
+    fn an_unsupported_diagnostic_request_is_nacked_only_when_addressed() {
+        use crate::j1939::acknowledgment::{AckControl, Acknowledgment};
+        use crate::net::pgn_defs::{PGN_ACKNOWLEDGMENT, PGN_DM2};
+        use crate::net::{Address, Frame, Identifier, Priority};
+
+        fn request(dest: Address, pgn: Pgn) -> Frame {
+            Frame::new(
+                Identifier::encode(Priority::Default, PGN_REQUEST, 0x26, dest),
+                [
+                    (pgn & 0xFF) as u8,
+                    ((pgn >> 8) & 0xFF) as u8,
+                    ((pgn >> 16) & 0xFF) as u8,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                ],
+                8,
+            )
+        }
+
+        let mut s = node();
+        let now = Instant::from_millis(10_000);
+        let our_address = s.address();
+
+        // Addressed to us, for a PGN this plugin does not serve.
+        s.feed(0, &request(our_address, PGN_DM2), now);
+        let mut nack = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_ACKNOWLEDGMENT {
+                nack = Acknowledgment::decode(&frame.data);
+            }
+        }
+        let nack = nack.expect("an addressed request for an unsupported PGN must be answered");
+        assert_eq!(nack.control, AckControl::NegativeAck);
+        assert_eq!(nack.acknowledged_pgn, PGN_DM2);
+
+        // The same request sent globally must not be NACKed.
+        s.feed(0, &request(BROADCAST_ADDRESS, PGN_DM2), now.add_millis(10));
+        let mut saw_ack = false;
+        while let Some((_, frame)) = s.poll_transmit() {
+            saw_ack |= frame.id.pgn() == PGN_ACKNOWLEDGMENT;
+        }
+        assert!(!saw_ack, "a NACK is not permitted for a global request");
     }
 
     /// H36 — ISO 11783-12: a DTC that "has been active for 1 s or longer, and

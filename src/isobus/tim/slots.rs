@@ -61,6 +61,16 @@ pub struct TimSlot {
     offset: f64,
     /// Whether `0xFB01` means hydraulic float for this function.
     supports_float: bool,
+    /// Whether `0xFBFE` ("released control and accept function value increase
+    /// without operator awareness") is admissible.
+    ///
+    /// D.2.1: the value "can be used ... if not otherwise prohibited for a
+    /// particular function", and "If the value FBFE16 is not allowed for a TIM
+    /// function, it shall be set to 'Reserved' in the message parameters
+    /// definition." D.5.2.1 marks it Reserved for the hitch; D.6.2.1 lists it
+    /// explicitly for vehicle speed. Accepting it everywhere let a client
+    /// disclaim operator awareness on a function that forbids doing so.
+    allows_accept_increase: bool,
     /// Which special-value table this function uses. A single `supports_float`
     /// flag cannot describe the hitch, whose whole range differs (D.5.2.1).
     shape: SlotShape,
@@ -72,6 +82,10 @@ enum SlotShape {
     /// `0x0000` server-set-negative, `0x0001..=0xFAFF` scaled, `0xFB00`
     /// server-set-positive, optional float at `0xFB01`.
     Bidirectional,
+    /// D.7.2.1: the whole `0x0000..=0xFAFF` band is a signed curvature about
+    /// the `0x7D80` straight-ahead midpoint, so raw zero is the most negative
+    /// *value* rather than a server-set sentinel.
+    Curvature,
     /// D.5.2.1: `0x0000..=0x2710` is 0-100 % of travel, `0x2711..=0xFAFF` is
     /// reserved, and `0xFB00..=0xFB03` are Float / Stop / Lower-until-Stop /
     /// Raise-until-Stop. Decoding this through the bidirectional table dropped
@@ -87,6 +101,8 @@ impl TimSlot {
         resolution: 0.004,
         offset: -128.512,
         supports_float: true,
+        // Not marked Reserved in D.3.2.1; the default rule applies.
+        allows_accept_increase: true,
         shape: SlotShape::Bidirectional,
     };
 
@@ -96,6 +112,8 @@ impl TimSlot {
         resolution: 0.125,
         offset: -4016.0,
         supports_float: false,
+        // Not marked Reserved in D.4.2.1; the default rule applies.
+        allows_accept_increase: true,
         shape: SlotShape::Bidirectional,
     };
 
@@ -106,6 +124,8 @@ impl TimSlot {
         resolution: 0.001,
         offset: -32.128,
         supports_float: false,
+        // D.6.2.1 lists FBFE explicitly for vehicle speed.
+        allows_accept_increase: true,
         shape: SlotShape::Bidirectional,
     };
 
@@ -114,11 +134,29 @@ impl TimSlot {
         resolution: 0.01,
         offset: 0.0,
         supports_float: true,
+        // D.5.2.1 marks FBFE Reserved for the hitch.
+        allows_accept_increase: false,
         shape: SlotShape::HitchPosition,
     };
 
     /// Highest raw carrying a hitch position: 0x2710 = 100.00 % of travel.
     const HITCH_MAX_RAW: u16 = 0x2710;
+
+    /// External guidance curvature — D.7.2.1: `0.25 km⁻¹ per bit`,
+    /// `−8032 km⁻¹` offset, straight ahead at the `0x7D80` midpoint.
+    /// "Curvature is positive when the vehicle is moving forward and turning to
+    /// the driver's right."
+    ///
+    /// Without this the steering setpoint could not be encoded at all — the TIM
+    /// layer had SLOTs for the valve, PTO, speed and hitch, and none for the
+    /// one function that actually steers.
+    pub const EXTERNAL_GUIDANCE_CURVATURE: Self = Self {
+        resolution: 0.25,
+        offset: -8032.0,
+        supports_float: false,
+        allows_accept_increase: true,
+        shape: SlotShape::Curvature,
+    };
 
     /// The engineering value this SLOT's neutral raw (`0x7D80`) represents —
     /// zero flow, PTO off, or standstill.
@@ -142,6 +180,20 @@ impl TimSlot {
     /// tell "a value I do not understand" from "a command I must act on".
     #[must_use]
     pub fn decode(self, raw: u16) -> Option<TimValue> {
+        if self.shape == SlotShape::Curvature {
+            return match raw {
+                0..=MAX_SCALED_RAW => Some(TimValue::Value(
+                    f64::from(raw) * self.resolution + self.offset,
+                )),
+                SPECIAL_RELEASED_AWAIT_OPERATOR => Some(TimValue::ReleasedAwaitOperator),
+                SPECIAL_RELEASED_ACCEPT_INCREASE if self.allows_accept_increase => {
+                    Some(TimValue::ReleasedAcceptIncrease)
+                }
+                SPECIAL_READY_TO_CONTROL => Some(TimValue::ReadyToControl),
+                // 0xFB00..=0xFBFC and 0xFC00..=0xFFFF are reserved.
+                _ => None,
+            };
+        }
         if self.shape == SlotShape::HitchPosition {
             return match raw {
                 0..=Self::HITCH_MAX_RAW => Some(TimValue::Value(f64::from(raw) * self.resolution)),
@@ -150,9 +202,12 @@ impl TimSlot {
                 0xFB02 => Some(TimValue::LowerUntilStop),
                 0xFB03 => Some(TimValue::RaiseUntilStop),
                 SPECIAL_RELEASED_AWAIT_OPERATOR => Some(TimValue::ReleasedAwaitOperator),
-                SPECIAL_RELEASED_ACCEPT_INCREASE => Some(TimValue::ReleasedAcceptIncrease),
+                SPECIAL_RELEASED_ACCEPT_INCREASE if self.allows_accept_increase => {
+                    Some(TimValue::ReleasedAcceptIncrease)
+                }
                 SPECIAL_READY_TO_CONTROL => Some(TimValue::ReadyToControl),
-                // 0x2711..=0xFAFF and 0xFB04..=0xFBFC are reserved.
+                // 0x2711..=0xFAFF and 0xFB04..=0xFBFC are reserved, as is
+                // 0xFBFE for this function.
                 _ => None,
             };
         }
@@ -164,7 +219,9 @@ impl TimSlot {
             0xFB00 => Some(TimValue::ServerSetPositive),
             0xFB01 if self.supports_float => Some(TimValue::Float),
             SPECIAL_RELEASED_AWAIT_OPERATOR => Some(TimValue::ReleasedAwaitOperator),
-            SPECIAL_RELEASED_ACCEPT_INCREASE => Some(TimValue::ReleasedAcceptIncrease),
+            SPECIAL_RELEASED_ACCEPT_INCREASE if self.allows_accept_increase => {
+                Some(TimValue::ReleasedAcceptIncrease)
+            }
             SPECIAL_READY_TO_CONTROL => Some(TimValue::ReadyToControl),
             // 0xFB01 without float support, 0xFB02..=0xFBFC, 0xFC00..=0xFFFF.
             _ => None,
@@ -175,6 +232,25 @@ impl TimSlot {
     /// into the SLOT's range rather than wrapping into the special band.
     #[must_use]
     pub fn encode(self, value: TimValue) -> u16 {
+        if self.shape == SlotShape::Curvature {
+            return match value {
+                TimValue::Value(v) if v.is_finite() => {
+                    let raw = (v - self.offset) / self.resolution;
+                    if raw <= 0.0 {
+                        0
+                    } else if raw >= f64::from(MAX_SCALED_RAW) {
+                        MAX_SCALED_RAW
+                    } else {
+                        (raw + 0.5) as u16
+                    }
+                }
+                TimValue::ReleasedAcceptIncrease if self.allows_accept_increase => {
+                    SPECIAL_RELEASED_ACCEPT_INCREASE
+                }
+                TimValue::ReadyToControl => SPECIAL_READY_TO_CONTROL,
+                _ => SPECIAL_RELEASED_AWAIT_OPERATOR,
+            };
+        }
         if self.shape == SlotShape::HitchPosition {
             return match value {
                 TimValue::Value(v) if v.is_finite() => {
@@ -319,9 +395,15 @@ mod tests {
                 slot.decode(SPECIAL_RELEASED_AWAIT_OPERATOR),
                 Some(TimValue::ReleasedAwaitOperator)
             );
+            // D.2.1 admits FBFE only where the function does not prohibit it;
+            // D.5.2.1 marks it Reserved for the hitch.
             assert_eq!(
                 slot.decode(SPECIAL_RELEASED_ACCEPT_INCREASE),
-                Some(TimValue::ReleasedAcceptIncrease)
+                if slot == TimSlot::HITCH_POSITION {
+                    None
+                } else {
+                    Some(TimValue::ReleasedAcceptIncrease)
+                }
             );
             // Reserved bands stay reserved.
             assert_eq!(slot.decode(0xFBF0), None);
@@ -364,6 +446,9 @@ mod tests {
         assert_eq!(slot.decode(0xFBFC), None);
 
         // Round trips, including the commands.
+        // FBFE is Reserved for the hitch, so it is refused rather than decoded.
+        assert_eq!(slot.decode(SPECIAL_RELEASED_ACCEPT_INCREASE), None);
+
         for value in [
             TimValue::Stop,
             TimValue::Float,
@@ -382,6 +467,45 @@ mod tests {
             slot.decode(slot.encode(TimValue::Value(1.0e9))),
             Some(TimValue::Value(_))
         ));
+    }
+
+    /// H68 — the TIM layer had SLOTs for the valve, PTO, speed and hitch and
+    /// none for the one function that actually steers, so an External Guidance
+    /// curvature setpoint could not be encoded at all.
+    #[test]
+    fn external_guidance_curvature_matches_annex_d7() {
+        let slot = TimSlot::EXTERNAL_GUIDANCE_CURVATURE;
+
+        // D.7.2.1: 0x0000 = -8032.00, 0x7D80 = straight, 0.25 km^-1 per bit.
+        assert_eq!(slot.decode(0x0000), Some(TimValue::Value(-8032.0)));
+        match slot.decode(0x7D80) {
+            Some(TimValue::Value(v)) => assert!(v.abs() < 1e-9, "0x7D80 is straight ahead"),
+            other => panic!("expected straight, got {other:?}"),
+        }
+        match slot.decode(MAX_SCALED_RAW) {
+            Some(TimValue::Value(v)) => assert!((v - 8031.75).abs() < 1e-9),
+            other => panic!("expected the positive limit, got {other:?}"),
+        }
+
+        // "Curvature is positive when the vehicle is moving forward and turning
+        // to the driver's right" — so a right turn encodes above the midpoint.
+        assert!(slot.encode(TimValue::Value(20.0)) > 0x7D80);
+        assert!(slot.encode(TimValue::Value(-20.0)) < 0x7D80);
+
+        // Raw zero is a value here, not a server-set sentinel as it is on the
+        // bidirectional slots.
+        assert_ne!(slot.decode(0x0000), Some(TimValue::ServerSetNegative));
+        assert_eq!(slot.decode(0xFB00), None, "0xFB00..=0xFBFC are reserved");
+        assert_eq!(slot.decode(0xFC00), None);
+
+        assert_eq!(
+            slot.decode(SPECIAL_READY_TO_CONTROL),
+            Some(TimValue::ReadyToControl)
+        );
+        // A setpoint beyond the SLOT clamps inside the scaled band rather than
+        // wrapping into "ready to control".
+        assert_eq!(slot.encode(TimValue::Value(1.0e9)), MAX_SCALED_RAW);
+        assert_eq!(slot.encode(TimValue::Value(-1.0e9)), 0);
     }
 
     #[test]

@@ -900,7 +900,7 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "extended_store_response_success").to_vec(),
         0x80,
     ));
-    assert_eq!(*extended_store_log.borrow(), vec![(true, 0xFF)]);
+    assert_eq!(*extended_store_log.borrow(), vec![(true, 0x00)]);
 
     let mut extended_load_client = VTClient::new(VTClientConfig::default());
     extended_load_client.set_self_address(0x42);

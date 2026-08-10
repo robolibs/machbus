@@ -355,14 +355,34 @@ impl VTServer {
         None
     }
 
+    /// Annex G.2 VT Status: "Bytes 3, 4 — Object ID of the visible Data/Alarm
+    /// Mask of the active Working Set or FFFF16 if no Working Set owns the VT.
+    /// Bytes 5, 6 — Object ID of the visible Soft Key Mask ... or FFFF16 ... if
+    /// there is no Soft Key Mask defined for the active Data/Alarm Mask."
+    ///
+    /// These four bytes used to carry the working set's *source address*, so a
+    /// VT with the active set at SA 0x26 broadcast visible-mask Object ID
+    /// 0x2600 and Soft Key Mask 0x0000 — neither of which is an object in any
+    /// pool. Anything following §4.7.14 to track the visible mask read garbage.
     fn encode_vt_status(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = cmd::VT_STATUS;
         data[1] = self.active_working_set;
-        data[2] = 0x00;
-        data[3] = self.active_working_set;
-        data[4] = 0x00;
-        data[5] = 0x00;
+        let (data_mask, soft_key_mask) = self
+            .find_client(self.active_working_set)
+            .filter(|c| c.pool_activated)
+            .map_or((ObjectID::NULL, ObjectID::NULL), |c| {
+                let mask = c.object_state.active_data_mask;
+                let soft_key = c
+                    .object_state
+                    .soft_key_masks
+                    .get(&mask)
+                    .copied()
+                    .unwrap_or(c.object_state.active_soft_key_mask);
+                (mask, soft_key)
+            });
+        data[2..4].copy_from_slice(&data_mask.0.to_le_bytes());
+        data[4..6].copy_from_slice(&soft_key_mask.0.to_le_bytes());
         // Annex H.1: byte 7 is the VT busy-codes bitfield and byte 8 the VT
         // function code of the command being executed (FF16 when idle). Byte 7
         // is not a version — the VT reports that in the Get Memory response.
@@ -724,15 +744,21 @@ impl VTServer {
         let label = parse_label(&msg.data);
         let mut response = [0xFFu8; 8];
         response[0] = cmd::STORE_VERSION;
-        response[1] = match self.find_client_mut(msg.source) {
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        response[5] = match self.find_client_mut(msg.source) {
             Some(c) if c.pool_uploaded && !c.pool.is_empty() => {
                 if c.store_version(&label, 5) {
                     0x00
                 } else {
-                    0x02
+                    // E.5 bit 2: insufficient memory available.
+                    0x04
                 }
             }
-            _ => 0x01,
+            // No pool to store: "any other error" (bit 3). Bit 0 is Reserved.
+            _ => 0x08,
         };
         vec![OutboundFrame::to(response.to_vec(), msg.source)]
     }
@@ -749,7 +775,12 @@ impl VTServer {
 
         let mut response = [0xFFu8; 8];
         response[0] = cmd::LOAD_VERSION;
-        response[1] = if success { 0x00 } else { 0x01 };
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        // E.7 bit 1: version label is not correct / unknown.
+        response[5] = if success { 0x00 } else { 0x02 };
 
         if success {
             if !matches!(self.state(), VTServerState::Connected) {
@@ -771,7 +802,12 @@ impl VTServer {
             .unwrap_or(false);
         let mut response = [0xFFu8; 8];
         response[0] = cmd::DELETE_VERSION;
-        response[1] = if success { 0x00 } else { 0x01 };
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        // E.9 bit 1: version label is not correct / unknown.
+        response[5] = if success { 0x00 } else { 0x02 };
         vec![OutboundFrame::to(response.to_vec(), msg.source)]
     }
 

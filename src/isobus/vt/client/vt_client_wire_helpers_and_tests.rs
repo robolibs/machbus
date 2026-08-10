@@ -100,8 +100,15 @@ fn decode_padded_version_label(field: &[u8], max_len: usize, name: &str) -> Opti
     Some(label.to_owned())
 }
 
+/// Annex E.5/E.7/E.9 and the E.13/E.15 extended forms share one layout: bytes
+/// 2-5 and 7-8 reserved `FF`, byte 6 the error code.
+///
+/// This used to require `data[3..]` to be all `FF`, which is false for every
+/// conformant VT — a successful response carries 0x00 in byte 6, so the client
+/// dropped the frame and never left its wait state. The reserved bytes are not
+/// checked: reserved fields are ignored on receive, not made load-bearing.
 fn version_operation_response_is_canonical(data: &[u8]) -> bool {
-    data.len() == 8 && data[3..].iter().all(|&byte| byte == 0xFF)
+    data.len() == 8
 }
 
 #[cfg(test)]
@@ -1284,20 +1291,23 @@ mod tests {
         store.handle_vt_message(&vt_msg(vec![cmd::EXTENDED_STORE_VERSION, 0x00], 0x80));
         assert!(store_log.borrow().is_empty());
 
+        // E.13: bytes 2-5 reserved FF, byte 6 the error code. This vector used
+        // to put the status in byte 2 and expect success — the layout the
+        // client was reading, not the one a conformant VT sends.
         store.handle_vt_message(&vt_msg(
             vec![
                 cmd::EXTENDED_STORE_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
                 0xFF,
             ],
             0x80,
         ));
-        assert_eq!(*store_log.borrow(), vec![(true, 0xFF)]);
+        assert_eq!(*store_log.borrow(), vec![(true, 0x00)]);
 
         let mut load = VTClient::new(VTClientConfig::default());
         force_connected(&mut load);
@@ -1309,17 +1319,37 @@ mod tests {
         load.handle_vt_message(&vt_msg(
             vec![
                 cmd::EXTENDED_LOAD_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
                 0xFF,
             ],
             0x80,
         ));
         assert_eq!(load.state(), VTState::Connected);
+
+        // E.15 bit 1: an unknown version label is a failure, and it must be
+        // read from byte 6 rather than byte 2.
+        let mut failed = VTClient::new(VTClientConfig::default());
+        force_connected(&mut failed);
+        failed.send_extended_load_version("V1").unwrap();
+        failed.handle_vt_message(&vt_msg(
+            vec![
+                cmd::EXTENDED_LOAD_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0x02,
+                0xFF,
+                0xFF,
+            ],
+            0x80,
+        ));
+        assert_eq!(failed.state(), VTState::Disconnected);
     }
 
     #[test]

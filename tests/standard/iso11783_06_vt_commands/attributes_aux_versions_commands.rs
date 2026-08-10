@@ -1161,7 +1161,16 @@ fn vt_client_version_list_labels_require_canonical_bytes_before_events() {
 }
 
 #[test]
-fn vt_client_version_operation_responses_require_canonical_fixed_frames_before_events_or_state() {
+fn vt_client_version_operation_responses_read_the_error_code_from_byte_six() {
+    // Annex E.5/E.7/E.9 (classic) and E.13/E.15 (extended) share one layout:
+    // byte 1 the function, bytes 2-5 reserved FF, byte 6 the error code, bytes
+    // 7-8 reserved FF.
+    //
+    // This test used to assert the opposite on both counts: that the status
+    // lives in byte 2, and that a response whose reserved bytes are not exactly
+    // FF must be rejected. Against a conforming VT the first is simply the
+    // wrong field, and the second discarded the frame outright — so a stored
+    // pool was never restored and the client never left its wait state.
     let mut classic = VTClient::new(VTClientConfig::default());
     connect_standard_client(&mut classic);
 
@@ -1171,21 +1180,29 @@ fn vt_client_version_operation_responses_require_canonical_fixed_frames_before_e
         .on_store_version_response
         .subscribe(move |&response| store_seen.borrow_mut().push(response));
 
+    // A short frame is still malformed.
     classic.handle_vt_message(&Message::new(
         PGN_VT_TO_ECU,
-        vec![cmd::STORE_VERSION, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF],
+        vec![cmd::STORE_VERSION, 0xFF, 0xFF],
         0x80,
     ));
-    assert!(
-        store_log.borrow().is_empty(),
-        "classic Store Version responses must reject non-canonical fixed-frame tails"
-    );
+    assert!(store_log.borrow().is_empty());
+
+    // Success: byte 6 is zero.
     classic.handle_vt_message(&Message::new(
         PGN_VT_TO_ECU,
-        vec![cmd::STORE_VERSION, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        vec![cmd::STORE_VERSION, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF],
         0x80,
     ));
     assert_eq!(*store_log.borrow(), vec![(true, 0x00)]);
+
+    // E.5 bit 2: insufficient memory.
+    classic.handle_vt_message(&Message::new(
+        PGN_VT_TO_ECU,
+        vec![cmd::STORE_VERSION, 0xFF, 0xFF, 0xFF, 0xFF, 0x04, 0xFF, 0xFF],
+        0x80,
+    ));
+    assert_eq!(store_log.borrow().last().copied(), Some((false, 0x04)));
 
     let load_log: Rc<RefCell<Vec<(bool, u8)>>> = Rc::new(RefCell::new(Vec::new()));
     let load_seen = load_log.clone();
@@ -1194,51 +1211,36 @@ fn vt_client_version_operation_responses_require_canonical_fixed_frames_before_e
         .subscribe(move |&response| load_seen.borrow_mut().push(response));
     classic.load_version("V1").unwrap();
     assert_eq!(classic.state(), VTState::WaitForEndOfPool);
+
+    // E.7 bit 1: unknown version label. The pool does not load.
     classic.handle_vt_message(&Message::new(
         PGN_VT_TO_ECU,
-        vec![cmd::LOAD_VERSION, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF],
+        vec![cmd::LOAD_VERSION, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0xFF, 0xFF],
         0x80,
     ));
-    assert!(load_log.borrow().is_empty());
-    assert_eq!(
-        classic.state(),
-        VTState::WaitForEndOfPool,
-        "malformed Load Version responses must not advance the pool-load state"
-    );
+    assert_eq!(*load_log.borrow(), vec![(false, 0x02)]);
+    assert_eq!(classic.state(), VTState::Disconnected);
+
+    // And a success does load it.
+    let mut classic = VTClient::new(VTClientConfig::default());
+    connect_standard_client(&mut classic);
+    let load_log: Rc<RefCell<Vec<(bool, u8)>>> = Rc::new(RefCell::new(Vec::new()));
+    let load_seen = load_log.clone();
+    classic
+        .on_load_version_response
+        .subscribe(move |&response| load_seen.borrow_mut().push(response));
+    classic.load_version("V1").unwrap();
     classic.handle_vt_message(&Message::new(
         PGN_VT_TO_ECU,
-        vec![cmd::LOAD_VERSION, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        vec![cmd::LOAD_VERSION, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF],
         0x80,
     ));
     assert_eq!(*load_log.borrow(), vec![(true, 0x00)]);
     assert_eq!(classic.state(), VTState::Connected);
 
+    // The extended forms use the same layout.
     let mut extended = VTClient::new(VTClientConfig::default());
     connect_standard_client(&mut extended);
-    let extended_store_log: Rc<RefCell<Vec<(bool, u8)>>> = Rc::new(RefCell::new(Vec::new()));
-    let extended_store_seen = extended_store_log.clone();
-    extended
-        .on_extended_store_response
-        .subscribe(move |&response| extended_store_seen.borrow_mut().push(response));
-    extended.handle_vt_message(&Message::new(
-        PGN_VT_TO_ECU,
-        vec![
-            cmd::EXTENDED_STORE_VERSION,
-            0x00,
-            0x00,
-            0x01,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-        ],
-        0x80,
-    ));
-    assert!(
-        extended_store_log.borrow().is_empty(),
-        "extended Store Version responses must reject non-canonical fixed-frame tails"
-    );
-
     let extended_load_log: Rc<RefCell<Vec<(bool, u8)>>> = Rc::new(RefCell::new(Vec::new()));
     let extended_load_seen = extended_load_log.clone();
     extended
@@ -1250,27 +1252,11 @@ fn vt_client_version_operation_responses_require_canonical_fixed_frames_before_e
         PGN_VT_TO_ECU,
         vec![
             cmd::EXTENDED_LOAD_VERSION,
+            0xFF,
+            0xFF,
+            0xFF,
+            0xFF,
             0x00,
-            0x00,
-            0x01,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-        ],
-        0x80,
-    ));
-    assert!(extended_load_log.borrow().is_empty());
-    assert_eq!(extended.state(), VTState::WaitForEndOfPool);
-    extended.handle_vt_message(&Message::new(
-        PGN_VT_TO_ECU,
-        vec![
-            cmd::EXTENDED_LOAD_VERSION,
-            0x00,
-            0x00,
-            0xFF,
-            0xFF,
-            0xFF,
             0xFF,
             0xFF,
         ],

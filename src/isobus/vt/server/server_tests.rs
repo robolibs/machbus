@@ -356,6 +356,36 @@ mod tests {
         assert_eq!(bytes[0], cmd::VT_STATUS);
     }
 
+    /// E3 — Annex G.2: bytes 3-4 are the visible Data/Alarm Mask Object ID and
+    /// bytes 5-6 the visible Soft Key Mask, "or FFFF16 if no Working Set owns
+    /// the VT". These four bytes carried the working set's *source address*, so
+    /// a VT with the active set at SA 0x26 announced visible-mask Object ID
+    /// 0x2600 — not an object in any pool.
+    #[test]
+    fn vt_status_carries_the_visible_mask_object_ids() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        // Nothing owns the VT yet.
+        let idle = s.update(VT_STATUS_INTERVAL_MS).unwrap();
+        assert_eq!(&idle[2..6], &[0xFF, 0xFF, 0xFF, 0xFF]);
+
+        // With an active working set the real Object IDs appear, little-endian.
+        let addr = 0x26;
+        s.ensure_client(addr);
+        if let Some(c) = s.clients.iter_mut().find(|c| c.client_address == addr) {
+            c.pool_activated = true;
+            c.object_state.active_data_mask = ObjectID(0x1234);
+            c.object_state.active_soft_key_mask = ObjectID(0x5678);
+        }
+        s.set_active_working_set(addr);
+
+        let active = s.update(VT_STATUS_INTERVAL_MS).unwrap();
+        assert_eq!(active[1], addr, "byte 2 is where the address belongs");
+        assert_eq!(u16_le(&active[2..]), 0x1234);
+        assert_eq!(u16_le(&active[4..]), 0x5678);
+    }
+
     #[test]
     fn build_helpers_layout() {
         let bytes =

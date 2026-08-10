@@ -1711,8 +1711,9 @@ impl VTClient {
         if !version_operation_response_is_canonical(&msg.data) {
             return;
         }
-        let success = msg.data[1] == 0;
-        let error_code = msg.data[2];
+        // Annex E.5/E.7/E.9 put the error code in byte 6, not byte 2.
+        let error_code = msg.data[5];
+        let success = error_code == 0;
         self.on_store_version_response.emit(&(success, error_code));
     }
 
@@ -1720,8 +1721,9 @@ impl VTClient {
         if !version_operation_response_is_canonical(&msg.data) {
             return;
         }
-        let success = msg.data[1] == 0;
-        let error_code = msg.data[2];
+        // Annex E.5/E.7/E.9 put the error code in byte 6, not byte 2.
+        let error_code = msg.data[5];
+        let success = error_code == 0;
         self.on_load_version_response.emit(&(success, error_code));
         if success {
             self.transition(VTState::Connected);
@@ -1801,8 +1803,9 @@ impl VTClient {
             if !version_operation_response_is_canonical(&msg.data) {
                 return;
             }
-            let success = msg.data[1] == 0;
-            let error_code = msg.data[2];
+            // E.13/E.15 use the same byte-6 error code as the classic forms.
+            let error_code = msg.data[5];
+            let success = error_code == 0;
             if self.state() == VTState::WaitForEndOfPool {
                 self.on_extended_load_response.emit(&(success, error_code));
                 if success {

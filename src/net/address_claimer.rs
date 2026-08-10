@@ -67,7 +67,8 @@ pub struct AddressClaimer {
 }
 
 impl AddressClaimer {
-    /// `rtxd_ms` should be `0.6 × random_byte` (`0..=153`).
+    /// `rtxd_ms` should be `0.6 × random_byte` (`0..=153`). Use
+    /// [`rtxd_for_name`] when no RNG is available.
     #[must_use]
     pub const fn new(rtxd_ms: u32) -> Self {
         Self::with_timeout(ADDRESS_CLAIM_TIMEOUT_MS, rtxd_ms)
@@ -434,6 +435,80 @@ fn make_claim_frame(name: Name, addr: Address) -> Frame {
         BROADCAST_ADDRESS,
     );
     Frame::new(id, name.to_bytes(), 8)
+}
+
+/// A per-control-function RTxD delay derived from its NAME.
+///
+/// ISO 11783-5 §4.4.3 wants the re-claim delay to differ between control
+/// functions so they do not answer in lockstep after a contention. Production
+/// passed a constant `0`, which is the worst case: every CF re-claims on the
+/// same millisecond, and the delay exists precisely to prevent that.
+///
+/// A true random value would be ideal, but the crate has no RNG under
+/// `no_std`. Hashing the NAME gives a value that is stable for a given device
+/// and differs between devices, which is what the requirement is actually for.
+/// A caller with an entropy source should prefer it and pass its own value.
+#[must_use]
+pub const fn rtxd_for_name(name: Name) -> u32 {
+    // FNV-1a over the 64-bit NAME, reduced to the 0..=255 random-byte domain.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let raw = name.raw;
+    let mut i = 0;
+    while i < 8 {
+        hash ^= (raw >> (i * 8)) & 0xFF;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        i += 1;
+    }
+    let random_byte = (hash & 0xFF) as u32;
+    // 0.6 ms per unit, capped at the standard's maximum.
+    let delay = random_byte * 6 / 10;
+    if delay > ADDRESS_CLAIM_RTXD_MAX_MS {
+        ADDRESS_CLAIM_RTXD_MAX_MS
+    } else {
+        delay
+    }
+}
+
+#[cfg(test)]
+mod rtxd_tests {
+    use super::*;
+
+    /// §4.4.3 — the re-claim delay exists so control functions do not answer in
+    /// lockstep. Production passed a constant 0, which guaranteed the lockstep.
+    #[test]
+    fn rtxd_differs_between_control_functions_and_stays_in_range() {
+        let names: Vec<Name> = (1u32..=64)
+            .map(|i| Name::default().with_identity_number(i))
+            .collect();
+
+        let delays: Vec<u32> = names.iter().map(|n| rtxd_for_name(*n)).collect();
+
+        for delay in &delays {
+            assert!(
+                *delay <= ADDRESS_CLAIM_RTXD_MAX_MS,
+                "RTxD must stay within the 0..=153 ms window, got {delay}"
+            );
+        }
+
+        // The point is spread: a handful of distinct values is not enough to
+        // break a contention between many CFs.
+        let mut unique = delays.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert!(
+            unique.len() > 32,
+            "64 different NAMEs produced only {} distinct delays",
+            unique.len()
+        );
+    }
+
+    /// It must be stable for a given device, so a CF does not shuffle its own
+    /// delay between claims within one power cycle.
+    #[test]
+    fn rtxd_is_stable_for_a_given_name() {
+        let name = Name::default().with_identity_number(0xABC);
+        assert_eq!(rtxd_for_name(name), rtxd_for_name(name));
+    }
 }
 
 #[cfg(test)]

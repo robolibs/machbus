@@ -646,4 +646,29 @@ mod tests {
         assert_eq!(rx.stats().aborts_received, 1);
         assert_eq!(rx.stats().dropped_sessions, 1);
     }
+
+    /// 6A — J1939-21 Table 8 defines 250 as "any other reason", and a peer may
+    /// abort with a value this build does not know. Either way the connection
+    /// is gone; dropping the frame left our half of the session open forever.
+    #[test]
+    fn an_unrecognised_abort_reason_still_closes_the_session() {
+        for reason_byte in [250u8, 0x7F, 0xFE] {
+            let mut rx = TransportProtocol::new();
+            let rts = tp_cm_frame(0x10, 0x20, [tp_cm::RTS, 20, 0, 3, 16, 0x00, 0xEF, 0x00]);
+            assert_eq!(rx.process_frame(&rts, 0).len(), 1, "CTS sent");
+            assert_eq!(rx.active_sessions().len(), 1);
+
+            let abort = tp_cm_frame(
+                0x10,
+                0x20,
+                [tp_cm::ABORT, reason_byte, 0xFF, 0xFF, 0xFF, 0x00, 0xEF, 0x00],
+            );
+            rx.process_frame(&abort, 0);
+
+            assert!(
+                rx.active_sessions().is_empty(),
+                "abort reason {reason_byte:#04X} must tear the session down"
+            );
+        }
+    }
 }

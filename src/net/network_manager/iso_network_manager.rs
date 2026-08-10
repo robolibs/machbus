@@ -245,7 +245,13 @@ impl<L: Link> IsoNet<L> {
             ));
         }
         let icf = InternalCf::new(name, port, preferred);
-        let claimer = AddressClaimer::with_timeout(self.config.address_claim_timeout_ms, 0);
+        // A per-CF re-claim delay (§4.4.3). Passing a constant 0 here meant
+        // every control function re-claimed on the same millisecond after a
+        // contention — the exact lockstep the delay exists to break.
+        let claimer = AddressClaimer::with_timeout(
+            self.config.address_claim_timeout_ms,
+            crate::net::address_claimer::rtxd_for_name(name),
+        );
         self.internal_cfs.push(icf);
         self.claimers.push(claimer);
         let h = InternalCfHandle(self.internal_cfs.len() - 1);
@@ -827,6 +833,16 @@ impl<L: Link> IsoNet<L> {
 
         self.check_address_violation(frame, port);
 
+        // ISO 11783-3 §5.2.6 / §5.10.4.2: a connection-mode transport frame is
+        // addressed to one control function. Feeding another CF's session into
+        // our engine makes this stack answer an RTS meant for someone else and
+        // corrupt a third party's transfer.
+        if (pgn == PGN_TP_CM || pgn == PGN_TP_DT || pgn == PGN_ETP_CM || pgn == PGN_ETP_DT)
+            && !self.is_addressed_to_us(frame, port)
+        {
+            return;
+        }
+
         if pgn == PGN_TP_CM || pgn == PGN_TP_DT {
             let responses = self.tp.process_frame(frame, port);
             self.send_frames_best_effort(&responses, port);
@@ -975,6 +991,18 @@ impl<L: Link> IsoNet<L> {
 
         self.send_frames_best_effort(&emitted, port);
         matched
+    }
+
+    /// `true` when `frame` is broadcast or destined for one of our claimed
+    /// control functions on `port`.
+    fn is_addressed_to_us(&self, frame: &Frame, port: u8) -> bool {
+        let dst = frame.destination();
+        if dst == BROADCAST_ADDRESS {
+            return true;
+        }
+        self.internal_cfs
+            .iter()
+            .any(|icf| icf.port() == port && icf.claim_state() == ClaimState::Claimed && icf.address() == dst)
     }
 
     fn check_address_violation(&mut self, frame: &Frame, port: u8) {

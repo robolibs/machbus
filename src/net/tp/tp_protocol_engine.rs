@@ -1095,10 +1095,11 @@ impl TransportProtocol {
             }
 
             tp_cm::ABORT => {
-                let Some(reason) = TransportAbortReason::try_from_u8(frame.data[1]) else {
-                    self.note_dropped_frame();
-                    return responses;
-                };
+                // A reason this build does not recognise is still an abort:
+                // the peer has torn the connection down. Dropping the frame
+                // left our half of the session open forever.
+                let reason = TransportAbortReason::try_from_u8(frame.data[1])
+                    .unwrap_or(TransportAbortReason::Other);
                 if let Some(idx) = self.session_position(|s| {
                     s.pgn == cm_pgn
                         && s.can_port == port

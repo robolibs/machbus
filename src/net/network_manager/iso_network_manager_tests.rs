@@ -1022,4 +1022,53 @@ mod tests {
         assert_eq!(*pgn_a_second.borrow(), 1);
         assert_eq!(*pgn_b.borrow(), 1);
     }
+
+    /// 6A — ISO 11783-3 §5.2.6 / §5.10.4.2: a connection-mode transport frame
+    /// belongs to exactly one control function. This stack fed every TP/ETP
+    /// frame into its own engine regardless of destination, so it answered an
+    /// RTS meant for a third party and corrupted that transfer.
+    #[test]
+    fn transport_frames_for_another_control_function_are_ignored() {
+        use crate::net::pgn_defs::{PGN_ETP_CM, PGN_TP_CM};
+        use crate::net::{Frame, Identifier, Priority, tp::tp_cm};
+
+        let mut net = IsoNet::<wirebit::ShmLink>::new(NetworkConfig::default());
+        let name = Name::default()
+            .with_identity_number(0x777)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let cf = net.create_internal(name, 0, 0x80).unwrap();
+        net.start_address_claiming().unwrap();
+        for _ in 0..40 {
+            net.update(50);
+            while net.take_outbound().is_some() {}
+            if net.internal_cf(cf).unwrap().claim_state() == ClaimState::Claimed {
+                break;
+            }
+        }
+        let our_address = net.internal_cf(cf).unwrap().address();
+        let elsewhere = if our_address == 0x40 { 0x41 } else { 0x40 };
+
+        // An RTS from 0x22 to a CF that is not us.
+        let mut rts = [0xFFu8; 8];
+        rts[0] = tp_cm::RTS;
+        rts[1] = 20;
+        rts[2] = 0;
+        rts[3] = 3;
+        rts[4] = 0xFF;
+        let frame = Frame::new(
+            Identifier::encode(Priority::Default, PGN_TP_CM, 0x22, elsewhere),
+            rts,
+            8,
+        );
+        net.feed(&frame, 0);
+        net.update(1);
+
+        let answered = std::iter::from_fn(|| net.take_outbound())
+            .any(|(_, f)| f.pgn() == PGN_TP_CM || f.pgn() == PGN_ETP_CM);
+        assert!(
+            !answered,
+            "must not answer a transport request addressed to another CF"
+        );
+    }
 }

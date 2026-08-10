@@ -4,7 +4,8 @@ use alloc::{format, vec, vec::Vec};
 use crate::fixed::{FixedBytes, FixedMessage, FixedSlots};
 
 use super::constants::{
-    BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ETP_TIMEOUT_T1_MS, NULL_ADDRESS, TP_BYTES_PER_FRAME,
+    BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS,
+    ETP_TIMEOUT_T3_MS, NULL_ADDRESS, TP_BYTES_PER_FRAME,
     TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
 };
 use super::error::{Error, Result};
@@ -720,18 +721,25 @@ impl ExtendedTransportProtocol {
     }
 
     /// Drive timeouts. WaitingForCTS / WaitingForData / WaitingForEndOfMsg
-    /// all share [`ETP_TIMEOUT_T1_MS`].
+    /// use the per-state deadlines of ISO 11783-3 §5.11.4.1.
     pub fn update(&mut self, elapsed_ms: u32) -> Vec<Frame> {
         let mut emitted = Vec::new();
         let mut i = 0;
         while i < self.sessions.len() {
             self.sessions[i].timer_ms = self.sessions[i].timer_ms.saturating_add(elapsed_ms);
-            let timed_out = matches!(
-                self.sessions[i].state,
-                SessionState::WaitingForCTS
-                    | SessionState::WaitingForData
-                    | SessionState::WaitingForEndOfMsg
-            ) && self.sessions[i].timer_ms >= ETP_TIMEOUT_T1_MS;
+            // Per-state deadlines, as the TP engine already does. T1 is the
+            // receiver's inter-packet window only; a transmitter waiting for a
+            // CTS or an EOMA is on T3, and a receiver that has just sent a CTS
+            // is on T2.
+            let deadline_ms = match self.sessions[i].state {
+                SessionState::WaitingForCTS | SessionState::WaitingForEndOfMsg => {
+                    ETP_TIMEOUT_T3_MS
+                }
+                SessionState::WaitingForData => ETP_TIMEOUT_T2_MS,
+                SessionState::ReceivingData => ETP_TIMEOUT_T1_MS,
+                _ => u32::MAX,
+            };
+            let timed_out = self.sessions[i].timer_ms >= deadline_ms;
 
             if timed_out {
                 tracing::warn!(target: "machbus.transport.etp", pgn = self.sessions[i].pgn, "ETP timeout");
@@ -1283,10 +1291,11 @@ impl ExtendedTransportProtocol {
             }
 
             etp_cm::ABORT => {
-                let Some(reason) = TransportAbortReason::try_from_u8(frame.data[1]) else {
-                    self.note_dropped_frame();
-                    return responses;
-                };
+                // A reason this build does not recognise is still an abort:
+                // the peer has torn the connection down. Dropping the frame
+                // left our half of the session open forever.
+                let reason = TransportAbortReason::try_from_u8(frame.data[1])
+                    .unwrap_or(TransportAbortReason::Other);
                 if let Some(idx) = self.session_position(|s| {
                     s.pgn == cm_pgn
                         && s.can_port == port

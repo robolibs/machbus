@@ -152,7 +152,7 @@ impl FastPacketProtocol {
         }
 
         let seq = (self.tx_sequence_counter & 0x07) << 5;
-        self.tx_sequence_counter = self.tx_sequence_counter.wrapping_add(1);
+        self.tx_sequence_counter = (self.tx_sequence_counter + 1) & 0x07;
 
         let total_frames =
             1 + (data.len() - FIRST_FRAME_DATA).div_ceil(SUBSEQUENT_FRAME_DATA) as u8;
@@ -230,7 +230,7 @@ impl FastPacketProtocol {
         }
 
         let seq = (self.tx_sequence_counter & 0x07) << 5;
-        self.tx_sequence_counter = self.tx_sequence_counter.wrapping_add(1);
+        self.tx_sequence_counter = (self.tx_sequence_counter + 1) & 0x07;
         let id = Identifier::encode(Priority::Default, pgn, source, BROADCAST_ADDRESS);
         let mut frames = FixedSlots::new();
 

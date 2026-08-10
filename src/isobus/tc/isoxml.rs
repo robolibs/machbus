@@ -395,13 +395,31 @@ pub struct PositionFields {
     pub east: bool,
     pub up: bool,
     pub status: bool,
+    /// PTN E — PDOP, 2 bytes.
+    pub pdop: bool,
+    /// PTN F — HDOP, 2 bytes.
+    pub hdop: bool,
+    /// PTN G — number of satellites, 1 byte.
+    pub satellites: bool,
+    /// PTN H — GPS UTC time, 4 bytes.
+    pub gps_utc_time: bool,
+    /// PTN I — GPS UTC date, 2 bytes.
+    pub gps_utc_date: bool,
 }
 
 impl PositionFields {
     /// `true` if any position field is logged.
     #[must_use]
     pub const fn any(&self) -> bool {
-        self.north || self.east || self.up || self.status
+        self.north
+            || self.east
+            || self.up
+            || self.status
+            || self.pdop
+            || self.hdop
+            || self.satellites
+            || self.gps_utc_time
+            || self.gps_utc_date
     }
 
     /// Bytes a position occupies per record: North/East/Up are 32-bit,
@@ -412,6 +430,11 @@ impl PositionFields {
             + (self.east as usize) * 4
             + (self.up as usize) * 4
             + (self.status as usize)
+            + (self.pdop as usize) * 2
+            + (self.hdop as usize) * 2
+            + (self.satellites as usize)
+            + (self.gps_utc_time as usize) * 4
+            + (self.gps_utc_date as usize) * 2
     }
 }
 
@@ -420,6 +443,8 @@ impl PositionFields {
 /// process-data channels.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TimeLogStructure {
+    /// Whether the TimeStart time/date prefix is per-record (§8.6.3).
+    pub has_time: bool,
     pub position: PositionFields,
     pub values: Vec<LoggedValue>,
 }
@@ -435,8 +460,21 @@ pub struct TimeLogRecord {
     pub east_1e7_deg: Option<i32>,
     pub up_mm: Option<i32>,
     pub status: Option<u8>,
-    /// One signed 32-bit value per logged channel, in header order.
-    pub values: Vec<i32>,
+    /// Whether this record carries the TimeStart time/date prefix.
+    ///
+    /// §8.6.3: "All attributes in the header file that contain values are
+    /// specified as having these constant values for all records of the binary
+    /// file." A header carrying `A="12345"` fixes the time for every record, so
+    /// it is *not* in the binary.
+    pub has_time: bool,
+    /// `(DLVn, ProcessDataValue)` per logged channel.
+    ///
+    /// Table 3 requires an ordering byte per value — "Ordering number of PDV to
+    /// follow, starting with 0 for first DataLogValue definition" — preceded by
+    /// `#DLV`, "Number of PDV to follow". Both were missing, so every record
+    /// was one byte short of the count and one byte short per channel, and the
+    /// decoder walked a stride that no conformant writer produces.
+    pub values: Vec<(u8, i32)>,
 }
 
 impl TimeLogStructure {
@@ -447,13 +485,31 @@ impl TimeLogStructure {
         let time = root
             .find_first(TIME_ELEMENT)
             .ok_or_else(|| Error::invalid_data("TimeLog header has no Time (TIM) element"))?;
+        // F8 — §8.6.3: "Inside the TimeLog XML header file, the XML elements
+        // shall include attributes without any values to define the record
+        // structure of the binary log file. All attributes with non-empty value
+        // definitions in the TimeLog XML header file contain fixed values which
+        // are valid for all binary-coded records ... Only the values of the
+        // attributes without a value in the header file are stored."
+        //
+        // Presence was tested with `is_some()`, which is true for a fixed value
+        // too — so a header like `<PTN A="520000000" B="" D=""/>` (constant
+        // north, varying east and status) made the decoder expect a 4-byte
+        // North field that is not in the binary, misaligning every record.
+        let logged = |node: &XmlElement, attr: &str| node.attr(attr).is_some_and(str::is_empty);
+        let has_time = logged(time, ATTR_ID);
         let position = time
             .find_first(POSITION_ELEMENT)
             .map_or(PositionFields::default(), |ptn| PositionFields {
-                north: ptn.attr(ATTR_ID).is_some(),
-                east: ptn.attr(ATTR_DESIGNATOR).is_some(),
-                up: ptn.attr(ATTR_DLV_ELEMENT_REF).is_some(),
-                status: ptn.attr(ATTR_DEVICE_ELEMENT_DESIGNATOR).is_some(),
+                north: logged(ptn, "A"),
+                east: logged(ptn, "B"),
+                up: logged(ptn, "C"),
+                status: logged(ptn, "D"),
+                pdop: logged(ptn, "E"),
+                hdop: logged(ptn, "F"),
+                satellites: logged(ptn, "G"),
+                gps_utc_time: logged(ptn, "H"),
+                gps_utc_date: logged(ptn, "I"),
             });
         let values = time
             .children_named(DATA_LOG_VALUE_ELEMENT)
@@ -465,7 +521,11 @@ impl TimeLogStructure {
                     .to_string(),
             })
             .collect();
-        Ok(Self { position, values })
+        Ok(Self {
+            has_time,
+            position,
+            values,
+        })
     }
 
     /// `true` if records carry any position field.
@@ -474,19 +534,34 @@ impl TimeLogStructure {
         self.position.any()
     }
 
-    /// Size in bytes of one binary record under this structure:
-    /// time (u32) + date (u16) + position fields + one i32 per channel.
+    /// The *minimum* size of one binary record: the fixed prefix plus the
+    /// `#DLV` count byte.
+    ///
+    /// It is no longer an exact stride. Table 3 gives each value an ordering
+    /// byte and the count is per record, so a record's length depends on how
+    /// many PDVs it actually carries — which is the point of `#DLV`, "to allow
+    /// a dynamic set of DLVs in the binary record". Use
+    /// [`decode_record`](Self::decode_record), which reports what it consumed.
     #[must_use]
     pub fn record_size(&self) -> usize {
-        4 + 2 + self.position.byte_len() + self.values.len() * 4
+        self.prefix_len() + 1
+    }
+
+    /// Bytes before the `#DLV` count: the optional TimeStart time/date and the
+    /// position fields the header declared as per-record.
+    #[must_use]
+    pub fn prefix_len(&self) -> usize {
+        usize::from(self.has_time) * 6 + self.position.byte_len()
     }
 
     /// Encode a single binary record into ISO 11783-10 `.BIN` format matching this structure.
     #[must_use]
     pub fn encode_record(&self, rec: &TimeLogRecord) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.record_size());
-        out.extend_from_slice(&rec.time_ms.to_le_bytes());
-        out.extend_from_slice(&rec.date_days.to_le_bytes());
+        if self.has_time {
+            out.extend_from_slice(&rec.time_ms.to_le_bytes());
+            out.extend_from_slice(&rec.date_days.to_le_bytes());
+        }
         if self.position.north {
             out.extend_from_slice(&rec.north_1e7_deg.unwrap_or(0).to_le_bytes());
         }
@@ -499,70 +574,116 @@ impl TimeLogStructure {
         if self.position.status {
             out.push(rec.status.unwrap_or(0));
         }
-        for (i, _) in self.values.iter().enumerate() {
-            let val = rec.values.get(i).copied().unwrap_or(0);
-            out.extend_from_slice(&val.to_le_bytes());
+        // Table 3: `#DLV` then, per value, `DLVn` and the 32-bit PDV. §8.6.3:
+        // "This means that a time entry can have a maximum of 255 PDVs."
+        let count = u8::try_from(rec.values.len()).unwrap_or(u8::MAX);
+        out.push(count);
+        for &(index, value) in rec.values.iter().take(count as usize) {
+            out.push(index);
+            out.extend_from_slice(&value.to_le_bytes());
         }
         out
     }
 
-    /// Decode one binary record (ISO 11783-10 Table 3 field order: time,
-    /// date, North/East/Up/Status, then each channel value). Returns `None`
-    /// if `data` is shorter than [`record_size`](Self::record_size).
+    /// Decode one binary record, returning it and the bytes consumed.
+    ///
+    /// Table 3 order: the optional TimeStart time/date, the declared position
+    /// fields, then `#DLV` and that many `(DLVn, ProcessDataValue)` pairs.
+    /// Records are not a fixed stride — `#DLV` exists precisely "to allow a
+    /// dynamic set of DLVs in the binary record" (§8.6.3).
     #[must_use]
-    pub fn decode_record(&self, data: &[u8]) -> Option<TimeLogRecord> {
+    pub fn decode_record(&self, data: &[u8]) -> Option<(TimeLogRecord, usize)> {
         if data.len() < self.record_size() {
             return None;
         }
-        let rd_u32 =
-            |o: usize| u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
-        let rd_i32 =
-            |o: usize| i32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+        let rd_i32 = |o: usize| i32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
 
-        let time_ms = rd_u32(0);
-        let date_days = u16::from_le_bytes([data[4], data[5]]);
-        let mut o = 6usize;
-        let mut take_i32 = |present: bool| -> Option<i32> {
+        let mut o = 0usize;
+        let (time_ms, date_days) = if self.has_time {
+            let t = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let d = u16::from_le_bytes([data[4], data[5]]);
+            o = 6;
+            (t, d)
+        } else {
+            (0, 0)
+        };
+
+        let take_i32 = |present: bool, o: &mut usize| -> Option<i32> {
             present.then(|| {
-                let v = rd_i32(o);
-                o += 4;
+                let v = rd_i32(*o);
+                *o += 4;
                 v
             })
         };
-        let north_1e7_deg = take_i32(self.position.north);
-        let east_1e7_deg = take_i32(self.position.east);
-        let up_mm = take_i32(self.position.up);
+        let north_1e7_deg = take_i32(self.position.north, &mut o);
+        let east_1e7_deg = take_i32(self.position.east, &mut o);
+        let up_mm = take_i32(self.position.up, &mut o);
         let status = self.position.status.then(|| {
             let v = data[o];
             o += 1;
             v
         });
-        let values = (0..self.values.len())
-            .map(|_| {
-                let v = rd_i32(o);
-                o += 4;
-                v
-            })
-            .collect();
-        Some(TimeLogRecord {
-            time_ms,
-            date_days,
-            north_1e7_deg,
-            east_1e7_deg,
-            up_mm,
-            status,
-            values,
-        })
+        // The remaining Table 3 position columns are skipped rather than
+        // surfaced: nothing in the crate consumes them yet, but their widths
+        // have to be honoured or every following field misaligns.
+        o += usize::from(self.position.pdop) * 2
+            + usize::from(self.position.hdop) * 2
+            + usize::from(self.position.satellites)
+            + usize::from(self.position.gps_utc_time) * 4
+            + usize::from(self.position.gps_utc_date) * 2;
+        if o >= data.len() {
+            return None;
+        }
+
+        let count = data[o] as usize;
+        o += 1;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            if o + 4 >= data.len() {
+                return None;
+            }
+            let index = data[o];
+            // An index outside the header's definitions cannot be resolved.
+            if usize::from(index) >= self.values.len() {
+                return None;
+            }
+            values.push((index, rd_i32(o + 1)));
+            o += 5;
+        }
+
+        Some((
+            TimeLogRecord {
+                time_ms,
+                date_days,
+                has_time: self.has_time,
+                north_1e7_deg,
+                east_1e7_deg,
+                up_mm,
+                status,
+                values,
+            },
+            o,
+        ))
     }
 
-    /// Decode a whole binary TimeLog file into records. Trailing bytes that
-    /// do not form a full record are ignored.
+    /// Decode a whole binary TimeLog file. Trailing bytes that do not form a
+    /// full record are ignored.
+    ///
+    /// Advances by what each record actually consumed rather than a fixed
+    /// stride: `#DLV` makes the length per-record.
     #[must_use]
     pub fn decode_records(&self, data: &[u8]) -> Vec<TimeLogRecord> {
-        let size = self.record_size();
-        data.chunks_exact(size)
-            .filter_map(|chunk| self.decode_record(chunk))
-            .collect()
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        while offset < data.len() {
+            let Some((record, used)) = self.decode_record(&data[offset..]) else {
+                break;
+            };
+            debug_assert!(used > 0, "a record must consume input");
+            offset += used;
+            out.push(record);
+        }
+        out
     }
 }
 
@@ -705,14 +826,23 @@ mod tests {
 
     #[test]
     fn time_log_binary_records_decode_per_table_3() {
-        // Structure: position North+East+Status + one value channel.
+        // F3 — §8.6.3 states the record shape outright:
+        // "(TimeStart,PositionNorth,PositionEast,PositionStatus,#DLV,DLV0,PDV0,
+        //   DLV1,PDV1,DLV2,PDV2)"
+        // with `#DLV` = "Number of PDV to follow" and `DLVn` = "Ordering number
+        // of PDV to follow, starting with 0 for first DataLogValue definition".
+        // Both bytes were missing, so a record was one byte short of the count
+        // and one short per channel, and the decoder walked a stride no
+        // conformant writer produces.
         let header = r#"<TIM A="">
             <PTN A="" B="" D=""/>
             <DLV A="0001" B="" C="DET1"/>
+            <DLV A="0002" B="" C="DET1"/>
         </TIM>"#;
         let s = TimeLogStructure::from_header_xml(header).unwrap();
-        // record = time(4) + date(2) + North(4) + East(4) + Status(1) + value(4) = 19
-        assert_eq!(s.record_size(), 19);
+        // The minimum is the fixed prefix plus #DLV; the rest is per-record.
+        assert_eq!(s.prefix_len(), 4 + 2 + 4 + 4 + 1);
+        assert_eq!(s.record_size(), s.prefix_len() + 1);
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&1_000_u32.to_le_bytes()); // time_ms
@@ -720,24 +850,69 @@ mod tests {
         buf.extend_from_slice(&520_000_000_i32.to_le_bytes()); // North 52.0°
         buf.extend_from_slice(&53_000_000_i32.to_le_bytes()); // East 5.3°
         buf.push(2); // Status = DGNSS
-        buf.extend_from_slice(&1234_i32.to_le_bytes()); // value
+        buf.push(2); // #DLV
+        buf.push(0); // DLV0
+        buf.extend_from_slice(&1234_i32.to_le_bytes());
+        buf.push(1); // DLV1
+        buf.extend_from_slice(&5678_i32.to_le_bytes());
 
-        let rec = s.decode_record(&buf).unwrap();
+        let (rec, used) = s.decode_record(&buf).unwrap();
+        assert_eq!(used, buf.len());
         assert_eq!(rec.time_ms, 1_000);
         assert_eq!(rec.date_days, 45);
         assert_eq!(rec.north_1e7_deg, Some(520_000_000));
         assert_eq!(rec.east_1e7_deg, Some(53_000_000));
         assert_eq!(rec.up_mm, None);
         assert_eq!(rec.status, Some(2));
-        assert_eq!(rec.values, vec![1234]);
+        assert_eq!(rec.values, vec![(0, 1234), (1, 5678)]);
+        assert_eq!(s.encode_record(&rec), buf, "and it round trips");
 
-        // Two concatenated records decode; a short tail is ignored.
+        // "To allow a dynamic set of DLVs in the binary record": the next
+        // record may carry a different subset, so the stride is not fixed.
+        let mut sparse = buf[..s.prefix_len()].to_vec();
+        sparse.push(1); // #DLV
+        sparse.push(1); // only DLV1 this time
+        sparse.extend_from_slice(&99_i32.to_le_bytes());
+        let (rec, used) = s.decode_record(&sparse).unwrap();
+        assert_eq!(used, sparse.len());
+        assert_eq!(rec.values, vec![(1, 99)]);
+
+        // Two records of *different* lengths still both decode.
         let mut two = buf.clone();
-        two.extend_from_slice(&buf);
+        two.extend_from_slice(&sparse);
         two.push(0xFF); // partial trailing byte
         assert_eq!(s.decode_records(&two).len(), 2);
 
         // Too-short buffer yields None.
         assert!(s.decode_record(&buf[..10]).is_none());
+        // A DLVn outside the header's definitions cannot be resolved.
+        let mut bad_index = buf[..s.prefix_len()].to_vec();
+        bad_index.push(1);
+        bad_index.push(7);
+        bad_index.extend_from_slice(&1_i32.to_le_bytes());
+        assert!(s.decode_record(&bad_index).is_none());
+    }
+
+    /// F8 — §8.6.3: "All attributes with non-empty value definitions in the
+    /// TimeLog XML header file contain fixed values which are valid for all
+    /// binary-coded records ... Only the values of the attributes without a
+    /// value in the header file are stored."
+    ///
+    /// Presence was tested with `is_some()`, which is true for a fixed value
+    /// too, so a header carrying constants made the decoder expect fields that
+    /// are not in the binary at all.
+    #[test]
+    fn time_log_header_distinguishes_fixed_values_from_logged_fields() {
+        // Constant north, varying east and status; the time is fixed too.
+        let header = r#"<TIM A="12345">
+            <PTN A="520000000" B="" D=""/>
+            <DLV A="0001" B="" C="DET1"/>
+        </TIM>"#;
+        let s = TimeLogStructure::from_header_xml(header).unwrap();
+        assert!(!s.has_time, "a fixed TimeStart is not per-record");
+        assert!(!s.position.north, "a fixed north is not per-record");
+        assert!(s.position.east);
+        assert!(s.position.status);
+        assert_eq!(s.prefix_len(), 4 + 1, "East(4) + Status(1) only");
     }
 }

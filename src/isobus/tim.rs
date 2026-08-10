@@ -9,6 +9,15 @@
 //! requested, and granted options plus local interlock clearance before
 //! emitting command PGNs.
 
+pub mod assignment;
+#[cfg(feature = "tim-auth")]
+pub mod auth;
+pub mod automation;
+pub mod facilities;
+pub mod functions;
+pub mod messages;
+pub mod slots;
+
 use crate::net::message::Message;
 use crate::net::pgn_defs::{
     PGN_AUX_VALVE_0_7, PGN_AUX_VALVE_8_15, PGN_AUX_VALVE_16_23, PGN_AUX_VALVE_24_31,
@@ -30,6 +39,11 @@ pub const TIM_OPTION_BYTES: usize = 3;
 pub const TIM_OPTION_DEFINED_MASK: [u8; TIM_OPTION_BYTES] = [0xFF, 0xFF, 0x3F];
 /// Recommended periodic update interval for TIM broadcasts.
 pub const TIM_UPDATE_INTERVAL_MS: u32 = 100;
+
+/// Default loss-of-communication window: three missed 100 ms status messages,
+/// matching the AEF 023 status timeout. The watchdog used to default to `0`
+/// (disabled), so a granted authority outlived a peer that stopped answering.
+pub const DEFAULT_COMMS_TIMEOUT_MS: u32 = 300;
 
 /// TIM Capability flags (ISO 11783-9 §6.4 / §6.6 — tractor facilities).
 ///
@@ -243,6 +257,34 @@ pub enum TimInterlock {
     RoadTransportMode,
     ExternalStop,
     ImplementNotReady,
+    /// AEF TrF_51 — an operator-present timeout (OPTO) occurred.
+    OperatorPresenceTimeout,
+    /// AEF TrF_52 — the received request was invalid.
+    RequestInvalid,
+    /// AEF TrF_53 — the request carried unsupported parameters.
+    UnsupportedParameters,
+    /// AEF TrF_54 — no request arrived within its timeout.
+    RequestTimeout,
+    /// AEF TrF_60 — the operator moved a primary control.
+    OperatorOverride,
+}
+
+/// Which side of a TIM couple an interlock check applies to.
+///
+/// This distinction is required, not cosmetic. AEF §5.2.3 and §5.2.4.2 both
+/// state that the TIM **server** and **function** shall *not* change their
+/// automation state on ISB activation; ISB is listed only as a **client**
+/// deactivation condition (§5.2.2 TrC_60 Example 4). Applying one flat
+/// interlock set to both sides — as this type used to — makes conformance
+/// impossible: wiring ISB to it necessarily changes server state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimRole {
+    /// The commanding side.
+    Client,
+    /// The providing side.
+    Server,
+    /// One function of a providing side.
+    Function,
 }
 
 /// Local TIM interlock snapshot.
@@ -253,13 +295,24 @@ pub enum TimInterlock {
 pub struct TimInterlocks {
     pub operator_present: bool,
     pub road_transport_mode: bool,
+    /// Auxiliary Shortcut Button activation. Blocks the **client** only.
     pub external_stop: bool,
     pub implement_ready: bool,
+    /// TrF_51 — operator-present timeout.
+    pub operator_presence_timeout: bool,
+    /// TrF_60 — operator moved a primary control.
+    pub operator_override: bool,
 }
 
 impl Default for TimInterlocks {
+    /// Fail-closed: operator presence is an affirmative fact to be asserted,
+    /// not assumed. The default used to be [`TimInterlocks::all_clear`], so an
+    /// application that never set anything got a guard that blocked nothing.
     fn default() -> Self {
-        Self::all_clear()
+        Self {
+            operator_present: false,
+            ..Self::all_clear()
+        }
     }
 }
 
@@ -271,6 +324,8 @@ impl TimInterlocks {
             road_transport_mode: false,
             external_stop: false,
             implement_ready: true,
+            operator_presence_timeout: false,
+            operator_override: false,
         }
     }
 
@@ -299,14 +354,42 @@ impl TimInterlocks {
     }
 
     #[must_use]
+    pub const fn with_operator_presence_timeout(mut self, occurred: bool) -> Self {
+        self.operator_presence_timeout = occurred;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_operator_override(mut self, occurred: bool) -> Self {
+        self.operator_override = occurred;
+        self
+    }
+
+    /// The first blocking condition for the commanding (client) side.
+    #[must_use]
     pub const fn blocking_reason(self) -> Option<TimInterlock> {
+        self.blocking_reason_for(TimRole::Client)
+    }
+
+    /// The first blocking condition as seen by `role`.
+    ///
+    /// ISB activation blocks a client but must leave a server's or function's
+    /// automation state alone (§5.2.3, §5.2.4.2).
+    #[must_use]
+    pub const fn blocking_reason_for(self, role: TimRole) -> Option<TimInterlock> {
         if !self.operator_present {
             return Some(TimInterlock::OperatorNotPresent);
+        }
+        if self.operator_presence_timeout {
+            return Some(TimInterlock::OperatorPresenceTimeout);
+        }
+        if self.operator_override {
+            return Some(TimInterlock::OperatorOverride);
         }
         if self.road_transport_mode {
             return Some(TimInterlock::RoadTransportMode);
         }
-        if self.external_stop {
+        if self.external_stop && matches!(role, TimRole::Client) {
             return Some(TimInterlock::ExternalStop);
         }
         if !self.implement_ready {
@@ -349,7 +432,7 @@ impl TimAuthority {
             state: TimAuthorityState::Idle,
             interlocks: TimInterlocks::all_clear(),
             operator_consent: true,
-            comms_timeout_ms: 0,
+            comms_timeout_ms: DEFAULT_COMMS_TIMEOUT_MS,
             since_keepalive_ms: 0,
         }
     }
@@ -563,60 +646,12 @@ fn decode_bool_byte(byte: u8) -> Option<bool> {
     }
 }
 
-// ─── AEF 023 RIG 2 PKI Mutual Authentication Handshake ─────────────────────
-
-/// AEF 023 RIG 2 TIM PKI Authentication State.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum TimPkiState {
-    #[default]
-    Unauthenticated,
-    Authenticating,
-    Authenticated,
-    Failed,
-}
-
-/// AEF 023 RIG 2 TIM PKI Mutual Authentication Handshake FSM.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TimPkiHandshake {
-    state: TimPkiState,
-    challenge_nonce: [u8; 8],
-}
-
-impl TimPkiHandshake {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[must_use]
-    pub fn state(&self) -> TimPkiState {
-        self.state
-    }
-
-    pub fn generate_challenge(&mut self, nonce: [u8; 8]) -> [u8; 8] {
-        self.challenge_nonce = nonce;
-        self.state = TimPkiState::Authenticating;
-        self.challenge_nonce
-    }
-
-    pub fn verify_response(&mut self, expected_signature: &[u8], actual_signature: &[u8]) -> bool {
-        if self.state != TimPkiState::Authenticating {
-            return false;
-        }
-        if !expected_signature.is_empty() && expected_signature == actual_signature {
-            self.state = TimPkiState::Authenticated;
-            true
-        } else {
-            self.state = TimPkiState::Failed;
-            false
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.state = TimPkiState::Unauthenticated;
-        self.challenge_nonce = [0u8; 8];
-    }
-}
+// AEF 023 RIG 2 mutual authentication lives in the `auth` submodule behind the
+// `tim-auth` feature. A `TimPkiHandshake` stub previously sat here: four
+// states, a fixed 8-byte nonce, and a `verify_response(expected, actual)` that
+// compared two caller-supplied slices, so it performed no cryptography and
+// authenticated anything. Its own test asserted `verify_response(b"sig123",
+// b"sig123")`.
 
 // ─── PTO ───────────────────────────────────────────────────────────────
 
@@ -1221,29 +1256,94 @@ mod tests {
     }
 
     #[test]
-    fn tim_comms_watchdog_disabled_by_default() {
+    fn tim_comms_watchdog_is_armed_by_default() {
         let available = TimOptionSet::from_options(&[TimOption::RearHitchPositionIsSupported]);
         let requested = TimOptionSet::from_options(&[TimOption::RearHitchPositionIsSupported]);
+
+        // A grant that stops being refreshed must not outlive the peer. This
+        // previously defaulted to 0 (disabled), so an authority survived
+        // indefinitely after the other end went quiet.
         let mut authority = TimAuthority::new(available);
         authority.request(requested).unwrap();
         authority.grant().unwrap();
-        // With no comms timeout configured, ticks never revoke.
-        assert!(!authority.tick(100_000));
+        assert!(!authority.tick(DEFAULT_COMMS_TIMEOUT_MS - 1));
         assert_eq!(authority.state(), TimAuthorityState::Granted);
+        assert!(authority.tick(1), "the watchdog must revoke at the timeout");
+        assert_eq!(authority.state(), TimAuthorityState::Revoked);
+
+        // Keepalives hold the grant open.
+        let mut refreshed = TimAuthority::new(available);
+        refreshed.request(requested).unwrap();
+        refreshed.grant().unwrap();
+        for _ in 0..10 {
+            assert!(!refreshed.tick(DEFAULT_COMMS_TIMEOUT_MS - 1));
+            refreshed.keepalive();
+        }
+        assert_eq!(refreshed.state(), TimAuthorityState::Granted);
+
+        // Disabling it stays possible, but is now an explicit opt-out.
+        let mut disabled = TimAuthority::new(available).with_comms_timeout(0);
+        disabled.request(requested).unwrap();
+        disabled.grant().unwrap();
+        assert!(!disabled.tick(100_000));
+        assert_eq!(disabled.state(), TimAuthorityState::Granted);
     }
 
+    /// T11 — AEF §5.2.3 and §5.2.4.2 both state that the TIM *server* and
+    /// *function* shall not change automation state on ISB activation; ISB is
+    /// listed only as a *client* deactivation condition (§5.2.2 TrC_60
+    /// Example 4). One flat interlock set applied to both sides made that
+    /// impossible to honour.
     #[test]
-    fn tim_pki_handshake_flow() {
-        let mut pki = TimPkiHandshake::new();
-        assert_eq!(pki.state(), TimPkiState::Unauthenticated);
-        let challenge = pki.generate_challenge([1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(challenge, [1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(pki.state(), TimPkiState::Authenticating);
+    fn isb_blocks_the_client_but_not_the_server_or_function() {
+        let interlocks = TimInterlocks::all_clear().with_external_stop(true);
 
-        assert!(pki.verify_response(b"sig123", b"sig123"));
-        assert_eq!(pki.state(), TimPkiState::Authenticated);
+        assert_eq!(
+            interlocks.blocking_reason_for(TimRole::Client),
+            Some(TimInterlock::ExternalStop)
+        );
+        assert_eq!(
+            interlocks.blocking_reason_for(TimRole::Server),
+            None,
+            "a server must not change automation state on ISB"
+        );
+        assert_eq!(interlocks.blocking_reason_for(TimRole::Function), None);
 
-        pki.reset();
-        assert_eq!(pki.state(), TimPkiState::Unauthenticated);
+        // Every other condition still blocks all three roles.
+        let road = TimInterlocks::all_clear().with_road_transport_mode(true);
+        for role in [TimRole::Client, TimRole::Server, TimRole::Function] {
+            assert_eq!(
+                road.blocking_reason_for(role),
+                Some(TimInterlock::RoadTransportMode)
+            );
+        }
+    }
+
+    /// The AEF deactivation conditions that had no counterpart in the crate.
+    #[test]
+    fn aef_operator_conditions_are_representable() {
+        let opto = TimInterlocks::all_clear().with_operator_presence_timeout(true);
+        assert_eq!(
+            opto.blocking_reason(),
+            Some(TimInterlock::OperatorPresenceTimeout)
+        );
+
+        let override_ = TimInterlocks::all_clear().with_operator_override(true);
+        assert_eq!(
+            override_.blocking_reason(),
+            Some(TimInterlock::OperatorOverride)
+        );
+    }
+
+    /// The guard used to default permissive, so an application that set
+    /// nothing got one that blocked nothing.
+    #[test]
+    fn interlocks_default_fail_closed() {
+        assert_eq!(
+            TimInterlocks::default().blocking_reason(),
+            Some(TimInterlock::OperatorNotPresent)
+        );
+        // `all_clear()` remains an explicit assertion that nothing is blocking.
+        assert_eq!(TimInterlocks::all_clear().blocking_reason(), None);
     }
 }

@@ -756,10 +756,19 @@ impl Functionalities {
             }
             seen |= seen_bit;
 
-            let expected_option_len = functionality.option_byte_len();
-            if option_len > expected_option_len {
+            // ISO 11783-12 B.9 forward compatibility: a peer built against a
+            // later revision may send a *longer* option block than this build
+            // knows about. Refusing it makes every future device undecodable —
+            // it is why a conformant 15-byte TIM block was rejected by a
+            // decoder expecting 11. Extra bytes are preserved in
+            // `option_bytes` rather than interpreted.
+            //
+            // A functionality this revision defines as carrying no options at
+            // all is still required to advertise none, so that check stands.
+            let known_option_len = functionality.option_byte_len();
+            if known_option_len == 0 && option_len > 0 {
                 return Err(Error::invalid_data(format!(
-                    "functionality 0x{functionality_byte:02X} has option length {option_len}, max {expected_option_len}",
+                    "functionality 0x{functionality_byte:02X} defines no options but advertises {option_len}",
                 )));
             }
             if data.len() < offset + option_len {
@@ -1131,5 +1140,33 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// T8 / Part-12 B.9 — a peer built against a later revision sends a longer
+    /// option block. Rejecting it makes every future device undecodable, and it
+    /// is why a conformant 15-byte TIM block was refused by a decoder that
+    /// expected 11. The extra bytes must be carried through, not dropped.
+    #[test]
+    fn a_longer_option_block_from_a_newer_peer_is_accepted() {
+        let mut payload = vec![
+            0xFF, // mandatory leading byte
+            1,    // one functionality
+            0x0F, // TIM server
+            1,    // generation
+            15,   // option length: what ISO 11783-12 Annex L.4 defines
+        ];
+        // 15 option bytes, last one non-zero so the canonical-form check passes.
+        payload.extend_from_slice(&[0x01; 14]);
+        payload.push(0x80);
+
+        let decoded = Functionalities::decode(&payload)
+            .expect("a 15-byte TIM option block must decode, not be refused");
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].option_bytes.len(),
+            15,
+            "the bytes this build does not interpret must still be preserved"
+        );
+        assert_eq!(decoded[0].option_bytes[14], 0x80);
     }
 }

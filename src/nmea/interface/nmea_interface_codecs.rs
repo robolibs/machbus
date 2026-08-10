@@ -489,7 +489,8 @@ impl NMEAInterface {
     pub fn build_cog_sog(cog_rad: f64, sog_mps: f64) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = 0xFF;
-        data[1] = 0x00;
+        // [COG Reference: 2 bits = True][NMEA Reserved: 6 bits, all 1].
+        data[1] = 0xFC | HeadingReference::True.as_u8();
         let cog_raw = scaled_circular_angle_u16(cog_rad, COG_RESOLUTION);
         data[2..4].copy_from_slice(&cog_raw.to_le_bytes());
         let sog_raw = scaled_u16(sog_mps, SPEED_RESOLUTION);
@@ -577,7 +578,8 @@ impl NMEAInterface {
         data[3..5].copy_from_slice(&(d_raw as u16).to_le_bytes());
         let v_raw = scaled_i16(variation_rad, HEADING_RESOLUTION);
         data[5..7].copy_from_slice(&(v_raw as u16).to_le_bytes());
-        data[7] = 0x00;
+        // [Reference: 2 bits = True][NMEA Reserved: 6 bits, all 1].
+        data[7] = 0xFC | HeadingReference::True.as_u8();
         data
     }
 
@@ -803,7 +805,11 @@ impl NMEAInterface {
         if !nmea_sequence_id_is_canonical(data[0]) {
             return;
         }
-        if HeadingReference::try_from_u8(data[1]).is_none() {
+        // Byte 2 is [COG Reference: 2 bits][NMEA Reserved: 6 bits]. Appendix B
+        // specifies "Variable number of reserved bits, all set to logic 1", so
+        // reading the whole byte as the enum rejected every conformant frame —
+        // a transmitter sending reference True (0) sends 0xFC, not 0x00.
+        if HeadingReference::try_from_u8(data[1] & 0x03).is_none() {
             return;
         }
         let cog_raw = u16::from_le_bytes([data[2], data[3]]);
@@ -1043,7 +1049,9 @@ impl NMEAInterface {
         if !nmea_sequence_id_is_canonical(data[0]) {
             return;
         }
-        if HeadingReference::try_from_u8(data[7]).is_none() {
+        // As for 129026: the reference occupies the low 2 bits and the rest of
+        // the byte is reserved, transmitted as 1s.
+        if HeadingReference::try_from_u8(data[7] & 0x03).is_none() {
             return;
         }
         let heading_raw = u16::from_le_bytes([data[1], data[2]]);
@@ -1538,15 +1546,22 @@ impl NMEAInterface {
         if signed_i64_data_is_available(alt_raw) {
             pos.altitude_m = Some(alt_raw as f64 * 1e-6);
         }
+        // G4: one unrecognised sub-signal must not discard the whole PG. A
+        // receiver reporting a constellation or method this crate predates used
+        // to produce *no position event at all*, so a consumer silently kept
+        // using the last cached fix — strictly worse than reporting a degraded
+        // one. An unknown method is surfaced as `Error`, which a quality gate
+        // refuses, while the coordinates still reach the application.
         let type_byte = msg.data[31];
         let gnss_system_raw = type_byte & 0x0F;
-        let Some(gnss_system) = GNSSSystem::try_from_u8(gnss_system_raw) else {
-            return;
-        };
+        // An unrecognised constellation must not be reported as GPS — that
+        // invents information. Keep whatever the receiver last told us.
+        let gnss_system = GNSSSystem::try_from_u8(gnss_system_raw).unwrap_or_else(|| {
+            self.latest_position
+                .map_or_else(GNSSSystem::default, |p| p.gnss_system)
+        });
         let fix_method = (type_byte >> 4) & 0x0F;
-        let Some(fix_type) = GNSSFixType::try_from_u8(fix_method) else {
-            return;
-        };
+        let fix_type = GNSSFixType::try_from_u8(fix_method).unwrap_or(GNSSFixType::Error);
         if !gnss_position_detail_integrity_byte_is_canonical(msg.data[32]) {
             return;
         }

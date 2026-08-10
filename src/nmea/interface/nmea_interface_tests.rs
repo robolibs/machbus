@@ -189,6 +189,57 @@ mod tests {
         );
     }
 
+    /// H6 — the COG and Heading reference fields are 2 bits wide with the rest
+    /// of the byte reserved and, per Appendix B, "all set to logic 1". Reading
+    /// the whole byte as the enum meant a conformant transmitter — which sends
+    /// 0xFC for reference True — was rejected outright, so course and heading
+    /// never reached a consumer.
+    #[test]
+    fn cog_and_heading_accept_the_mandated_reserved_bit_encoding() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let cogs: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = cogs.clone();
+        iface.on_cog.subscribe(move |c| sink.borrow_mut().push(*c));
+
+        // PGN 129026: byte 2 = reference True (0) with the six reserved bits
+        // set, i.e. 0xFC. Bytes 7-8 are the FF tail.
+        let mut cog_sog = [0xFFu8; 8];
+        cog_sog[0] = 0x07;
+        cog_sog[1] = 0xFC;
+        cog_sog[2..4].copy_from_slice(&10_000u16.to_le_bytes());
+        cog_sog[4..6].copy_from_slice(&500u16.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_COG_SOG_RAPID, cog_sog.to_vec()));
+        assert_eq!(
+            cogs.borrow().len(),
+            1,
+            "a conformant COG/SOG frame must be decoded, not dropped"
+        );
+
+        // The heading decoder updates an existing cache entry, so seed one.
+        iface.handle_message(&nmea_msg(
+            PGN_GNSS_POSITION_RAPID,
+            NMEAInterface::build_position(&GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            })
+            .to_vec(),
+        ));
+
+        // PGN 127250: the reference sits in byte 8, same encoding.
+        let mut heading = [0xFFu8; 8];
+        heading[0] = 0x07;
+        heading[1..3].copy_from_slice(&12_000u16.to_le_bytes());
+        heading[3..5].copy_from_slice(&0i16.to_le_bytes());
+        heading[5..7].copy_from_slice(&0i16.to_le_bytes());
+        heading[7] = 0xFD; // reference Magnetic (1) with reserved bits set
+        iface.handle_message(&nmea_msg(PGN_HEADING_TRACK, heading.to_vec()));
+        let cached = iface.latest_position().expect("heading updates the cache");
+        assert!(
+            cached.heading_rad.is_some_and(|h| h > 0.0),
+            "a conformant Vessel Heading frame must be decoded"
+        );
+    }
+
     #[test]
     fn position_detail_rejects_reference_station_count_mismatches() {
         let mut iface = NMEAInterface::default();

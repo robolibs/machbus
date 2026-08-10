@@ -29,7 +29,7 @@ fn diagnostics_dtc_rejects_reserved_occurrence_count_bit() {
 }
 
 #[test]
-fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
+fn diagnostics_fmi_decoders_surface_reserved_codes_in_dtcs_but_reject_them_in_requests() {
     for fmi in [
         Fmi::DataDriftedHigh,
         Fmi::DataDriftedLow,
@@ -44,6 +44,11 @@ fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
         assert_eq!(Dtc::decode(&dtc.encode()), Some(dtc));
     }
 
+    // H73 — the FMI field is 5 bits and `Fmi` names all 32 values, so a
+    // reserved code is representable and `encode` can emit one. DM1/DM2 list
+    // decoding propagates a failed `Dtc::decode` with `?`, so rejecting here
+    // discarded the *whole message* — every other active fault with it (G4).
+    // A reserved code is surfaced instead.
     let mut reserved_dtc = Dtc {
         spn: 0x12345,
         fmi: Fmi::ConditionExists,
@@ -52,7 +57,15 @@ fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
     }
     .encode();
     reserved_dtc[2] = (reserved_dtc[2] & 0xE0) | 22;
-    assert_eq!(Dtc::decode(&reserved_dtc), None);
+    assert_eq!(
+        Dtc::decode(&reserved_dtc).map(|d| d.fmi),
+        Some(Fmi::Reserved22),
+        "a reserved FMI must not cost the whole DM1"
+    );
+
+    // DM22/DM25 carry a single SPN+FMI and are requests, not fault reports:
+    // refusing an undefined code there costs only that one message, so the
+    // conservative reading still applies.
 
     let dm22 = Dm22Message {
         control: Dm22Control::ClearActive,

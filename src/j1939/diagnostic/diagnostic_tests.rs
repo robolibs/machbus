@@ -765,6 +765,21 @@ mod tests {
         assert_eq!(Fmi::from_u8(21), Fmi::DataDriftedLow);
         assert_eq!(Fmi::from_u8(31), Fmi::ConditionExists);
         assert_eq!(Fmi::try_from_u8(22), None);
+
+        // H73 — the FMI field is 5 bits, so every value round-trips. Rejecting
+        // the reserved codes on decode discarded the whole DM1 for one DTC.
+        for raw in 0u8..32 {
+            let dtc = Dtc {
+                spn: 1234,
+                fmi: Fmi::from_u8(raw),
+                occurrence_count: 3,
+                conversion_method: false,
+            };
+            let decoded = Dtc::decode(&dtc.encode()).unwrap_or_else(|| {
+                panic!("FMI {raw} must survive a round trip, not drop the DTC")
+            });
+            assert_eq!(decoded, dtc, "FMI {raw}");
+        }
         assert_eq!(Fmi::from_u8(22), Fmi::Reserved22);
     }
 

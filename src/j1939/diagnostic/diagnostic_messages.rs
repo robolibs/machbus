@@ -261,7 +261,12 @@ impl Dtc {
             spn: (data[0] as u32)
                 | ((data[1] as u32) << 8)
                 | (((data[2] >> 5) & 0x07) as u32) << 16,
-            fmi: Fmi::try_from_u8(data[2] & 0x1F)?,
+            // The FMI field is 5 bits, so every value is representable and
+            // `Fmi` names all 32 — including `Reserved22..30`, which `encode`
+            // can emit. Rejecting them here made the codec asymmetric and, worse,
+            // discarded the *entire* DM1 because one DTC used a reserved code
+            // (G4). A reserved FMI is surfaced, not swallowed.
+            fmi: Fmi::from_u8(data[2] & 0x1F),
             occurrence_count: data[3] & 0x7F,
             conversion_method: cm,
         })

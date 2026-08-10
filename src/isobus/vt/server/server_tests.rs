@@ -361,6 +361,75 @@ mod tests {
     /// the VT". These four bytes carried the working set's *source address*, so
     /// a VT with the active set at SA 0x26 announced visible-mask Object ID
     /// 0x2600 — not an object in any pool.
+    /// E2 — ISO 11783-6 §4.6.9: the Working Set Maintenance message is how the
+    /// VT knows a Working Set is still there. It was unhandled, so it fell
+    /// through to the catch-all: the VT answered every one with Unsupported VT
+    /// Function, once per second forever, and never detected a working set
+    /// going away.
+    #[test]
+    fn working_set_maintenance_is_consumed_and_watchdogged() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        let addr = 0x42;
+        let mut maintenance = [0xFFu8; 8];
+        maintenance[0] = cmd::WORKING_SET_MAINTENANCE;
+        maintenance[1] = 0x01; // Initiating, reserved bits clear (G.3 byte 2).
+        maintenance[2] = 5; // Compliant with VT version 5 (G.3 byte 3).
+
+        let out = s.handle_ecu_message(&ecu_msg(maintenance.to_vec(), addr));
+        assert!(
+            out.is_empty(),
+            "G.3 defines no response; the VT must not NACK it"
+        );
+        assert_eq!(
+            s.clients()
+                .iter()
+                .find(|c| c.client_address == addr)
+                .and_then(|c| c.declared_version),
+            Some(5),
+            "the working set's declared version is recorded"
+        );
+
+        // Cadence keeps it alive.
+        let mut later = maintenance;
+        later[1] = 0x00;
+        for _ in 0..5 {
+            s.update(1000);
+            assert!(s.handle_ecu_message(&ecu_msg(later.to_vec(), addr)).is_empty());
+        }
+        assert!(s.clients().iter().any(|c| c.client_address == addr));
+
+        // Three seconds of silence is an unexpected shutdown.
+        s.update(WORKING_SET_MAINTENANCE_TIMEOUT_MS);
+        assert!(
+            !s.clients().iter().any(|c| c.client_address == addr),
+            "a silent Working Set Master must be dropped"
+        );
+    }
+
+    /// §4.6.9: a *second* Initiating means the master restarted underneath us.
+    #[test]
+    fn a_second_initiating_maintenance_drops_the_working_set() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        let addr = 0x42;
+        let mut initiating = [0xFFu8; 8];
+        initiating[0] = cmd::WORKING_SET_MAINTENANCE;
+        initiating[1] = 0x01;
+        initiating[2] = 5;
+
+        s.handle_ecu_message(&ecu_msg(initiating.to_vec(), addr));
+        assert!(s.clients().iter().any(|c| c.client_address == addr));
+
+        s.handle_ecu_message(&ecu_msg(initiating.to_vec(), addr));
+        assert!(
+            !s.clients().iter().any(|c| c.client_address == addr),
+            "a repeated Initiating bit is an unexpected shutdown"
+        );
+    }
+
     #[test]
     fn vt_status_carries_the_visible_mask_object_ids() {
         let mut s = VTServer::new(VTServerConfig::default());

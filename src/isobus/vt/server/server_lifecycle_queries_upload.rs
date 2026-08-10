@@ -347,6 +347,19 @@ impl VTServer {
         if matches!(self.state(), VTServerState::Disconnected) {
             return None;
         }
+        // §4.6.9: three seconds without a Working Set Maintenance message is an
+        // unexpected shutdown of that Working Set Master.
+        let mut gone: Vec<Address> = Vec::new();
+        for client in &mut self.clients {
+            client.since_maintenance_ms = client.since_maintenance_ms.saturating_add(elapsed_ms);
+            if client.since_maintenance_ms >= WORKING_SET_MAINTENANCE_TIMEOUT_MS {
+                gone.push(client.client_address);
+            }
+        }
+        for addr in gone {
+            self.drop_working_set(addr);
+        }
+
         self.status_timer_ms = self.status_timer_ms.saturating_add(elapsed_ms);
         if self.status_timer_ms >= VT_STATUS_INTERVAL_MS {
             self.status_timer_ms -= VT_STATUS_INTERVAL_MS;
@@ -534,6 +547,7 @@ impl VTServer {
                 self.handle_execute_extended_macro(msg);
                 Vec::new()
             }
+            cmd::WORKING_SET_MAINTENANCE => self.handle_working_set_maintenance(msg),
             cmd::UNSUPPORTED_VT_FUNCTION => Vec::new(),
             _ => vec![OutboundFrame::to(
                 Self::build_unsupported_function(function).to_vec(),
@@ -543,6 +557,55 @@ impl VTServer {
     }
 
     // ─── Per-command handlers ─────────────────────────────────────────
+
+    /// Working Set Maintenance (Annex G.3, function 0xFF).
+    ///
+    /// §4.6.9: "Each Working Set Master sends the Working Set Maintenance
+    /// message once per second. The VT uses this message to ensure that each
+    /// Working Set is still present. If the VT does not receive this message
+    /// for a period of 3 s or it receives it a second time with the Initiating
+    /// bit set it is determined to be an unexpected shutdown of the Working Set
+    /// Master."
+    ///
+    /// This was unhandled, so it fell through to the catch-all and the VT
+    /// answered every one with Unsupported VT Function — once per second,
+    /// forever — while never noticing a working set going away.
+    fn handle_working_set_maintenance(&mut self, msg: &Message) -> Vec<OutboundFrame> {
+        if !is_fixed_vt_payload(&msg.data) {
+            return Vec::new();
+        }
+        self.ensure_client(msg.source);
+        // G.3 byte 2 bit 0 on VT version 3 and later; version 2 and prior send
+        // 0xFF here, which has bit 0 set, so only treat it as Initiating when
+        // the reserved bits are clear as the clause requires.
+        let initiating = msg.data[1] & 0x01 != 0 && msg.data[1] & 0xFE == 0;
+        let version = msg.data[2];
+
+        let mut shutdown = false;
+        if let Some(client) = self.find_client_mut(msg.source) {
+            client.since_maintenance_ms = 0;
+            client.declared_version = Some(version);
+            if initiating {
+                // A second Initiating means the master restarted underneath us.
+                shutdown = client.seen_initiating;
+                client.seen_initiating = true;
+            }
+        }
+        if shutdown {
+            self.drop_working_set(msg.source);
+        }
+        // G.3 defines no response: the VT consumes it silently.
+        Vec::new()
+    }
+
+    /// Forget a working set whose master has gone away (§4.6.9).
+    fn drop_working_set(&mut self, addr: Address) {
+        self.clients.retain(|c| c.client_address != addr);
+        if self.active_working_set == addr {
+            self.active_working_set = NULL_ADDRESS;
+        }
+        self.on_client_disconnected.emit(&addr);
+    }
 
     fn handle_get_memory(&mut self, msg: &Message) -> Vec<OutboundFrame> {
         if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 5) {

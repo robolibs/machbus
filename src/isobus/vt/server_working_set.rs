@@ -451,6 +451,16 @@ pub struct ServerWorkingSet {
     pub pool_activation_pending: bool,
     pub pool_activated: bool,
     pub last_status_ms: u32,
+    /// Milliseconds since this working set's last Working Set Maintenance
+    /// message (Annex G.3, once per second). §4.6.9: three seconds of silence
+    /// is an unexpected shutdown of the Working Set Master.
+    pub since_maintenance_ms: u32,
+    /// The ISO 11783-6 version this working set reports (G.3 byte 3), or `None`
+    /// before its first maintenance message.
+    pub declared_version: Option<u8>,
+    /// Whether a maintenance message with the Initiating bit has been seen.
+    /// §4.6.9 treats a *second* one as an unexpected shutdown.
+    pub seen_initiating: bool,
     pub stored_versions: Vec<StoredPoolVersion>,
     #[cfg(any(feature = "default", feature = "cli"))]
     pub storage_path: PathBuf,
@@ -468,6 +478,9 @@ impl Default for ServerWorkingSet {
             pool_activation_pending: false,
             pool_activated: false,
             last_status_ms: 0,
+            since_maintenance_ms: 0,
+            declared_version: None,
+            seen_initiating: false,
             stored_versions: Vec::new(),
             #[cfg(any(feature = "default", feature = "cli"))]
             storage_path: PathBuf::from("./vt_storage"),

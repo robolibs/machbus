@@ -45,6 +45,10 @@ pub enum VTServerState {
 
 /// VT status broadcast cadence.
 pub const VT_STATUS_INTERVAL_MS: u32 = 1000;
+
+/// §4.6.9: "If the VT does not receive this message for a period of 3 s ... it
+/// is determined to be an unexpected shutdown of the Working Set Master."
+pub const WORKING_SET_MAINTENANCE_TIMEOUT_MS: u32 = 3000;
 pub const VT_SERVER_MIN_VERSION: u16 = 3;
 pub const VT_SERVER_MAX_VERSION: u16 = 6;
 

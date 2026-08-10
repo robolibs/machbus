@@ -1290,8 +1290,11 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     assert!(iface.latest_position().unwrap().hdop.is_none());
     assert!(iface.latest_position().unwrap().vdop.is_none());
 
+    // DD055 is a signed int16, so the reserved code is 0x7FFD, not 0xFFFD:
+    // read as unsigned, 0xFFFD is -3, a negative ratio rather than a reserved
+    // raw, and the fix it accompanies is still perfectly good.
     let mut position_reserved = standard_position_detail_frame();
-    position_reserved[34..36].copy_from_slice(&0xFFFDu16.to_le_bytes());
+    position_reserved[34..36].copy_from_slice(&((i16::MAX - 2) as u16).to_le_bytes());
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_DATA,
         position_reserved,
@@ -1303,8 +1306,8 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     );
 
     let mut position_unavailable = standard_position_detail_frame();
-    position_unavailable[34..36].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    position_unavailable[36..38].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    position_unavailable[34..36].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
+    position_unavailable[36..38].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_DATA,
         position_unavailable,
@@ -1314,6 +1317,15 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     let position = positions.borrow()[0];
     assert_eq!(position.hdop, None);
     assert_eq!(position.pdop, None);
+
+    // B3 — 0x7FFF is the signed "no DOP available" code. Read as unsigned it
+    // scaled to a real-looking 327.67, so an autosteer gate written as
+    // `hdop < 2.0` refused to engage forever on a healthy RTK receiver.
+    let mut sentinel = standard_position_detail_frame();
+    sentinel[34..36].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, sentinel, 0x24));
+    let latest = positions.borrow().last().copied().expect("a position");
+    assert_eq!(latest.hdop, None, "0x7FFF must not scale to 327.67");
 
     iface.handle_message(&Message::new(PGN_GNSS_DOPS, valid_dops.to_vec(), 0x24));
     assert_eq!(dops.borrow().len(), 2);

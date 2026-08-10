@@ -1575,21 +1575,27 @@ impl NMEAInterface {
         } else {
             msg.data[33]
         };
-        let hdop_raw = u16::from_le_bytes([msg.data[34], msg.data[35]]);
-        let pdop_raw = u16::from_le_bytes([msg.data[36], msg.data[37]]);
-        if matches!(hdop_raw, 0xFFFD | 0xFFFE) || matches!(pdop_raw, 0xFFFD | 0xFFFE) {
-            return;
-        }
+        // The DOPs are signed here too (DD055, +/-327.64 at 1x10E-2), exactly
+        // as in 129539 above. Read as unsigned, the 0x7FFF "no DOP available"
+        // sentinel scaled to a real-looking 327.67 and any steer gate written
+        // as `hdop < 2.0` refused to engage on a healthy receiver.
+        let hdop_raw = i16::from_le_bytes([msg.data[34], msg.data[35]]);
+        let pdop_raw = i16::from_le_bytes([msg.data[36], msg.data[37]]);
         let geoidal_raw = i32::from_le_bytes(msg.data[38..42].try_into().unwrap());
         if signed_i32_data_is_reserved(geoidal_raw) {
             return;
         }
-        if let Some(hdop) = nmea_u16_scaled_field(hdop_raw, 0.01) {
-            pos.hdop = hdop;
+        // A reserved raw has no defined meaning, which points at a misaligned
+        // frame rather than a missing reading — drop it, as the geoidal
+        // separation below already does. Anything else, including a negative
+        // ratio, is reported as an absent DOP: unlike 129539, which is nothing
+        // but DOPs, this PG carries the fix itself and must not take latitude
+        // and longitude down with one bad sub-signal (G4).
+        if signed_i16_data_is_reserved(hdop_raw) || signed_i16_data_is_reserved(pdop_raw) {
+            return;
         }
-        if let Some(pdop) = nmea_u16_scaled_field(pdop_raw, 0.01) {
-            pos.pdop = pdop;
-        }
+        pos.hdop = nmea_dop_field(hdop_raw, DOP_RESOLUTION).flatten();
+        pos.pdop = nmea_dop_field(pdop_raw, DOP_RESOLUTION).flatten();
         if signed_i32_data_is_available(geoidal_raw) {
             pos.geoidal_separation_m = Some(geoidal_raw as f64 * 0.01);
         }

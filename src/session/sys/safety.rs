@@ -32,6 +32,9 @@ impl SafeStopTrigger {
                 | HeartbeatEvent::SenderError { .. }
                 | HeartbeatEvent::GracefulShutdown { .. },
             ) => Some(Self::HeartbeatError),
+            Event::Imp(super::ImplementEvent::WheelSpeed(w)) if w.is_key_off() => {
+                Some(Self::KeySwitchOff)
+            }
             Event::Gnss(super::GnssEvent::PositionStale { .. }) => Some(Self::PositionStale),
             Event::Gnss(super::GnssEvent::FixDegraded { .. }) => Some(Self::FixDegraded),
             _ => None,
@@ -115,6 +118,23 @@ mod tests {
                     fix_type: crate::nmea::GNSSFixType::DeadReckon,
                 }),
                 Some(SafeStopTrigger::FixDegraded),
+            ),
+            (
+                Event::Imp(crate::session::sys::ImplementEvent::WheelSpeed(
+                    crate::isobus::implement::WheelBasedSpeedDist {
+                        key_switch_state: 0,
+                        ..Default::default()
+                    },
+                )),
+                Some(SafeStopTrigger::KeySwitchOff),
+            ),
+            // An unknown key state is not evidence of a shutdown; stopping on a
+            // decode gap would be its own hazard.
+            (
+                Event::Imp(crate::session::sys::ImplementEvent::WheelSpeed(
+                    crate::isobus::implement::WheelBasedSpeedDist::default(),
+                )),
+                None,
             ),
             // Recovery is informational: it must not itself be a stop.
             (

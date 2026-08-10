@@ -203,10 +203,36 @@ pub struct WheelBasedSpeedDist {
     /// 2 bits in byte 7 bits 2..3: 0 = key off, 1 = not off, 2 = error,
     /// 3 = N/A.
     pub key_switch_state: u8,
+    // NOTE: `key_switch_state` and `max_power_time_min` were decoded here and
+    // acted on nowhere. Key-off means the operator is shutting the machine
+    // down; an autonomous controller that keeps steering through it is exactly
+    // the unintended-motion case. See `is_key_off`.
     /// 2 bits in byte 7 bits 4..5: implement start/stop operation state.
     pub implement_start_stop_operations_state: u8,
     /// 2 bits in byte 7 bits 6..7: operator direction reversed state.
     pub operator_direction_reversed_state: u8,
+}
+
+impl WheelBasedSpeedDist {
+    /// `true` when the operator has switched the key off (raw `0`).
+    ///
+    /// `2` (error) and `3` (not available) are deliberately *not* key-off: an
+    /// unknown key state is not evidence of a shutdown, and treating it as one
+    /// would stop the machine on a decode gap.
+    #[must_use]
+    pub const fn is_key_off(&self) -> bool {
+        self.key_switch_state == 0
+    }
+
+    /// Maximum tractor power-on time in minutes, or `None` when not available.
+    #[must_use]
+    pub const fn max_power_time(&self) -> Option<u8> {
+        if self.max_power_time_min == 0xFF {
+            None
+        } else {
+            Some(self.max_power_time_min)
+        }
+    }
 }
 
 impl Default for WheelBasedSpeedDist {

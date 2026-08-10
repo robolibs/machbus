@@ -50,6 +50,9 @@ pub enum SafeStopTrigger {
     /// The receiver reported a fix that cannot be steered on — no fix, dead
     /// reckoning, or an error/unavailable method.
     FixDegraded,
+    /// The operator switched the key off. The machine is shutting down, so an
+    /// autonomous controller must stop asking for the wheel.
+    KeySwitchOff,
 }
 
 impl SafeStopTrigger {
@@ -70,6 +73,7 @@ impl SafeStopTrigger {
             Self::SendFailed(_) => 11,
             Self::PositionStale => 12,
             Self::FixDegraded => 13,
+            Self::KeySwitchOff => 14,
         }
     }
 
@@ -90,6 +94,7 @@ impl SafeStopTrigger {
             Self::SendFailed(_) => "send_failed",
             Self::PositionStale => "position_stale",
             Self::FixDegraded => "fix_degraded",
+            Self::KeySwitchOff => "key_switch_off",
         }
     }
 }
@@ -179,6 +184,7 @@ mod tests {
             SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
             SafeStopTrigger::PositionStale,
             SafeStopTrigger::FixDegraded,
+            SafeStopTrigger::KeySwitchOff,
         ];
 
         for trigger in all {
@@ -196,6 +202,7 @@ mod tests {
                 SafeStopTrigger::SendFailed(_) => "guidance/autodrive on_event, refused command",
                 SafeStopTrigger::PositionStale => "plugins::gnss on_tick position watchdog",
                 SafeStopTrigger::FixDegraded => "plugins::gnss on_frame fix method check",
+                SafeStopTrigger::KeySwitchOff => "SafeStopTrigger::from_event, wheel-based speed",
             };
             assert!(
                 !producer.is_empty(),

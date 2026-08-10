@@ -132,10 +132,22 @@ pub struct NetworkStatistics {
     pub frames_received: u64,
 }
 
+/// How long an address violation from one source stays answered before the
+/// stack will assert its claim again (ISO 11783-5 §4.4.4.3).
+const ADDRESS_VIOLATION_RESPONSE_INTERVAL_MS: u32 = 1_000;
+
 pub struct IsoNet<L: Link> {
     config: NetworkConfig,
     stats: NetworkStatistics,
     internal_cfs: Vec<InternalCf>,
+    /// Recently answered address violations, as `(port, source, age_ms)`.
+    ///
+    /// A violation used to produce one address-claim frame and one DTC per
+    /// offending *frame*: a misbehaving node broadcasting at 100 Hz turned into
+    /// 100 claims and 100 DTCs a second, which is a bus storm answering a bus
+    /// problem. One response per source per window is enough to assert the
+    /// address.
+    recent_violations: Vec<(u8, Address, u32)>,
     partner_cfs: Vec<PartnerCf>,
     claimers: Vec<AddressClaimer>,
     endpoints: HashMap<u8, CanEndpoint<L>>,
@@ -208,6 +220,7 @@ impl<L: Link> IsoNet<L> {
             config,
             stats: NetworkStatistics::default(),
             internal_cfs: Vec::new(),
+            recent_violations: Vec::new(),
             partner_cfs: Vec::new(),
             claimers: Vec::new(),
             endpoints: HashMap::new(),
@@ -693,6 +706,12 @@ impl<L: Link> IsoNet<L> {
             partner.update_claim_validation(elapsed_ms);
         }
 
+        for entry in &mut self.recent_violations {
+            entry.2 = entry.2.saturating_add(elapsed_ms);
+        }
+        self.recent_violations
+            .retain(|(_, _, age)| *age < ADDRESS_VIOLATION_RESPONSE_INTERVAL_MS);
+
         // 1) Drain RX from every endpoint.
         let mut rx: Vec<(u8, Frame)> = Vec::new();
         let ports: Vec<u8> = self.endpoints.keys().copied().collect();
@@ -1010,6 +1029,13 @@ impl<L: Link> IsoNet<L> {
         if src == NULL_ADDRESS || src == BROADCAST_ADDRESS {
             return;
         }
+        if self
+            .recent_violations
+            .iter()
+            .any(|(p, a, _)| *p == port && *a == src)
+        {
+            return;
+        }
         let mut emitted: Vec<Frame> = Vec::new();
         let mut violated = false;
         for (icf, claimer) in self.internal_cfs.iter_mut().zip(self.claimers.iter_mut()) {
@@ -1027,6 +1053,7 @@ impl<L: Link> IsoNet<L> {
             }
         }
         if violated {
+            self.recent_violations.push((port, src, 0));
             self.on_address_violation.emit(&src);
             self.send_frames_best_effort(&emitted, port);
         }

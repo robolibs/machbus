@@ -570,6 +570,19 @@ mod tests {
         });
         assert!(ticks < 9, "address violation was not reported");
         assert_eq!(&*violations.borrow(), &[0x80]);
+
+        // H33 — a misbehaving node keeps offending. Answering every frame turned
+        // one bus problem into a bus storm: a claim frame and a DTC per
+        // offending frame. One response per source per window is enough.
+        for _ in 0..20 {
+            net_b.send_frame(&frame, 0).unwrap();
+            let _ = pump_until(&mut net_a, &mut net_b, &mut built, 2, 10, |_a, _b| false);
+        }
+        assert_eq!(
+            violations.borrow().len(),
+            1,
+            "a repeat offender inside the response window must not be answered again"
+        );
     }
 
     #[test]

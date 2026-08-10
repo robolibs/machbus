@@ -493,7 +493,13 @@ impl Plugin for AutoDrive {
             None => true,
             Some(last) => {
                 let since = now.millis_since(last);
-                since >= self.max_tx_ms || (self.dirty && since >= self.min_tx_ms)
+                if self.status.is_active() {
+                    // While steering, the command *is* the heartbeat the ECU
+                    // times out on — see the guidance plugin for the same rule.
+                    since >= self.min_tx_ms
+                } else {
+                    since >= self.max_tx_ms || (self.dirty && since >= self.min_tx_ms)
+                }
             }
         };
 

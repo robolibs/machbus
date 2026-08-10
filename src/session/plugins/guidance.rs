@@ -501,7 +501,16 @@ impl Plugin for Guidance {
             None => true,
             Some(last) => {
                 let since = now.millis_since(last);
-                since >= MAX_TX_INTERVAL_MS || (self.dirty && since >= MIN_TX_INTERVAL_MS)
+                if self.engaged {
+                    // While steering, the command *is* the heartbeat the ECU
+                    // times out on. Falling back to MAX_TX_INTERVAL_MS for an
+                    // unchanged setpoint put 2000 ms between frames against a
+                    // 100 ms group and a 300 ms loss-of-communication window,
+                    // so autosteer would drop mid-drive on a steady heading.
+                    since >= MIN_TX_INTERVAL_MS
+                } else {
+                    since >= MAX_TX_INTERVAL_MS || (self.dirty && since >= MIN_TX_INTERVAL_MS)
+                }
             }
         };
 
@@ -813,6 +822,45 @@ mod tests {
             last_status,
             Some(CurvatureCommandStatus::NotIntendedToSteer),
             "the safe state must reach the bus, not just the local flag"
+        );
+    }
+
+    /// P2.3 — an engaged controller commands at the group rate. Falling back to
+    /// MAX_TX_INTERVAL_MS for an unchanged setpoint left 2000 ms between frames
+    /// against a 300 ms loss-of-communication window, so a steady heading would
+    /// drop autosteer.
+    #[test]
+    fn an_engaged_controller_commands_at_the_group_rate() {
+        let mut s = claimed_session();
+        let mut now = Instant::ZERO.add_millis(2050);
+        feed_machine_info(&mut s, now);
+        s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+        s.get_mut::<Guidance>().unwrap().engage().unwrap();
+
+        // One second of holding exactly the same heading.
+        let mut gaps = Vec::new();
+        let mut last_tx: Option<Instant> = None;
+        for _ in 0..40 {
+            now = now.add_millis(25);
+            feed_machine_info(&mut s, now);
+            s.get_mut::<Guidance>().unwrap().command_curvature(20.0);
+            s.tick(now);
+            while let Some((_, frame)) = s.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
+                    if let Some(prev) = last_tx {
+                        gaps.push(now.millis_since(prev));
+                    }
+                    last_tx = Some(now);
+                }
+            }
+        }
+
+        assert!(!gaps.is_empty(), "the command must keep reaching the bus");
+        let worst = gaps.iter().copied().max().unwrap();
+        assert!(
+            worst <= LINK_TIMEOUT_MS,
+            "an unchanged setpoint must still refresh inside the loss-of-communication \
+             window; worst gap was {worst} ms"
         );
     }
 

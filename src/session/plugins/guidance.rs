@@ -70,6 +70,16 @@ pub const MIN_CURVATURE_SPEED_MPS: f64 = 0.05;
 const COMMAND_STALE_MS: u32 = 300;
 
 /// Automatic-guidance (autosteer) plugin.
+/// Stops this plugin can trip (G8). See [`super::autodrive::PRODUCES`].
+#[cfg(test)]
+pub(crate) const PRODUCES: &[SafeStopTrigger] = &[
+    SafeStopTrigger::GuidanceLinkTimeout,
+    SafeStopTrigger::CommandStale,
+    SafeStopTrigger::IsbStop,
+    SafeStopTrigger::OperatorOverride,
+    SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
+];
+
 #[derive(Default)]
 pub struct Guidance {
     latest: Option<GuidanceMachineInfo>,

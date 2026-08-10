@@ -154,15 +154,14 @@ mod tests {
         assert!(latch.is_latched());
     }
 
-    /// G8 — a trigger with no producer is a bug, not a placeholder. Nine of the
-    /// eleven variants were unreachable when this was written: they described
-    /// faults the session could detect and never acted on.
+    /// The C ABI codes must stay stable and distinct: a binding that stored a
+    /// code before a variant was retired must never see it reused.
     ///
-    /// The match is exhaustive on purpose. Adding a variant without naming what
-    /// produces it stops the build here rather than shipping a safe state that
-    /// can never be entered.
+    /// G8 reachability is checked in `session::sys::safety`, where the producers
+    /// live. It used to be checked here against a table of hard-coded strings,
+    /// which could not fail and hid two unreachable variants.
     #[test]
-    fn every_trigger_names_its_producer() {
+    fn codes_and_names_are_distinct_and_retired_ones_stay_retired() {
         use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
 
         let all = [
@@ -180,24 +179,17 @@ mod tests {
             SafeStopTrigger::KeySwitchOff,
         ];
 
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a.as_code(), b.as_code(), "{a:?} and {b:?} share a code");
+                assert_ne!(a.as_str(), b.as_str(), "{a:?} and {b:?} share a name");
+            }
+        }
+        // 2 and 3 belonged to the removed TIM triggers.
         for trigger in all {
-            let producer = match trigger {
-                SafeStopTrigger::GuidanceLinkTimeout => "guidance/autodrive on_tick link watchdog",
-                SafeStopTrigger::HeartbeatError => "SafeStopTrigger::from_event, heartbeat faults",
-                SafeStopTrigger::IsbStop => "guidance/autodrive on_frame, shortcut button",
-                SafeStopTrigger::BusOff => "SafeStopTrigger::from_event, ConfinementChanged",
-                SafeStopTrigger::AddressClaimLost => "SafeStopTrigger::from_event, claim lost",
-                SafeStopTrigger::OperatorOverride => "autodrive on_frame, guidance limit status",
-                SafeStopTrigger::CommandStale => "guidance/autodrive on_tick setpoint watchdog",
-                SafeStopTrigger::ClockWentBackwards => "SafeStopTrigger::from_event, clock fault",
-                SafeStopTrigger::SendFailed(_) => "guidance/autodrive on_event, refused command",
-                SafeStopTrigger::PositionStale => "plugins::gnss on_tick position watchdog",
-                SafeStopTrigger::FixDegraded => "plugins::gnss on_frame fix method check",
-                SafeStopTrigger::KeySwitchOff => "SafeStopTrigger::from_event, wheel-based speed",
-            };
             assert!(
-                !producer.is_empty(),
-                "{trigger:?} must name the code path that trips it"
+                !matches!(trigger.as_code(), 2 | 3),
+                "{trigger:?} reuses a retired code"
             );
         }
     }

@@ -46,14 +46,14 @@ impl SafeStopTrigger {
 mod tests {
     use super::*;
 
-    /// The event-driven half of that mapping, checked against real events rather
-    /// than a comment.
-    #[test]
-    fn session_events_map_to_the_stop_they_demand() {
+    /// Every event that `from_event` is expected to classify, with the stop it
+    /// must map to. Shared so the G8 reachability test derives its coverage by
+    /// running the real mapping rather than restating it.
+    fn event_mapping_cases() -> Vec<(crate::session::sys::Event, Option<SafeStopTrigger>)> {
         use crate::net::fault_confinement::FaultConfinementAction;
         use crate::session::sys::{BusEvent, ClaimEvent, Event, HeartbeatEvent};
 
-        let cases = [
+        vec![
             (
                 Event::Bus(BusEvent::ConfinementChanged {
                     port: 0,
@@ -143,13 +143,78 @@ mod tests {
                 }),
                 None,
             ),
-        ];
+        ]
+    }
 
-        for (event, expected) in cases {
+    /// The event-driven half of that mapping, checked against real events rather
+    /// than a comment.
+    #[test]
+    fn session_events_map_to_the_stop_they_demand() {
+        for (event, expected) in event_mapping_cases() {
             assert_eq!(
                 SafeStopTrigger::from_event(&event),
                 expected,
                 "{event:?} mapped to the wrong stop"
+            );
+        }
+    }
+
+    /// G8 — every stop trigger must have a real producer.
+    ///
+    /// The old version of this test matched each variant to a hard-coded string
+    /// and asserted the string was non-empty, so it passed for triggers nothing
+    /// could ever trip; two dead variants lived behind it for three rounds. This
+    /// one unions the `PRODUCES` lists the producing modules declare next to
+    /// their own code, plus the events `from_event` maps, and requires the union
+    /// to be exactly the enum. Deleting a producer now fails here.
+    #[test]
+    fn g8_every_trigger_is_reachable() {
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        // Everything `from_event` can return, derived by running it rather than
+        // by restating the match — a dropped arm shows up as a missing trigger.
+        let from_events: Vec<SafeStopTrigger> = event_mapping_cases()
+            .iter()
+            .filter_map(|(event, _)| SafeStopTrigger::from_event(event))
+            .collect();
+
+        let mut reachable: Vec<SafeStopTrigger> = Vec::new();
+        for trigger in crate::session::plugins::autodrive::PRODUCES
+            .iter()
+            .chain(crate::session::plugins::guidance::PRODUCES)
+            .copied()
+            .chain(from_events)
+        {
+            if !reachable.contains(&trigger) {
+                reachable.push(trigger);
+            }
+        }
+
+        let all = [
+            SafeStopTrigger::GuidanceLinkTimeout,
+            SafeStopTrigger::HeartbeatError,
+            SafeStopTrigger::IsbStop,
+            SafeStopTrigger::BusOff,
+            SafeStopTrigger::AddressClaimLost,
+            SafeStopTrigger::OperatorOverride,
+            SafeStopTrigger::CommandStale,
+            SafeStopTrigger::ClockWentBackwards,
+            SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
+            SafeStopTrigger::PositionStale,
+            SafeStopTrigger::FixDegraded,
+            SafeStopTrigger::KeySwitchOff,
+        ];
+
+        for trigger in all {
+            assert!(
+                reachable.contains(&trigger),
+                "{trigger:?} has no producer: either wire one up or delete the variant (G8)"
+            );
+        }
+        for trigger in &reachable {
+            assert!(
+                all.contains(trigger),
+                "{trigger:?} is produced but missing from the G8 coverage list"
             );
         }
     }

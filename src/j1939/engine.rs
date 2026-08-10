@@ -198,11 +198,6 @@ fn u16_signal(raw: u16, resolution: f64, offset: f64) -> Signal<f64> {
 }
 
 #[inline]
-fn u8_scaled_raw_is_defined_or_status(raw: u8) -> bool {
-    raw <= 250 || raw >= 0xFE
-}
-
-#[inline]
 fn u16_data_is_available(raw: u16) -> bool {
     raw < u16::MAX - 1
 }
@@ -290,26 +285,29 @@ impl Eec1 {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Eec2 {
-    /// SPN 91: 0.4 %/bit.
-    pub accel_pedal_position: u8,
+    /// SPN 91: 0.4 %/bit. This used to be the raw wire byte; it is now the
+    /// pedal position itself, with absence made explicit.
+    pub accel_pedal_position: Signal<f64>,
     /// SPN 92: 1 %/bit.
-    pub engine_load_percent: f64,
+    pub engine_load_percent: Signal<f64>,
     /// SPN 558: 2 bits.
     pub accel_pedal_low_idle: u8,
     /// SPN 559: 2 bits.
     pub accel_pedal_kickdown: u8,
     /// SPN 1437: 1 km/h per bit.
-    pub road_speed_limit: u8,
+    pub road_speed_limit: Signal<f64>,
 }
 
 impl Default for Eec2 {
+    /// The two-bit control statuses have their own not-available code (0b11);
+    /// leaving them at 0 would claim the pedal is out of low idle and kickdown.
     fn default() -> Self {
         Self {
-            accel_pedal_position: 0xFF,
-            engine_load_percent: 0.0,
+            accel_pedal_position: Signal::NotAvailable,
+            engine_load_percent: Signal::NotAvailable,
             accel_pedal_low_idle: 0x03,
             accel_pedal_kickdown: 0x03,
-            road_speed_limit: 0xFF,
+            road_speed_limit: Signal::NotAvailable,
         }
     }
 }
@@ -319,9 +317,9 @@ impl Eec2 {
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = (self.accel_pedal_low_idle & 0x03) | ((self.accel_pedal_kickdown & 0x03) << 2);
-        data[1] = self.accel_pedal_position;
-        data[2] = scaled_u8_non_na(self.engine_load_percent, 1.0);
-        data[3] = self.road_speed_limit;
+        data[1] = encode_u8_signal_scaled(self.accel_pedal_position, 0.4);
+        data[2] = encode_u8_signal(self.engine_load_percent, 0.0);
+        data[3] = encode_u8_signal(self.road_speed_limit, 0.0);
         data
     }
 
@@ -333,18 +331,12 @@ impl Eec2 {
         if data[0] & 0xF0 != 0 {
             return None;
         }
-        if !u8_scaled_raw_is_defined_or_status(data[1])
-            || !u8_scaled_raw_is_defined(data[2])
-            || !u8_scaled_raw_is_defined_or_status(data[3])
-        {
-            return None;
-        }
         Some(Self {
             accel_pedal_low_idle: data[0] & 0x03,
             accel_pedal_kickdown: (data[0] >> 2) & 0x03,
-            accel_pedal_position: data[1],
-            engine_load_percent: data[2] as f64,
-            road_speed_limit: data[3],
+            accel_pedal_position: u8_signal_scaled(data[1], 0.4),
+            engine_load_percent: u8_signal(data[2], 1.0, 0.0),
+            road_speed_limit: u8_signal(data[3], 1.0, 0.0),
         })
     }
 
@@ -359,35 +351,25 @@ impl Eec2 {
 
 // ─── EEC3 (PGN 0x0FEC0) ───────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Eec3 {
     /// SPN 514: 1 %/bit, offset −125.
-    pub nominal_friction_percent: f64,
+    pub nominal_friction_percent: Signal<f64>,
     /// SPN 515: 0.125 rpm/bit, 2 bytes.
-    pub desired_operating_speed_rpm: f64,
+    pub desired_operating_speed_rpm: Signal<f64>,
     /// SPN 519: 1 %/bit.
-    pub operating_speed_asymmetry: u8,
-}
-
-impl Default for Eec3 {
-    fn default() -> Self {
-        Self {
-            nominal_friction_percent: 0.0,
-            desired_operating_speed_rpm: 0.0,
-            operating_speed_asymmetry: 0xFF,
-        }
-    }
+    pub operating_speed_asymmetry: Signal<f64>,
 }
 
 impl Eec3 {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = offset_scaled_u8_non_na(self.nominal_friction_percent, 125.0, 1.0);
-        let spd = scaled_u16_non_na(self.desired_operating_speed_rpm, 0.125);
+        data[0] = encode_u8_signal(self.nominal_friction_percent, 125.0);
+        let spd = encode_u16_signal(self.desired_operating_speed_rpm, 0.125);
         data[1] = (spd & 0xFF) as u8;
         data[2] = ((spd >> 8) & 0xFF) as u8;
-        data[3] = self.operating_speed_asymmetry;
+        data[3] = encode_u8_signal(self.operating_speed_asymmetry, 0.0);
         data
     }
 
@@ -397,16 +379,10 @@ impl Eec3 {
             return None;
         }
         let spd = (data[1] as u16) | ((data[2] as u16) << 8);
-        if !u8_scaled_raw_is_defined(data[0])
-            || !u16_data_is_available(spd)
-            || !u8_scaled_raw_is_defined_or_status(data[3])
-        {
-            return None;
-        }
         Some(Self {
-            nominal_friction_percent: data[0] as f64 - 125.0,
-            desired_operating_speed_rpm: spd as f64 * 0.125,
-            operating_speed_asymmetry: data[3],
+            nominal_friction_percent: u8_signal(data[0], 1.0, -125.0),
+            desired_operating_speed_rpm: u16_signal(spd, 0.125, 0.0),
+            operating_speed_asymmetry: u8_signal(data[3], 1.0, 0.0),
         })
     }
 
@@ -713,8 +689,10 @@ impl OverrideControlMode {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Tsc1 {
     pub override_mode: OverrideControlMode,
-    pub requested_speed_rpm: f64,
-    pub requested_torque_percent: f64,
+    /// Not-available is meaningful here: a request that governs torque only
+    /// leaves the speed field at the sentinel, and vice versa.
+    pub requested_speed_rpm: Signal<f64>,
+    pub requested_torque_percent: Signal<f64>,
 }
 
 impl Tsc1 {
@@ -722,10 +700,10 @@ impl Tsc1 {
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = self.override_mode.as_u8() & 0x03;
-        let spd = scaled_u16_non_na(self.requested_speed_rpm, 0.125);
+        let spd = encode_u16_signal(self.requested_speed_rpm, 0.125);
         data[1] = (spd & 0xFF) as u8;
         data[2] = ((spd >> 8) & 0xFF) as u8;
-        data[3] = offset_scaled_u8_non_na(self.requested_torque_percent, 125.0, 1.0);
+        data[3] = encode_u8_signal(self.requested_torque_percent, 125.0);
         data
     }
 
@@ -738,13 +716,10 @@ impl Tsc1 {
             return None;
         }
         let spd = (data[1] as u16) | ((data[2] as u16) << 8);
-        if !u16_data_is_available(spd) || !u8_scaled_raw_is_defined(data[3]) {
-            return None;
-        }
         Some(Self {
             override_mode: OverrideControlMode::try_from_u8(data[0])?,
-            requested_speed_rpm: spd as f64 * 0.125,
-            requested_torque_percent: data[3] as f64 - 125.0,
+            requested_speed_rpm: u16_signal(spd, 0.125, 0.0),
+            requested_torque_percent: u8_signal(data[3], 1.0, -125.0),
         })
     }
 
@@ -1302,16 +1277,25 @@ mod tests {
 
     #[test]
     fn eec2_round_trip() {
+        // Raw 200 at the SPN 91 resolution of 0.4 %/bit is 80 % pedal.
         let m = Eec2 {
-            accel_pedal_position: 200,
-            engine_load_percent: 65.0,
+            accel_pedal_position: Signal::Value(80.0),
+            engine_load_percent: Signal::Value(65.0),
             accel_pedal_low_idle: 1,
             accel_pedal_kickdown: 0,
-            road_speed_limit: 80,
+            road_speed_limit: Signal::Value(80.0),
         };
+        assert_eq!(m.encode()[1], 200);
         let decoded = Eec2::decode(&m.encode()).unwrap();
-        assert_eq!(decoded.accel_pedal_position, 200);
-        assert_eq!(decoded.road_speed_limit, 80);
+        assert!((decoded.accel_pedal_position.value().unwrap() - 80.0).abs() < 0.4);
+        assert_eq!(decoded.road_speed_limit, Signal::Value(80.0));
+
+        // No road speed limiter fitted still leaves a readable pedal position.
+        let mut absent = m.encode();
+        absent[3] = 0xFF;
+        let decoded = Eec2::decode(&absent).unwrap();
+        assert_eq!(decoded.road_speed_limit, Signal::NotAvailable);
+        assert!((decoded.accel_pedal_position.value().unwrap() - 80.0).abs() < 0.4);
     }
 
     #[test]
@@ -1412,26 +1396,36 @@ mod tests {
     #[test]
     fn eec3_round_trip() {
         let m = Eec3 {
-            nominal_friction_percent: 25.0,
-            desired_operating_speed_rpm: 1800.0,
-            operating_speed_asymmetry: 50,
+            nominal_friction_percent: Signal::Value(25.0),
+            desired_operating_speed_rpm: Signal::Value(1800.0),
+            operating_speed_asymmetry: Signal::Value(50.0),
         };
         let d = Eec3::decode(&m.encode()).unwrap();
-        assert!((d.nominal_friction_percent - 25.0).abs() < 1.0);
-        assert_eq!(d.operating_speed_asymmetry, 50);
+        assert!((d.nominal_friction_percent.value().unwrap() - 25.0).abs() < 1.0);
+        assert_eq!(d.operating_speed_asymmetry, Signal::Value(50.0));
     }
 
     #[test]
     fn tsc1_round_trip() {
         let m = Tsc1 {
             override_mode: OverrideControlMode::SpeedControl,
-            requested_speed_rpm: 1200.0,
-            requested_torque_percent: 50.0,
+            requested_speed_rpm: Signal::Value(1200.0),
+            requested_torque_percent: Signal::Value(50.0),
         };
         assert_eq!(m.encode(), [0x01, 0x80, 0x25, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF]);
         let d = Tsc1::decode(&m.encode()).unwrap();
         assert_eq!(d.override_mode, OverrideControlMode::SpeedControl);
-        assert!((d.requested_speed_rpm - 1200.0).abs() < 0.125);
+        assert!((d.requested_speed_rpm.value().unwrap() - 1200.0).abs() < 0.125);
+
+        // A speed-only request leaves torque at the sentinel, and that is a
+        // valid command — not a frame to throw away.
+        let speed_only = Tsc1 {
+            requested_torque_percent: Signal::NotAvailable,
+            ..m
+        };
+        let d = Tsc1::decode(&speed_only.encode()).unwrap();
+        assert_eq!(d.requested_torque_percent, Signal::NotAvailable);
+        assert!((d.requested_speed_rpm.value().unwrap() - 1200.0).abs() < 0.125);
     }
 
     #[test]

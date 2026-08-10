@@ -786,20 +786,22 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "eec2_pedal200_load65_limit80",
     );
+    // The pedal is now the percentage its name promises, at the SPN 91
+    // resolution of 0.4 %/bit — raw 200 is 80 %, so the golden bytes hold.
     let expected_eec2 = Eec2 {
-        accel_pedal_position: 200,
-        engine_load_percent: 65.0,
+        accel_pedal_position: sig(80.0),
+        engine_load_percent: sig(65.0),
         accel_pedal_low_idle: 1,
         accel_pedal_kickdown: 0,
-        road_speed_limit: 80,
+        road_speed_limit: sig(80.0),
     };
     assert_eq!(expected_eec2.encode(), eec2);
     let decoded_eec2 = Eec2::decode(&eec2).unwrap();
-    assert_eq!(decoded_eec2.accel_pedal_position, 200);
-    assert_eq!(decoded_eec2.engine_load_percent, 65.0);
+    assert_sig(decoded_eec2.accel_pedal_position, 80.0, 0.4);
+    assert_sig(decoded_eec2.engine_load_percent, 65.0, 0.0);
     assert_eq!(decoded_eec2.accel_pedal_low_idle, 1);
     assert_eq!(decoded_eec2.accel_pedal_kickdown, 0);
-    assert_eq!(decoded_eec2.road_speed_limit, 80);
+    assert_sig(decoded_eec2.road_speed_limit, 80.0, 0.0);
 
     let engine_temp1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -852,8 +854,8 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
     );
     let expected_tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedControl,
-        requested_speed_rpm: 1200.0,
-        requested_torque_percent: 50.0,
+        requested_speed_rpm: sig(1200.0),
+        requested_torque_percent: sig(50.0),
     };
     assert_eq!(expected_tsc1.encode(), tsc1);
     let decoded_tsc1 = Tsc1::decode(&tsc1).unwrap();
@@ -861,8 +863,8 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         decoded_tsc1.override_mode,
         OverrideControlMode::SpeedControl
     );
-    assert_eq!(decoded_tsc1.requested_speed_rpm, 1200.0);
-    assert_eq!(decoded_tsc1.requested_torque_percent, 50.0);
+    assert_sig(decoded_tsc1.requested_speed_rpm, 1200.0, 0.0);
+    assert_sig(decoded_tsc1.requested_torque_percent, 50.0, 0.0);
 
     let etc1 = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "etc1_gear5_6_1500rpm");
     let expected_etc1 = Etc1 {
@@ -939,15 +941,15 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
 fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
     let eec3 = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec3_25_1800rpm_asym50");
     let expected_eec3 = Eec3 {
-        nominal_friction_percent: 25.0,
-        desired_operating_speed_rpm: 1800.0,
-        operating_speed_asymmetry: 50,
+        nominal_friction_percent: sig(25.0),
+        desired_operating_speed_rpm: sig(1800.0),
+        operating_speed_asymmetry: sig(50.0),
     };
     assert_eq!(expected_eec3.encode(), eec3);
     let decoded_eec3 = Eec3::decode(&eec3).unwrap();
-    assert!((decoded_eec3.nominal_friction_percent - 25.0).abs() < 1.0);
-    assert!((decoded_eec3.desired_operating_speed_rpm - 1800.0).abs() < 0.125);
-    assert_eq!(decoded_eec3.operating_speed_asymmetry, 50);
+    assert_sig(decoded_eec3.nominal_friction_percent, 25.0, 1.0);
+    assert_sig(decoded_eec3.desired_operating_speed_rpm, 1800.0, 0.125);
+    assert_sig(decoded_eec3.operating_speed_asymmetry, 50.0, 0.0);
 
     let engine_temp2 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,

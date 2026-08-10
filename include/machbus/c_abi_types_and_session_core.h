@@ -511,22 +511,26 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec2`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
-  uint8_t accel_pedal_position;
+  double accel_pedal_position;
   double engine_load_percent;
   uint8_t accel_pedal_low_idle;
   uint8_t accel_pedal_kickdown;
-  uint8_t road_speed_limit;
+  double road_speed_limit;
 } MachbusEec2;
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec3`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double nominal_friction_percent;
   double desired_operating_speed_rpm;
-  uint8_t operating_speed_asymmetry;
+  double operating_speed_asymmetry;
 } MachbusEec3;
 
 /**

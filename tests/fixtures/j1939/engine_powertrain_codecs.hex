@@ -93,8 +93,10 @@ aftertreatment2_clamped_inputs=FDFFFAFAFEFEFFFF
 # engine speed). This previously read 7D7D7D0000... — 0 % torque and 0 rpm,
 # which claims readings the engine never reported.
 eec1_default=FFFFFFFFFF0000FF
-eec2_default=0FFF00FFFFFFFFFF
-eec3_default=7D0000FFFFFFFFFF
+# EEC2 keeps 0x0F in byte 0: the two-bit pedal statuses have their own
+# not-available code. EEC3's defaults claimed 0 % friction at 0 rpm.
+eec2_default=0FFFFFFFFFFFFFFF
+eec3_default=FFFFFFFFFFFFFFFF
 # Same for the temperature PGs: the defaults used to encode −40 °C / −273 °C
 # on every channel, asserting the coldest readable temperature on sensors an
 # engine may not even have fitted. A default now reports nothing.
@@ -105,7 +107,7 @@ engine_temp2_default=FFFFFFFFFFFFFFFF
 engine_fluid_lp_default=FFFFFFFFFFFFFFFF
 engine_hours_default=FFFFFFFFFFFFFFFF
 fuel_economy_default=FFFFFFFFFFFFFFFF
-tsc1_default=0000007DFFFFFFFF
+tsc1_default=00FFFFFFFFFFFFFF
 # VEP1 and ambient conditions: 0 V on every rail and −40 °C everywhere were
 # readings the ECU never took. A default reports nothing.
 vep1_default=FFFFFFFFFFFFFFFF

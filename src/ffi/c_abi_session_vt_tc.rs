@@ -378,24 +378,26 @@ macro_rules! pod_codec_try_encode {
 // ══════════════════════════════════════════════════════════════════════
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Eec2`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEec2 {
-    pub accel_pedal_position: u8,
+    pub accel_pedal_position: f64,
     pub engine_load_percent: f64,
     pub accel_pedal_low_idle: u8,
     pub accel_pedal_kickdown: u8,
-    pub road_speed_limit: u8,
+    pub road_speed_limit: f64,
 }
 
 impl From<crate::j1939::Eec2> for MachbusEec2 {
     fn from(e: crate::j1939::Eec2) -> Self {
         Self {
-            accel_pedal_position: e.accel_pedal_position,
-            engine_load_percent: e.engine_load_percent,
+            accel_pedal_position: signal_to_c(e.accel_pedal_position),
+            engine_load_percent: signal_to_c(e.engine_load_percent),
             accel_pedal_low_idle: e.accel_pedal_low_idle,
             accel_pedal_kickdown: e.accel_pedal_kickdown,
-            road_speed_limit: e.road_speed_limit,
+            road_speed_limit: signal_to_c(e.road_speed_limit),
         }
     }
 }
@@ -403,11 +405,11 @@ impl From<crate::j1939::Eec2> for MachbusEec2 {
 impl From<MachbusEec2> for crate::j1939::Eec2 {
     fn from(e: MachbusEec2) -> Self {
         Self {
-            accel_pedal_position: e.accel_pedal_position,
-            engine_load_percent: e.engine_load_percent,
+            accel_pedal_position: signal_from_c(e.accel_pedal_position),
+            engine_load_percent: signal_from_c(e.engine_load_percent),
             accel_pedal_low_idle: e.accel_pedal_low_idle,
             accel_pedal_kickdown: e.accel_pedal_kickdown,
-            road_speed_limit: e.road_speed_limit,
+            road_speed_limit: signal_from_c(e.road_speed_limit),
         }
     }
 }
@@ -422,20 +424,22 @@ pod_codec!(
 );
 
 /// `#[repr(C)]` mirror of [`machbus::j1939::Eec3`].
+///
+/// A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MachbusEec3 {
     pub nominal_friction_percent: f64,
     pub desired_operating_speed_rpm: f64,
-    pub operating_speed_asymmetry: u8,
+    pub operating_speed_asymmetry: f64,
 }
 
 impl From<crate::j1939::Eec3> for MachbusEec3 {
     fn from(e: crate::j1939::Eec3) -> Self {
         Self {
-            nominal_friction_percent: e.nominal_friction_percent,
-            desired_operating_speed_rpm: e.desired_operating_speed_rpm,
-            operating_speed_asymmetry: e.operating_speed_asymmetry,
+            nominal_friction_percent: signal_to_c(e.nominal_friction_percent),
+            desired_operating_speed_rpm: signal_to_c(e.desired_operating_speed_rpm),
+            operating_speed_asymmetry: signal_to_c(e.operating_speed_asymmetry),
         }
     }
 }
@@ -443,9 +447,9 @@ impl From<crate::j1939::Eec3> for MachbusEec3 {
 impl From<MachbusEec3> for crate::j1939::Eec3 {
     fn from(e: MachbusEec3) -> Self {
         Self {
-            nominal_friction_percent: e.nominal_friction_percent,
-            desired_operating_speed_rpm: e.desired_operating_speed_rpm,
-            operating_speed_asymmetry: e.operating_speed_asymmetry,
+            nominal_friction_percent: signal_from_c(e.nominal_friction_percent),
+            desired_operating_speed_rpm: signal_from_c(e.desired_operating_speed_rpm),
+            operating_speed_asymmetry: signal_from_c(e.operating_speed_asymmetry),
         }
     }
 }
@@ -689,8 +693,8 @@ impl From<crate::j1939::Tsc1> for MachbusTsc1 {
     fn from(e: crate::j1939::Tsc1) -> Self {
         Self {
             override_mode: e.override_mode.as_u8(),
-            requested_speed_rpm: e.requested_speed_rpm,
-            requested_torque_percent: e.requested_torque_percent,
+            requested_speed_rpm: signal_to_c(e.requested_speed_rpm),
+            requested_torque_percent: signal_to_c(e.requested_torque_percent),
         }
     }
 }
@@ -699,8 +703,8 @@ impl From<MachbusTsc1> for crate::j1939::Tsc1 {
     fn from(e: MachbusTsc1) -> Self {
         Self {
             override_mode: crate::j1939::OverrideControlMode::from_u8(e.override_mode),
-            requested_speed_rpm: e.requested_speed_rpm,
-            requested_torque_percent: e.requested_torque_percent,
+            requested_speed_rpm: signal_from_c(e.requested_speed_rpm),
+            requested_torque_percent: signal_from_c(e.requested_torque_percent),
         }
     }
 }

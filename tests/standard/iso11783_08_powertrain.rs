@@ -120,14 +120,17 @@ fn powertrain_eec1_reports_sentinels_as_absent_without_scaling_them() {
 
 #[test]
 fn powertrain_eec2_rejects_reserved_control_nibble_without_losing_status_edges() {
+    // Raw 0xFE is the error indicator, which these fields used to carry as a
+    // plain number because they were raw bytes.
     let eec2 = Eec2 {
-        accel_pedal_position: 0xFE,
-        engine_load_percent: 250.0,
+        accel_pedal_position: Signal::Error,
+        engine_load_percent: Signal::Value(250.0),
         accel_pedal_low_idle: 3,
         accel_pedal_kickdown: 3,
-        road_speed_limit: 0xFE,
+        road_speed_limit: Signal::Error,
     };
     let encoded = eec2.encode();
+    assert_eq!(encoded[1], 0xFE);
     assert_eq!(Eec2::decode(&encoded), Some(eec2));
 
     let mut bad_reserved_nibble = encoded;
@@ -149,40 +152,50 @@ fn powertrain_eec2_rejects_reserved_control_nibble_without_losing_status_edges()
 
 #[test]
 fn powertrain_eec2_optional_scalars_reject_reserved_special_values() {
+    // Raw 125 at the SPN 91 resolution of 0.4 %/bit is 50 % pedal.
     let eec2 = Eec2 {
-        accel_pedal_position: 125,
-        engine_load_percent: 50.0,
+        accel_pedal_position: Signal::Value(50.0),
+        engine_load_percent: Signal::Value(50.0),
         accel_pedal_low_idle: 1,
         accel_pedal_kickdown: 2,
-        road_speed_limit: 80,
+        road_speed_limit: Signal::Value(80.0),
     };
     let encoded = eec2.encode();
+    assert_eq!(encoded[1], 125);
     assert_eq!(Eec2::decode(&encoded), Some(eec2));
 
     let mut status_values = encoded;
     status_values[1] = 0xFE;
     status_values[3] = 0xFF;
     let decoded = Eec2::decode(&status_values).unwrap();
-    assert_eq!(decoded.accel_pedal_position, 0xFE);
-    assert_eq!(decoded.road_speed_limit, 0xFF);
+    assert_eq!(decoded.accel_pedal_position, Signal::Error);
+    assert_eq!(decoded.road_speed_limit, Signal::NotAvailable);
+    assert_signal_close(decoded.engine_load_percent, 50.0);
 
+    // A reserved raw is reported as absent, never scaled into a number, and
+    // never at the cost of the rest of the PG.
     for (index, value) in [(1usize, 0xFB), (1, 0xFD), (3, 0xFB), (3, 0xFD)] {
-        let mut bad = encoded;
-        bad[index] = value;
-        assert_eq!(
-            Eec2::decode(&bad),
-            None,
-            "EEC2 optional scalar byte {index} must reject reserved special raw value 0x{value:02X}"
-        );
+        let mut reserved = encoded;
+        reserved[index] = value;
+        let decoded = Eec2::decode(&reserved).unwrap_or_else(|| {
+            panic!("reserved raw 0x{value:02X} in byte {index} must not drop the PG")
+        });
+        let field = if index == 1 {
+            decoded.accel_pedal_position
+        } else {
+            decoded.road_speed_limit
+        };
+        assert_eq!(field, Signal::NotAvailable);
+        assert_signal_close(decoded.engine_load_percent, 50.0);
     }
 }
 
 #[test]
 fn powertrain_eec3_asymmetry_rejects_reserved_special_values() {
     let eec3 = Eec3 {
-        nominal_friction_percent: 25.0,
-        desired_operating_speed_rpm: 1_800.0,
-        operating_speed_asymmetry: 42,
+        nominal_friction_percent: Signal::Value(25.0),
+        desired_operating_speed_rpm: Signal::Value(1_800.0),
+        operating_speed_asymmetry: Signal::Value(42.0),
     };
     let encoded = eec3.encode();
     assert_eq!(Eec3::decode(&encoded), Some(eec3));
@@ -193,17 +206,22 @@ fn powertrain_eec3_asymmetry_rejects_reserved_special_values() {
         Eec3::decode(&status_value)
             .unwrap()
             .operating_speed_asymmetry,
-        0xFE
+        Signal::Error
     );
 
+    // A reserved raw is absent, not a number, and not a reason to bin the PG.
     for value in [0xFB, 0xFC, 0xFD] {
-        let mut bad = encoded;
-        bad[3] = value;
+        let mut reserved = encoded;
+        reserved[3] = value;
+        let decoded = Eec3::decode(&reserved).unwrap_or_else(|| {
+            panic!("asymmetry raw 0x{value:02X} must not drop the whole PG")
+        });
         assert_eq!(
-            Eec3::decode(&bad),
-            None,
-            "EEC3 operating-speed asymmetry must reject reserved special raw value 0x{value:02X}"
+            decoded.operating_speed_asymmetry,
+            Signal::NotAvailable,
+            "EEC3 asymmetry raw 0x{value:02X} must not become a percentage"
         );
+        assert_signal_close(decoded.nominal_friction_percent, 25.0);
     }
 }
 
@@ -242,11 +260,11 @@ fn powertrain_engine_full_message_helpers_reject_invalid_envelopes() {
     }
 
     let eec2 = Eec2 {
-        accel_pedal_position: 0x7D,
-        engine_load_percent: 25.0,
+        accel_pedal_position: Signal::Value(50.0),
+        engine_load_percent: Signal::Value(25.0),
         accel_pedal_low_idle: 1,
         accel_pedal_kickdown: 2,
-        road_speed_limit: 60,
+        road_speed_limit: Signal::Value(60.0),
     };
     assert_eq!(
         Eec2::from_message(&Message::new(PGN_EEC2, eec2.encode().to_vec(), 0x81)),
@@ -273,8 +291,8 @@ fn powertrain_engine_full_message_helpers_reject_invalid_envelopes() {
 
     let tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedTorqueLimit,
-        requested_speed_rpm: 1_800.0,
-        requested_torque_percent: -5.0,
+        requested_speed_rpm: Signal::Value(1_800.0),
+        requested_torque_percent: Signal::Value(-5.0),
     };
     assert_eq!(
         Tsc1::from_message(&Message::new(PGN_TSC1, tsc1.encode().to_vec(), 0x82)),
@@ -350,9 +368,9 @@ fn powertrain_remaining_fixed_frame_helpers_reject_invalid_envelopes() {
         Eec3,
         PGN_EEC3,
         Eec3 {
-            nominal_friction_percent: 25.0,
-            desired_operating_speed_rpm: 1_800.0,
-            operating_speed_asymmetry: 42,
+            nominal_friction_percent: Signal::Value(25.0),
+            desired_operating_speed_rpm: Signal::Value(1_800.0),
+            operating_speed_asymmetry: Signal::Value(42.0),
         }
     );
     assert_fixed_helper!(
@@ -600,19 +618,23 @@ fn powertrain_identification_full_message_helpers_reject_invalid_envelopes() {
 #[test]
 fn powertrain_scalar_decoders_reject_not_available_sentinels_for_non_optional_values() {
     let eec3 = Eec3 {
-        nominal_friction_percent: 10.0,
-        desired_operating_speed_rpm: 1_250.0,
-        operating_speed_asymmetry: 0xFE,
+        nominal_friction_percent: Signal::Value(10.0),
+        desired_operating_speed_rpm: Signal::Value(1_250.0),
+        operating_speed_asymmetry: Signal::Error,
     };
     let encoded_eec3 = eec3.encode();
     assert_eq!(Eec3::decode(&encoded_eec3), Some(eec3));
 
-    let mut bad_eec3_percent = encoded_eec3;
-    bad_eec3_percent[0] = 0xFF;
-    assert_eq!(Eec3::decode(&bad_eec3_percent), None);
-    let mut bad_eec3_speed = encoded_eec3;
-    bad_eec3_speed[1..3].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(Eec3::decode(&bad_eec3_speed), None);
+    let mut absent_eec3_percent = encoded_eec3;
+    absent_eec3_percent[0] = 0xFF;
+    let decoded = Eec3::decode(&absent_eec3_percent).expect("the frame still decodes");
+    assert_eq!(decoded.nominal_friction_percent, Signal::NotAvailable);
+    assert_signal_close(decoded.desired_operating_speed_rpm, 1_250.0);
+    let mut absent_eec3_speed = encoded_eec3;
+    absent_eec3_speed[1..3].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = Eec3::decode(&absent_eec3_speed).expect("the frame still decodes");
+    assert_eq!(decoded.desired_operating_speed_rpm, Signal::NotAvailable);
+    assert_signal_close(decoded.nominal_friction_percent, 10.0);
 
     let hours = EngineHours {
         total_hours: Signal::Value(123.0),
@@ -815,25 +837,32 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
     assert!(Eec1::decode(&saturated_eec1).is_some());
 
     let eec2 = Eec2 {
-        accel_pedal_position: 0xFE,
-        engine_load_percent: 25.0,
+        accel_pedal_position: Signal::Error,
+        engine_load_percent: Signal::Value(25.0),
         accel_pedal_low_idle: 1,
         accel_pedal_kickdown: 2,
-        road_speed_limit: 0xFE,
+        road_speed_limit: Signal::Error,
     };
     let encoded_eec2 = eec2.encode();
     assert_eq!(Eec2::decode(&encoded_eec2), Some(eec2));
-    for reserved in [0xFB, 0xFE, 0xFF] {
-        let mut bad = encoded_eec2;
-        bad[2] = reserved;
+    for (reserved, expected) in [
+        (0xFBu8, Signal::NotAvailable),
+        (0xFE, Signal::Error),
+        (0xFF, Signal::NotAvailable),
+    ] {
+        let mut special = encoded_eec2;
+        special[2] = reserved;
+        let decoded = Eec2::decode(&special).unwrap_or_else(|| {
+            panic!("engine-load raw 0x{reserved:02X} must not drop the whole PG")
+        });
         assert_eq!(
-            Eec2::decode(&bad),
-            None,
-            "EEC2 engine-load scaled byte must reject special raw value 0x{reserved:02X}"
+            decoded.engine_load_percent, expected,
+            "EEC2 engine-load raw 0x{reserved:02X} must be reported, never scaled"
         );
+        assert_eq!(decoded.accel_pedal_low_idle, 1);
     }
     let saturated_eec2 = Eec2 {
-        engine_load_percent: 10_000.0,
+        engine_load_percent: Signal::Value(10_000.0),
         ..eec2
     }
     .encode();
@@ -841,16 +870,22 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
     assert!(Eec2::decode(&saturated_eec2).is_some());
 
     let eec3 = Eec3 {
-        nominal_friction_percent: 12.0,
-        desired_operating_speed_rpm: 1_250.0,
-        operating_speed_asymmetry: 0xFE,
+        nominal_friction_percent: Signal::Value(12.0),
+        desired_operating_speed_rpm: Signal::Value(1_250.0),
+        operating_speed_asymmetry: Signal::Error,
     };
     let encoded_eec3 = eec3.encode();
     assert_eq!(Eec3::decode(&encoded_eec3), Some(eec3));
-    for reserved in [0xFB, 0xFE, 0xFF] {
-        let mut bad = encoded_eec3;
-        bad[0] = reserved;
-        assert_eq!(Eec3::decode(&bad), None);
+    for (reserved, expected) in [
+        (0xFBu8, Signal::NotAvailable),
+        (0xFE, Signal::Error),
+        (0xFF, Signal::NotAvailable),
+    ] {
+        let mut special = encoded_eec3;
+        special[0] = reserved;
+        let decoded = Eec3::decode(&special).expect("the frame still decodes");
+        assert_eq!(decoded.nominal_friction_percent, expected);
+        assert_signal_close(decoded.desired_operating_speed_rpm, 1_250.0);
     }
 
     let temp1 = EngineTemp1 {
@@ -882,18 +917,28 @@ fn powertrain_one_byte_scaled_fields_report_special_values_without_scaling() {
 
     let tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedTorqueLimit,
-        requested_speed_rpm: 2_000.0,
-        requested_torque_percent: 33.0,
+        requested_speed_rpm: Signal::Value(2_000.0),
+        requested_torque_percent: Signal::Value(33.0),
     };
     let encoded_tsc1 = tsc1.encode();
     assert_eq!(Tsc1::decode(&encoded_tsc1), Some(tsc1));
-    for reserved in [0xFB, 0xFE, 0xFF] {
-        let mut bad = encoded_tsc1;
-        bad[3] = reserved;
-        assert_eq!(Tsc1::decode(&bad), None);
+    // A request that governs speed only leaves torque at the sentinel: that is
+    // a command to obey, not a frame to discard.
+    for (reserved, expected) in [
+        (0xFBu8, Signal::NotAvailable),
+        (0xFE, Signal::Error),
+        (0xFF, Signal::NotAvailable),
+    ] {
+        let mut special = encoded_tsc1;
+        special[3] = reserved;
+        let decoded = Tsc1::decode(&special)
+            .unwrap_or_else(|| panic!("torque raw 0x{reserved:02X} must not drop the command"));
+        assert_eq!(decoded.requested_torque_percent, expected);
+        assert_eq!(decoded.override_mode, OverrideControlMode::SpeedTorqueLimit);
+        assert_signal_close(decoded.requested_speed_rpm, 2_000.0);
     }
     let saturated_tsc1 = Tsc1 {
-        requested_torque_percent: 10_000.0,
+        requested_torque_percent: Signal::Value(10_000.0),
         ..tsc1
     }
     .encode();
@@ -1016,17 +1061,21 @@ fn powertrain_remaining_scalar_decoders_reject_not_available_sentinels() {
 
     let tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedTorqueLimit,
-        requested_speed_rpm: 2_000.0,
-        requested_torque_percent: 33.0,
+        requested_speed_rpm: Signal::Value(2_000.0),
+        requested_torque_percent: Signal::Value(33.0),
     };
     let encoded_tsc1 = tsc1.encode();
     assert!(Tsc1::decode(&encoded_tsc1).is_some());
-    let mut bad_tsc1_speed = encoded_tsc1;
-    bad_tsc1_speed[1..3].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(Tsc1::decode(&bad_tsc1_speed), None);
-    let mut bad_tsc1_torque = encoded_tsc1;
-    bad_tsc1_torque[3] = 0xFF;
-    assert_eq!(Tsc1::decode(&bad_tsc1_torque), None);
+    let mut absent_tsc1_speed = encoded_tsc1;
+    absent_tsc1_speed[1..3].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = Tsc1::decode(&absent_tsc1_speed).expect("a torque-only request is valid");
+    assert_eq!(decoded.requested_speed_rpm, Signal::NotAvailable);
+    assert_signal_close(decoded.requested_torque_percent, 33.0);
+    let mut absent_tsc1_torque = encoded_tsc1;
+    absent_tsc1_torque[3] = 0xFF;
+    let decoded = Tsc1::decode(&absent_tsc1_torque).expect("a speed-only request is valid");
+    assert_eq!(decoded.requested_torque_percent, Signal::NotAvailable);
+    assert_signal_close(decoded.requested_speed_rpm, 2_000.0);
 
     let vep = Vep1 {
         battery_voltage_v: Signal::Value(12.5),
@@ -1347,14 +1396,14 @@ fn powertrain_aftertreatment1_rejects_reserved_status_bytes_and_ambient_shape() 
 fn powertrain_tsc1_round_trips_mode_speed_and_torque() {
     let tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedTorqueLimit,
-        requested_speed_rpm: 2_000.0,
-        requested_torque_percent: 33.0,
+        requested_speed_rpm: Signal::Value(2_000.0),
+        requested_torque_percent: Signal::Value(33.0),
     };
     let decoded = Tsc1::decode(&tsc1.encode()).unwrap();
 
     assert_eq!(decoded.override_mode, OverrideControlMode::SpeedTorqueLimit);
-    assert_close(decoded.requested_speed_rpm, 2_000.0);
-    assert_close(decoded.requested_torque_percent, 33.0);
+    assert_signal_close(decoded.requested_speed_rpm, 2_000.0);
+    assert_signal_close(decoded.requested_torque_percent, 33.0);
 }
 
 #[test]
@@ -1367,8 +1416,8 @@ fn powertrain_tsc1_rejects_reserved_control_bits_before_command_use() {
     ] {
         let command = Tsc1 {
             override_mode: mode,
-            requested_speed_rpm: 1_250.0,
-            requested_torque_percent: -12.0,
+            requested_speed_rpm: Signal::Value(1_250.0),
+            requested_torque_percent: Signal::Value(-12.0),
         };
         let encoded = command.encode();
         assert_eq!(Tsc1::decode(&encoded), Some(command));
@@ -1407,8 +1456,8 @@ fn powertrain_public_override_control_mode_decoder_rejects_noncanonical_bytes() 
 
     let command = Tsc1 {
         override_mode: OverrideControlMode::SpeedControl,
-        requested_speed_rpm: 1_500.0,
-        requested_torque_percent: 10.0,
+        requested_speed_rpm: Signal::Value(1_500.0),
+        requested_torque_percent: Signal::Value(10.0),
     };
     assert_eq!(
         Tsc1::decode(&command.encode())

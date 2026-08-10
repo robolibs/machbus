@@ -377,20 +377,20 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
         (
             "eec2_clamped_inputs",
             Eec2 {
-                accel_pedal_position: 0xFE,
-                engine_load_percent: 99_999.0,
+                accel_pedal_position: Signal::Error,
+                engine_load_percent: sig(99_999.0),
                 accel_pedal_low_idle: 3,
                 accel_pedal_kickdown: 3,
-                road_speed_limit: 0xFE,
+                road_speed_limit: Signal::Error,
             }
             .encode(),
         ),
         (
             "eec3_clamped_inputs",
             Eec3 {
-                nominal_friction_percent: 99_999.0,
-                desired_operating_speed_rpm: 99_999.0,
-                operating_speed_asymmetry: 0xFE,
+                nominal_friction_percent: sig(99_999.0),
+                desired_operating_speed_rpm: sig(99_999.0),
+                operating_speed_asymmetry: Signal::Error,
             }
             .encode(),
         ),
@@ -451,8 +451,8 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
             "tsc1_clamped_inputs",
             Tsc1 {
                 override_mode: OverrideControlMode::SpeedTorqueLimit,
-                requested_speed_rpm: 99_999.0,
-                requested_torque_percent: 99_999.0,
+                requested_speed_rpm: sig(99_999.0),
+                requested_torque_percent: sig(99_999.0),
             }
             .encode(),
         ),
@@ -577,18 +577,18 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         Eec2 {
-            accel_pedal_position: 0xFE,
-            engine_load_percent: 250.0,
+            accel_pedal_position: Signal::Error,
+            engine_load_percent: sig(250.0),
             accel_pedal_low_idle: 0,
             accel_pedal_kickdown: 0,
-            road_speed_limit: 0xFE,
+            road_speed_limit: Signal::Error,
         }
         .encode(),
         eec2_upper
     );
     let decoded = Eec2::decode(&eec2_upper).unwrap();
-    assert_eq!(decoded.accel_pedal_position, 0xFE);
-    assert_eq!(decoded.engine_load_percent, 250.0);
+    assert_eq!(decoded.accel_pedal_position, Signal::Error);
+    assert_sig(decoded.engine_load_percent, 250.0, 0.0);
 
     let eec2_error = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -596,11 +596,11 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     );
     assert_eq!(
         Eec2 {
-            accel_pedal_position: 0,
-            engine_load_percent: 0.0,
+            accel_pedal_position: sig(0.0),
+            engine_load_percent: sig(0.0),
             accel_pedal_low_idle: 3,
             accel_pedal_kickdown: 3,
-            road_speed_limit: 0,
+            road_speed_limit: sig(0.0),
         }
         .encode(),
         eec2_error
@@ -612,31 +612,32 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     let eec3_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec3_raw_min");
     assert_eq!(
         Eec3 {
-            nominal_friction_percent: -125.0,
-            desired_operating_speed_rpm: 0.0,
-            operating_speed_asymmetry: 0,
+            nominal_friction_percent: sig(-125.0),
+            desired_operating_speed_rpm: sig(0.0),
+            operating_speed_asymmetry: sig(0.0),
         }
         .encode(),
         eec3_min
     );
-    assert_eq!(
+    assert_sig(
         Eec3::decode(&eec3_min).unwrap().nominal_friction_percent,
-        -125.0
+        -125.0,
+        0.0,
     );
 
     let eec3_upper = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec3_upper_edge");
     assert_eq!(
         Eec3 {
-            nominal_friction_percent: 125.0,
-            desired_operating_speed_rpm: 8191.625,
-            operating_speed_asymmetry: 0xFE,
+            nominal_friction_percent: sig(125.0),
+            desired_operating_speed_rpm: sig(8_191.625),
+            operating_speed_asymmetry: Signal::Error,
         }
         .encode(),
         eec3_upper
     );
     let decoded = Eec3::decode(&eec3_upper).unwrap();
-    assert_eq!(decoded.desired_operating_speed_rpm, 8191.625);
-    assert_eq!(decoded.operating_speed_asymmetry, 0xFE);
+    assert_sig(decoded.desired_operating_speed_rpm, 8_191.625, 0.0);
+    assert_eq!(decoded.operating_speed_asymmetry, Signal::Error);
 
     let temp1_min =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "engine_temp1_raw_min");
@@ -761,15 +762,16 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     assert_eq!(
         Tsc1 {
             override_mode: OverrideControlMode::NoOverride,
-            requested_speed_rpm: 0.0,
-            requested_torque_percent: -125.0,
+            requested_speed_rpm: sig(0.0),
+            requested_torque_percent: sig(-125.0),
         }
         .encode(),
         tsc1_min
     );
-    assert_eq!(
+    assert_sig(
         Tsc1::decode(&tsc1_min).unwrap().requested_torque_percent,
-        -125.0
+        -125.0,
+        0.0,
     );
 
     let tsc1_upper = parse_named_hex_frame(
@@ -779,15 +781,15 @@ fn fixture_j1939_engine_powertrain_default_and_sentinel_vectors_are_stable() {
     assert_eq!(
         Tsc1 {
             override_mode: OverrideControlMode::SpeedTorqueLimit,
-            requested_speed_rpm: 8191.625,
-            requested_torque_percent: 125.0,
+            requested_speed_rpm: sig(8191.625),
+            requested_torque_percent: sig(125.0),
         }
         .encode(),
         tsc1_upper
     );
     let decoded = Tsc1::decode(&tsc1_upper).unwrap();
     assert_eq!(decoded.override_mode, OverrideControlMode::SpeedTorqueLimit);
-    assert_eq!(decoded.requested_speed_rpm, 8191.625);
+    assert_sig(decoded.requested_speed_rpm, 8191.625, 0.0);
 
     let vep1_min = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "vep1_raw_min");
     assert_eq!(

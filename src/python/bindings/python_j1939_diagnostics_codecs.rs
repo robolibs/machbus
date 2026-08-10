@@ -61,23 +61,25 @@ impl PyEec1 {
 #[pyclass(name = "Eec2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec2 {
-    pub accel_pedal_position: u8,
-    pub engine_load_percent: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub accel_pedal_position: Option<f64>,
+    pub engine_load_percent: Option<f64>,
     pub accel_pedal_low_idle: u8,
     pub accel_pedal_kickdown: u8,
-    pub road_speed_limit: u8,
+    pub road_speed_limit: Option<f64>,
 }
 
 #[pymethods]
 impl PyEec2 {
     #[new]
-    #[pyo3(signature = (accel_pedal_position=0xFF, engine_load_percent=0.0, accel_pedal_low_idle=0x03, accel_pedal_kickdown=0x03, road_speed_limit=0xFF))]
+    #[pyo3(signature = (accel_pedal_position=None, engine_load_percent=None, accel_pedal_low_idle=0x03, accel_pedal_kickdown=0x03, road_speed_limit=None))]
     fn new(
-        accel_pedal_position: u8,
-        engine_load_percent: f64,
+        accel_pedal_position: Option<f64>,
+        engine_load_percent: Option<f64>,
         accel_pedal_low_idle: u8,
         accel_pedal_kickdown: u8,
-        road_speed_limit: u8,
+        road_speed_limit: Option<f64>,
     ) -> Self {
         Self {
             accel_pedal_position,
@@ -90,27 +92,27 @@ impl PyEec2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec2::decode(&data).map(|e| Self {
-            accel_pedal_position: e.accel_pedal_position,
-            engine_load_percent: e.engine_load_percent,
+            accel_pedal_position: e.accel_pedal_position.value(),
+            engine_load_percent: e.engine_load_percent.value(),
             accel_pedal_low_idle: e.accel_pedal_low_idle,
             accel_pedal_kickdown: e.accel_pedal_kickdown,
-            road_speed_limit: e.road_speed_limit,
+            road_speed_limit: e.road_speed_limit.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec2 {
-            accel_pedal_position: self.accel_pedal_position,
-            engine_load_percent: self.engine_load_percent,
+            accel_pedal_position: py_signal(self.accel_pedal_position),
+            engine_load_percent: py_signal(self.engine_load_percent),
             accel_pedal_low_idle: self.accel_pedal_low_idle,
             accel_pedal_kickdown: self.accel_pedal_kickdown,
-            road_speed_limit: self.road_speed_limit,
+            road_speed_limit: py_signal(self.road_speed_limit),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Eec2(engine_load_percent={:.1}, accel_pedal_position={})",
+            "Eec2(engine_load_percent={:?}, accel_pedal_position={:?})",
             self.engine_load_percent, self.accel_pedal_position
         )
     }
@@ -120,19 +122,21 @@ impl PyEec2 {
 #[pyclass(name = "Eec3", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec3 {
-    pub nominal_friction_percent: f64,
-    pub desired_operating_speed_rpm: f64,
-    pub operating_speed_asymmetry: u8,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub nominal_friction_percent: Option<f64>,
+    pub desired_operating_speed_rpm: Option<f64>,
+    pub operating_speed_asymmetry: Option<f64>,
 }
 
 #[pymethods]
 impl PyEec3 {
     #[new]
-    #[pyo3(signature = (nominal_friction_percent=0.0, desired_operating_speed_rpm=0.0, operating_speed_asymmetry=0xFF))]
+    #[pyo3(signature = (nominal_friction_percent=None, desired_operating_speed_rpm=None, operating_speed_asymmetry=None))]
     fn new(
-        nominal_friction_percent: f64,
-        desired_operating_speed_rpm: f64,
-        operating_speed_asymmetry: u8,
+        nominal_friction_percent: Option<f64>,
+        desired_operating_speed_rpm: Option<f64>,
+        operating_speed_asymmetry: Option<f64>,
     ) -> Self {
         Self {
             nominal_friction_percent,
@@ -143,23 +147,23 @@ impl PyEec3 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec3::decode(&data).map(|e| Self {
-            nominal_friction_percent: e.nominal_friction_percent,
-            desired_operating_speed_rpm: e.desired_operating_speed_rpm,
-            operating_speed_asymmetry: e.operating_speed_asymmetry,
+            nominal_friction_percent: e.nominal_friction_percent.value(),
+            desired_operating_speed_rpm: e.desired_operating_speed_rpm.value(),
+            operating_speed_asymmetry: e.operating_speed_asymmetry.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec3 {
-            nominal_friction_percent: self.nominal_friction_percent,
-            desired_operating_speed_rpm: self.desired_operating_speed_rpm,
-            operating_speed_asymmetry: self.operating_speed_asymmetry,
+            nominal_friction_percent: py_signal(self.nominal_friction_percent),
+            desired_operating_speed_rpm: py_signal(self.desired_operating_speed_rpm),
+            operating_speed_asymmetry: py_signal(self.operating_speed_asymmetry),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Eec3(desired_operating_speed_rpm={:.1})",
+            "Eec3(desired_operating_speed_rpm={:?})",
             self.desired_operating_speed_rpm
         )
     }
@@ -438,16 +442,22 @@ impl PyFuelEconomy {
 #[pyclass(name = "Tsc1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyTsc1 {
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
     pub override_mode: u8,
-    pub requested_speed_rpm: f64,
-    pub requested_torque_percent: f64,
+    pub requested_speed_rpm: Option<f64>,
+    pub requested_torque_percent: Option<f64>,
 }
 
 #[pymethods]
 impl PyTsc1 {
     #[new]
-    #[pyo3(signature = (override_mode=0, requested_speed_rpm=0.0, requested_torque_percent=0.0))]
-    fn new(override_mode: u8, requested_speed_rpm: f64, requested_torque_percent: f64) -> Self {
+    #[pyo3(signature = (override_mode=0, requested_speed_rpm=None, requested_torque_percent=None))]
+    fn new(
+        override_mode: u8,
+        requested_speed_rpm: Option<f64>,
+        requested_torque_percent: Option<f64>,
+    ) -> Self {
         Self {
             override_mode,
             requested_speed_rpm,
@@ -458,22 +468,22 @@ impl PyTsc1 {
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Tsc1::decode(&data).map(|e| Self {
             override_mode: e.override_mode.as_u8(),
-            requested_speed_rpm: e.requested_speed_rpm,
-            requested_torque_percent: e.requested_torque_percent,
+            requested_speed_rpm: e.requested_speed_rpm.value(),
+            requested_torque_percent: e.requested_torque_percent.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Tsc1 {
             override_mode: crate::j1939::OverrideControlMode::from_u8(self.override_mode),
-            requested_speed_rpm: self.requested_speed_rpm,
-            requested_torque_percent: self.requested_torque_percent,
+            requested_speed_rpm: py_signal(self.requested_speed_rpm),
+            requested_torque_percent: py_signal(self.requested_torque_percent),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Tsc1(override_mode={}, requested_speed_rpm={:.1})",
+            "Tsc1(override_mode={}, requested_speed_rpm={:?})",
             self.override_mode, self.requested_speed_rpm
         )
     }

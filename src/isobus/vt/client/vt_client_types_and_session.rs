@@ -1459,7 +1459,14 @@ impl VTClient {
         if msg.data.len() != 8 {
             return;
         }
-        if msg.data[1] == 0 {
+        // Annex D.3: byte 2 is the Version Number and byte 3 is the Status
+        // ("0 = There can be enough memory / 1 = There is not enough memory
+        // available. Do not transmit Object Pool."). Reading the status out of
+        // the version byte meant every VT reporting version >= 1 — that is,
+        // every VT built after 2001 — aborted before the pool was uploaded, so
+        // the machine's operator interface never appeared.
+        self.vt_version = u16::from(msg.data[1]);
+        if msg.data[2] == 0 {
             self.transition(VTState::UploadPool);
         } else {
             self.transition(VTState::Disconnected);

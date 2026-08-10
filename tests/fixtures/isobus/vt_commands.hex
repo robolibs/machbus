@@ -7,7 +7,12 @@
 vt_status_vt5_no_active_ws=FEFE00FE00000500
 working_set_master_one_member=01FFFFFFFFFFFFFF
 get_memory_valid_ws_datamask=C018000000FFFFFF
-get_memory_response_success=C00000FFFFFFFFFF
+# Annex D.3: byte 2 is the VT's ISO 11783-6 version (5 = Third Edition, the
+# server default), byte 3 the status (0 = there can be enough memory). This
+# previously read C00000..., which claimed version 0 — the 2001 Agritechnica
+# limited feature set — and matched a client that read the status out of the
+# version byte.
+get_memory_response_success=C00500FFFFFFFFFF
 object_pool_transfer_valid_ws_datamask=110100000000000001000002000000000002000100ffff0000
 object_pool_transfer_empty=11
 object_pool_transfer_partial_header=110100

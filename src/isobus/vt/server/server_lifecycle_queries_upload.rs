@@ -529,9 +529,12 @@ impl VTServer {
             client.pool_upload_allowed = true;
             client.pool_activation_pending = false;
         }
+        // Annex D.3: byte 2 is this VT's version of ISO 11783-6, byte 3 the
+        // status. Reporting 0 claimed the 2001 Agritechnica limited feature
+        // set regardless of what the server is configured to support.
         let mut data = [0xFFu8; 8];
         data[0] = cmd::GET_MEMORY_RESPONSE;
-        data[1] = 0x00;
+        data[1] = self.config.vt_version as u8;
         data[2] = 0x00;
         if matches!(self.state(), VTServerState::WaitForClientStatus) {
             self.transition(VTServerState::WaitForPoolUpload);

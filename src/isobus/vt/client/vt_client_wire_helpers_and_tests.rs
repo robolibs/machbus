@@ -119,10 +119,19 @@ mod tests {
         Message::new(PGN_VT_TO_ECU, data, src)
     }
 
+    /// Annex D.3 Get Memory response: byte 2 is the VT's ISO 11783-6 version,
+    /// byte 3 the status. This helper used to put the status in byte 2, which
+    /// is where the version lives — so the tests only ever exercised a VT
+    /// claiming version 0, and the client's mis-read went unnoticed.
     fn fixed_response(function: u8, status: u8) -> Vec<u8> {
+        get_memory_response(function, 5, status)
+    }
+
+    fn get_memory_response(function: u8, vt_version: u8, status: u8) -> Vec<u8> {
         let mut data = [0xFFu8; 8];
         data[0] = function;
-        data[1] = status;
+        data[1] = vt_version;
+        data[2] = status;
         data.to_vec()
     }
 
@@ -322,6 +331,65 @@ mod tests {
         let _ = c.update(1_000);
         c.handle_vt_message(&vt_msg(end_of_pool_response(0x00, 0x00), 0x80));
         assert_eq!(c.state(), VTState::Connected);
+    }
+
+    /// P4.1 — the client read the Get Memory status out of byte 2, which
+    /// Annex D.3 defines as the Version Number. Every VT reporting version >= 1
+    /// therefore looked like "not enough memory" and the session aborted before
+    /// the pool was uploaded, so the machine's operator interface never
+    /// appeared on the terminal.
+    #[test]
+    fn get_memory_response_reads_status_not_version() {
+        for vt_version in 0u8..=6 {
+            let mut c = VTClient::new(VTClientConfig::default());
+            c.set_object_pool(dummy_pool());
+            c.connect().unwrap();
+            let mut status = vec![cmd::VT_STATUS];
+            status.resize(8, 0xFF);
+            status[6] = 4;
+            c.handle_vt_message(&vt_msg(status, 0x80));
+            let _ = c.update(1);
+            let _ = c.update(1);
+
+            c.handle_vt_message(&vt_msg(
+                get_memory_response(cmd::GET_MEMORY_RESPONSE, vt_version, 0x00),
+                0x80,
+            ));
+            assert_eq!(
+                c.state(),
+                VTState::UploadPool,
+                "a VT reporting version {vt_version} with enough memory must be uploaded to"
+            );
+            assert_eq!(
+                c.vt_version_value(),
+                u16::from(vt_version),
+                "the version byte must be recorded, not consumed as a status"
+            );
+        }
+    }
+
+    /// The other half: a genuine out-of-memory refusal must still abort.
+    #[test]
+    fn get_memory_response_honours_a_real_refusal() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        let mut status = vec![cmd::VT_STATUS];
+        status.resize(8, 0xFF);
+        status[6] = 4;
+        c.handle_vt_message(&vt_msg(status, 0x80));
+        let _ = c.update(1);
+        let _ = c.update(1);
+
+        c.handle_vt_message(&vt_msg(
+            get_memory_response(cmd::GET_MEMORY_RESPONSE, 5, 0x01),
+            0x80,
+        ));
+        assert_eq!(
+            c.state(),
+            VTState::Disconnected,
+            "'do not transmit object pool' must not be uploaded through"
+        );
     }
 
     #[test]

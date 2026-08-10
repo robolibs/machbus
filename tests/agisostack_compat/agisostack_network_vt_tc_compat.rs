@@ -755,9 +755,11 @@ fn connect_agisostack_vt_client() -> VTClient {
     let _ = client.update(1);
     let _ = client.update(1);
 
+    // ISO 11783-6 Annex D.3: byte 2 is the VT version, byte 3 the status.
     let mut memory_response = [0xFFu8; 8];
     memory_response[0] = vt_cmd::GET_MEMORY_RESPONSE;
-    memory_response[1] = 0x00;
+    memory_response[1] = 5;
+    memory_response[2] = 0x00;
     client.handle_vt_message(&vt_message(memory_response.to_vec(), 0x26));
     let _ = client.update(1);
     let _ = client.update(1_000);

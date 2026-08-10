@@ -8,6 +8,7 @@
 //! This module adds the two status messages and the counter they both carry —
 //! the layer that lets a TIM couple notice each other going away.
 
+use super::automation::AutomationState;
 use crate::net::types::Pgn;
 
 /// TIM server → TIM client, PDU1, default priority 6 (A.2.2).
@@ -169,12 +170,69 @@ impl TimSystemState {
     }
 }
 
+/// Annex C.2 byte 4 bits 4-1 — whether the system's preconditions for TIM
+/// operation are met.
+///
+/// "All TIM participants shall use the TIM system operation state information
+/// of the TIM server master to determine if for TIM automation the TIM system
+/// is in the standstill state." The whole byte was absent from the codec, so a
+/// client had no way to learn it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum TimSystemOperationState {
+    /// Conditions are not fulfilled for any TIM system operation state.
+    NotFulfilled = 0x0,
+    /// Speed at or above standstill and the operator is present.
+    NormalOperation = 0x1,
+    /// Speed below standstill and the operator is present.
+    StandstillOperation = 0x2,
+    /// Speed below standstill and the operator voluntarily activated the mode.
+    StationaryOperation = 0x3,
+    Error = 0xE,
+    #[default]
+    NotAvailable = 0xF,
+}
+
+impl TimSystemOperationState {
+    #[must_use]
+    pub const fn from_u8(raw: u8) -> Option<Self> {
+        match raw & 0x0F {
+            0x0 => Some(Self::NotFulfilled),
+            0x1 => Some(Self::NormalOperation),
+            0x2 => Some(Self::StandstillOperation),
+            0x3 => Some(Self::StationaryOperation),
+            0xE => Some(Self::Error),
+            0xF => Some(Self::NotAvailable),
+            // 0x4..=0xD are reserved.
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// `true` only for a state a TIM client may automate in.
+    #[must_use]
+    pub const fn permits_automation(self) -> bool {
+        matches!(
+            self,
+            Self::NormalOperation | Self::StandstillOperation | Self::StationaryOperation
+        )
+    }
+}
+
 /// `TIM_ServerStatus_Msg` — Annex C.2. Broadcast every 100 ms at priority 4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimServerStatus {
     pub counter: HeartbeatCounter,
     pub master: TimServerMaster,
     pub system_state: TimSystemState,
+    /// Byte 4 bits 8-5, "related to values of D.2.2".
+    pub server_state: AutomationState,
+    /// Byte 4 bits 4-1.
+    pub operation_state: TimSystemOperationState,
 }
 
 impl Default for TimServerStatus {
@@ -183,6 +241,8 @@ impl Default for TimServerStatus {
             counter: HeartbeatCounter::Reset,
             master: TimServerMaster::NotAvailable,
             system_state: TimSystemState::NotAvailable,
+            server_state: AutomationState::NotAvailable,
+            operation_state: TimSystemOperationState::NotAvailable,
         }
     }
 }
@@ -194,18 +254,22 @@ impl TimServerStatus {
         data[0] = MSG_CODE_SERVER_STATUS;
         data[1] = self.counter.as_u8();
         data[2] = ((self.master.as_u8() & 0x0F) << 4) | (self.system_state.as_u8() & 0x0F);
+        data[3] =
+            ((self.server_state.as_u8() & 0x0F) << 4) | (self.operation_state.as_u8() & 0x0F);
         data
     }
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 3 || data[0] != MSG_CODE_SERVER_STATUS {
+        if data.len() < 4 || data[0] != MSG_CODE_SERVER_STATUS {
             return None;
         }
         Some(Self {
             counter: HeartbeatCounter::from_u8(data[1])?,
             master: TimServerMaster::from_u8(data[2] >> 4)?,
             system_state: TimSystemState::from_u8(data[2] & 0x0F)?,
+            server_state: AutomationState::from_u8(data[3] >> 4)?,
+            operation_state: TimSystemOperationState::from_u8(data[3] & 0x0F)?,
         })
     }
 }
@@ -340,6 +404,8 @@ mod tests {
             counter: HeartbeatCounter::Count(0x42),
             master: TimServerMaster::ActingAutomationAllowed,
             system_state: TimSystemState::AutomationActive,
+            server_state: AutomationState::ActiveNotLimited,
+            operation_state: TimSystemOperationState::StandstillOperation,
         };
         let bytes = status.encode();
         assert_eq!(
@@ -351,7 +417,31 @@ mod tests {
             bytes[2], 0x15,
             "master in bits 8-5, system state in bits 4-1"
         );
+        // H66 — byte 4 was absent entirely, so a client could not learn the
+        // server state or whether the system's operating preconditions were
+        // met. "All TIM participants shall use the TIM system operation state
+        // information of the TIM server master to determine if for TIM
+        // automation the TIM system is in the standstill state."
+        assert_eq!(
+            bytes[3], 0x52,
+            "server state in bits 8-5, system operation state in bits 4-1"
+        );
         assert_eq!(TimServerStatus::decode(&bytes), Some(status));
+
+        // A three-byte frame is no longer a complete server status.
+        assert_eq!(TimServerStatus::decode(&bytes[..3]), None);
+
+        // Only the three fulfilled states permit automation.
+        assert!(!TimSystemOperationState::NotFulfilled.permits_automation());
+        assert!(!TimSystemOperationState::NotAvailable.permits_automation());
+        assert!(!TimSystemOperationState::Error.permits_automation());
+        assert!(TimSystemOperationState::NormalOperation.permits_automation());
+        assert!(TimSystemOperationState::StationaryOperation.permits_automation());
+
+        // 0x4..=0xD are reserved in the operation-state nibble.
+        for reserved in 0x4u8..=0xD {
+            assert_eq!(TimSystemOperationState::from_u8(reserved), None, "{reserved:#x}");
+        }
 
         // A different message code on the same PGN is a different message.
         let mut wrong_code = bytes;

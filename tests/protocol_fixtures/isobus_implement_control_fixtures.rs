@@ -280,7 +280,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let machine_info = GuidanceMachineInfo {
-        estimated_curvature: Some(-2.5),
+        estimated_curvature: Signal::Value(-2.5),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,

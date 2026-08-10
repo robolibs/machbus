@@ -514,7 +514,7 @@ fn guidance_machine_info_reaches_the_controller() {
 
     // B acts as the steering ECU and broadcasts machine info (PGN 0xAC00).
     let info = GuidanceMachineInfo {
-        estimated_curvature: Some(1.25),
+        estimated_curvature: Signal::Value(1.25),
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         ..Default::default()
     };
@@ -541,7 +541,7 @@ fn guidance_machine_info_reaches_the_controller() {
     assert!(got, "controller should receive guidance machine info");
     assert!(
         bus.a
-            .with::<Guidance, _>(|g| g.estimated_curvature().is_some())
+            .with::<Guidance, _>(|g| g.estimated_curvature().value().is_some())
             .unwrap_or(false),
         "controller should cache the steering ECU's estimated curvature"
     );

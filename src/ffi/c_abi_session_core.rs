@@ -2054,8 +2054,10 @@ pub extern "C" fn machbus_session_guidance_estimated_curvature(
     let Some(curvature) = handle_ref(h)
         .ok()
         .and_then(|h| h.session.get::<Guidance>())
-        .and_then(|g| g.estimated_curvature())
+        .and_then(|g| g.estimated_curvature().value())
     else {
+        // A steering ECU declaring a sensor fault and one that is simply idle
+        // both return false here; use the Rust `Signal` API to tell them apart.
         return false;
     };
     if !out.is_null() {

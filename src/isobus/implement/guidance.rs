@@ -5,6 +5,8 @@
 //! (PGN 0xAD00, in `drive_strategy.rs`); both share the curvature scaling
 //! rule (0.25 km⁻¹/bit, offset −8032).
 
+use crate::isobus::implement::Signal;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum MechanicalLockout {
@@ -200,12 +202,16 @@ fn encode_curvature(curvature_per_km: f64) -> u16 {
     ((clamped + CURVATURE_OFFSET_PER_KM) / CURVATURE_RESOLUTION_PER_KM) as u16
 }
 
+/// Band SPN 1817 per ISO 11783-7 §5.2.4 Table 1 (16-bit row).
 #[inline]
-fn decode_curvature(raw: u16) -> Option<f64> {
-    if raw == CURVATURE_NOT_AVAILABLE_RAW || raw > CURVATURE_MAX_RAW {
-        None
-    } else {
-        Some(raw as f64 * CURVATURE_RESOLUTION_PER_KM - CURVATURE_OFFSET_PER_KM)
+fn decode_curvature(raw: u16) -> Signal<f64> {
+    match raw {
+        0..=CURVATURE_MAX_RAW => {
+            Signal::Value(f64::from(raw) * CURVATURE_RESOLUTION_PER_KM - CURVATURE_OFFSET_PER_KM)
+        }
+        0xFE00..=0xFEFF => Signal::Error,
+        // Includes the reserved band: nothing meaningful to report.
+        _ => Signal::NotAvailable,
     }
 }
 
@@ -222,14 +228,20 @@ fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuidanceMachineInfo {
     /// 1/km, 0.25/km per bit offset −8032.
-    /// SPN 1817 estimated curvature, or `None` when the steering system
-    /// reports it as not-available.
+    /// SPN 1817 estimated curvature.
     ///
     /// This used to be a plain `f64` and a not-available reading dropped the
     /// **whole** PG — so the lockout, readiness, limit status and exit reason
     /// went with it, and a steering ECU that simply was not steering read as a
     /// dead link (G4).
-    pub estimated_curvature: Option<f64>,
+    ///
+    /// It is a `Signal` rather than an `Option` because ISO 11783-7 §5.2.4
+    /// keeps two outcomes apart that an `Option` collapses: the error band
+    /// (`FE00..=FEFF`) is the ECU *declaring a sensor or sub-system fault*,
+    /// while the not-available band (`FF00..=FFFF`) is an idle ECU that simply
+    /// does not populate the parameter. An autonomy supervisor has to treat a
+    /// faulted steering sensor differently from an idle one.
+    pub estimated_curvature: Signal<f64>,
     /// SPN 5243, bits 0..1 of byte 2.
     pub lockout: MechanicalLockout,
     /// SPN 5242, bits 2..3 of byte 2.
@@ -249,7 +261,7 @@ pub struct GuidanceMachineInfo {
 impl Default for GuidanceMachineInfo {
     fn default() -> Self {
         Self {
-            estimated_curvature: None,
+            estimated_curvature: Signal::NotAvailable,
             lockout: MechanicalLockout::NotAvailable,
             steering_system_readiness_state: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
             steering_input_position_status: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
@@ -265,9 +277,13 @@ impl GuidanceMachineInfo {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let raw = self
-            .estimated_curvature
-            .map_or(CURVATURE_NOT_AVAILABLE_RAW, encode_curvature);
+        // Round-trip the distinction: a declared fault must not read back as
+        // an idle ECU.
+        let raw = match self.estimated_curvature {
+            Signal::Value(v) => encode_curvature(v),
+            Signal::Error => 0xFEFF,
+            Signal::NotAvailable => CURVATURE_NOT_AVAILABLE_RAW,
+        };
         data[0] = (raw & 0xFF) as u8;
         data[1] = ((raw >> 8) & 0xFF) as u8;
         data[2] = (self.lockout.as_u8() & 0x03)
@@ -333,7 +349,7 @@ mod tests {
         let frame = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
         let info =
             GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
-        assert!(info.estimated_curvature.is_some_and(|k| (k + 7.0).abs() < 0.25));
+        assert!(info.estimated_curvature.value().is_some_and(|k| (k + 7.0).abs() < 0.25));
         assert_eq!(info.lockout, MechanicalLockout::NotActive);
         assert_eq!(
             info.guidance_limit_status,
@@ -344,7 +360,7 @@ mod tests {
     #[test]
     fn machine_info_round_trip() {
         let m = GuidanceMachineInfo {
-            estimated_curvature: Some(-2.5),
+            estimated_curvature: Signal::Value(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -354,7 +370,12 @@ mod tests {
             remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
         };
         let decoded = GuidanceMachineInfo::decode(&m.encode()).unwrap();
-        assert!(decoded.estimated_curvature.is_some_and(|k| (k + 2.5).abs() < 0.25));
+        assert!(
+            decoded
+                .estimated_curvature
+                .value()
+                .is_some_and(|k| (k + 2.5).abs() < 0.25)
+        );
         assert_eq!(decoded.lockout, MechanicalLockout::Active);
         assert_eq!(
             decoded.steering_system_readiness_state,
@@ -384,7 +405,7 @@ mod tests {
     #[test]
     fn fixed_size_decoders_reject_bad_padding_and_reserved_controls() {
         let mut machine_bad_tail = GuidanceMachineInfo {
-            estimated_curvature: Some(-2.5),
+            estimated_curvature: Signal::Value(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -415,7 +436,7 @@ mod tests {
     #[test]
     fn curvature_encoding_clamps_and_rejects_not_available_sentinel() {
         let high = GuidanceMachineInfo {
-            estimated_curvature: Some(1.0e9),
+            estimated_curvature: Signal::Value(1.0e9),
             lockout: MechanicalLockout::NotActive,
             steering_system_readiness_state: GenericSaeBs02SlotValue::DisabledOffPassive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -429,7 +450,7 @@ mod tests {
             GuidanceMachineInfo::decode(&high)
                 .unwrap()
                 .estimated_curvature,
-            Some(CURVATURE_MAX_PER_KM)
+            Signal::Value(CURVATURE_MAX_PER_KM)
         );
     }
 
@@ -495,7 +516,7 @@ mod tests {
 
         let info = GuidanceMachineInfo::decode(&data)
             .expect("a not-available curvature must not drop the whole PG");
-        assert_eq!(info.estimated_curvature, None, "reported as absent");
+        assert_eq!(info.estimated_curvature, Signal::NotAvailable, "reported as absent");
         assert_eq!(info.lockout, MechanicalLockout::try_from_u8(0x01).unwrap());
         assert_eq!(info.guidance_system_command_exit_reason_code, 0x0A);
 
@@ -505,7 +526,22 @@ mod tests {
             GuidanceMachineInfo::decode(&reencoded)
                 .unwrap()
                 .estimated_curvature,
-            None
+            Signal::NotAvailable
+        );
+
+        // C6 — the error band is a *declared fault*, not the same thing as an
+        // idle ECU that does not populate the parameter (§5.2.4). Collapsing
+        // both into `None` made a failed steering sensor invisible.
+        let mut faulted = data;
+        faulted[0..2].copy_from_slice(&0xFEFFu16.to_le_bytes());
+        let info = GuidanceMachineInfo::decode(&faulted).expect("still decodes");
+        assert_eq!(info.estimated_curvature, Signal::Error);
+        assert_eq!(
+            GuidanceMachineInfo::decode(&info.encode())
+                .unwrap()
+                .estimated_curvature,
+            Signal::Error,
+            "a declared fault must survive a round trip as a fault"
         );
     }
 }

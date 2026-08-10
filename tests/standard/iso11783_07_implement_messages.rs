@@ -929,7 +929,7 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
     }
 
     let info = GuidanceMachineInfo {
-        estimated_curvature: Some(0.75),
+        estimated_curvature: Signal::Value(0.75),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::ErrorIndication,
@@ -944,7 +944,7 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
 #[test]
 fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     let info = GuidanceMachineInfo {
-        estimated_curvature: Some(-2.5),
+        estimated_curvature: Signal::Value(-2.5),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -955,7 +955,7 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     };
     let encoded = info.encode();
     let decoded = GuidanceMachineInfo::decode(&encoded).unwrap();
-    assert!(decoded.estimated_curvature.is_some_and(|k| (k + 2.5).abs() < 0.25));
+    assert!(decoded.estimated_curvature.value().is_some_and(|k| (k + 2.5).abs() < 0.25));
     assert_eq!(
         decoded.guidance_limit_status,
         GuidanceLimitStatus::LimitedLow

@@ -273,7 +273,7 @@ fn event_to_dict<'py>(py: Python<'py>, ev: &Event) -> PyResult<Bound<'py, PyDict
                 d.set_item("kind", "guidance")?;
                 d.set_item("sub", "machine_info")?;
                 d.set_item("source", *source)?;
-                d.set_item("estimated_curvature", *estimated_curvature)?;
+                d.set_item("estimated_curvature", estimated_curvature.value())?;
                 d.set_item("steering_ready", *steering_ready)?;
                 d.set_item("limit_status", *limit_status)?;
             }
@@ -1061,9 +1061,12 @@ impl PySession {
         Ok(self.guidance()?.is_engaged())
     }
 
-    /// The steering system's last reported estimated curvature (1/km), or `None`.
+    /// The steering system's last reported estimated curvature (1/km).
+    ///
+    /// `None` covers both "the ECU declared a sensor fault" and "the ECU does
+    /// not report this"; the Rust `Signal` API keeps them apart.
     fn guidance_estimated_curvature(&mut self) -> PyResult<Option<f64>> {
-        Ok(self.guidance()?.estimated_curvature())
+        Ok(self.guidance()?.estimated_curvature().value())
     }
 
     /// `True` if the steering system reports it is ready to be steered.

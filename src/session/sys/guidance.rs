@@ -19,7 +19,7 @@ pub enum GuidanceEvent {
         /// and negative follow the wire convention), or `None` when the ECU
         /// reports it as not-available — which is a normal state when it is not
         /// steering, and must not cost the rest of the report.
-        estimated_curvature: Option<f64>,
+        estimated_curvature: crate::isobus::implement::Signal<f64>,
         /// `true` when the steering system reports it is engaged / in a state
         /// that allows an external guidance command to steer.
         steering_ready: bool,

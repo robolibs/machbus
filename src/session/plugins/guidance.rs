@@ -370,8 +370,9 @@ impl Guidance {
 
     /// The steering system's last estimated curvature (1/km), if known.
     #[must_use]
-    pub fn estimated_curvature(&self) -> Option<f64> {
-        self.latest.and_then(|m| m.estimated_curvature)
+    pub fn estimated_curvature(&self) -> Signal<f64> {
+        self.latest
+            .map_or(Signal::NotAvailable, |m| m.estimated_curvature)
     }
 
     /// Whether the steering system last reported it is ready/engaged to steer.
@@ -741,7 +742,10 @@ mod tests {
             !g.is_steering_ready(),
             "this machine never asserts EnabledOnActive"
         );
-        assert!(g.estimated_curvature().is_some(), "est curvature is known");
+        assert!(
+            g.estimated_curvature().value().is_some(),
+            "est curvature is known"
+        );
 
         // No further frames past the timeout window ⇒ link decays to dead, but
         // the last readiness/curvature stays cached for display.

@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::thread::sleep;
     use std::time::{Duration, Instant as StdInstant};
 
+    use machbus::isobus::implement::Signal;
     use machbus::Instant;
     use machbus::net::Name;
     use machbus::session::plugins::Guidance;
@@ -122,13 +123,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "  t={t:4.1}s  cmd κ={kappa:7.2}/km  est κ={est:>9}  \
                      ready={steering_ready}  limit={limit_status}",
-                    est = estimated_curvature
-                        .map_or_else(|| "n/a".to_owned(), |k| format!("{k:7.2}/km"))
+                    // Three outcomes, not two: "err" is the steering ECU
+                    // declaring a sensor fault, "n/a" is an ECU that simply
+                    // does not report it.
+                    est = match estimated_curvature {
+                        Signal::Value(k) => format!("{k:7.2}/km"),
+                        Signal::Error => "err".to_owned(),
+                        Signal::NotAvailable => "n/a".to_owned(),
+                    }
                 );
             }
         }
         // Fine-control read-back is also available any time, without an event:
-        //   let est = ctrl.with::<Guidance, _>(|g| g.estimated_curvature()).flatten();
+        //   let est = ctrl.with::<Guidance, _>(|g| g.estimated_curvature());
         sleep(dt);
     }
 

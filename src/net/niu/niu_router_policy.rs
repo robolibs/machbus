@@ -118,14 +118,22 @@ pub enum NiuState {
     Error,
 }
 
+/// ISO 11783-4 Table 4 — filter mode.
+///
+/// The two values were bound the wrong way round: `0` was `BlockAll` and `1`
+/// was `PassAll`, which is the exact inverse of the table and of §6.2.2/§6.2.3.
+/// A bridge configured for the standard's "preferred mode of operation" was
+/// therefore blocking everything it should have forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum NiuFilterMode {
-    /// Block all by default; only listed PGNs pass.
-    BlockAll = 0,
-    /// Pass all by default; only listed PGNs are blocked.
+    /// `0` — "Block-specific PGNs (default = pass all)". §6.2.2: "the NIU shall
+    /// default to forwarding all messages"; listed PGNs are blocked.
     #[default]
-    PassAll = 1,
+    BlockSpecific = 0,
+    /// `1` — "Pass-specific PGNs (default = block all)". §6.2.3: "the NIU shall
+    /// default to not forwarding messages"; only listed PGNs pass.
+    PassSpecific = 1,
 }
 
 impl NiuFilterMode {
@@ -133,31 +141,69 @@ impl NiuFilterMode {
     #[must_use]
     pub const fn try_from_u8(value: u8) -> Option<Self> {
         match value {
-            0 => Some(Self::BlockAll),
-            1 => Some(Self::PassAll),
+            0 => Some(Self::BlockSpecific),
+            1 => Some(Self::PassSpecific),
             _ => None,
         }
     }
 }
 
-/// NIU Network Message function codes (ISO 11783-4 §6.5).
+/// NIU Network Message function codes — ISO 11783-4 Table 2.
+///
+/// Every value here previously disagreed with the table: the codes were a
+/// locally invented 1..=15 sequence, so no message this stack sent or accepted
+/// matched a conforming NIU. Two of the operations it defined —
+/// request/set filter mode — have no Table 2 code at all, and §6.6.2.3.3 says
+/// why: the filter mode "cannot be changed without clearing and rebuilding the
+/// database for that port pair", so it is configured out of band, not over the
+/// wire. They are gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum NiuFunction {
+    /// §6.6.2.3.1 — request a copy of the filter database (CF → NIU).
     #[default]
-    RequestFilterDb = 1,
+    RequestFilterDb = 0,
+    /// §6.6.2.3.2 — response to a filter-database request (NIU → CF).
+    FilterDbResponse = 1,
+    /// §6.6.2.3.3 — add an entry to the filter database (CF → NIU).
     AddFilterEntry = 2,
+    /// §6.6.2.3.4 — delete an entry from the filter database (CF → NIU).
     DeleteFilterEntry = 3,
-    DeleteAllEntries = 4,
-    RequestFilterMode = 5,
-    SetFilterMode = 6,
-    RequestPortConfig = 9,
-    PortConfigResponse = 10,
-    FilterDbResponse = 11,
-    RequestPortStats = 12,
-    PortStatsResponse = 13,
-    OpenConnection = 14,
-    CloseConnection = 15,
+    /// §6.6.2.3.5 — clear an entry from the filter database (CF → NIU).
+    ClearFilterEntry = 4,
+    // 5 is "Obsolete, not to be used" and is rejected on decode.
+    /// §6.6.2.3.6 — create a filter database entry (CF → NIU).
+    CreateFilterEntry = 6,
+    /// §6.6.2.3.7 — request to add NAME-qualified entries (CF → NIU).
+    AddNameQualifiedEntries = 7,
+    /// §6.7.2.1 — request a list of source addresses (CF → NIU).
+    RequestSourceAddressList = 64,
+    /// §6.7.2.2 — response to a source-address list request (NIU → CF).
+    SourceAddressListResponse = 65,
+    /// §6.7.2.3 — request a source address and NAME list (CF → NIU).
+    RequestSourceAddressNameList = 66,
+    /// §6.7.2.4 — response to a source address and NAME request (NIU → CF).
+    SourceAddressNameListResponse = 67,
+    /// §6.8.3.1 — request NIU general parametrics (CF → NIU).
+    RequestGeneralParametrics = 128,
+    /// §6.8.3.2 — response to a general-parametrics request (NIU → CF).
+    GeneralParametricsResponse = 129,
+    /// §6.8.3.3 — reset general statistic parameters (CF → NIU).
+    ResetGeneralStatistics = 130,
+    /// §6.8.4.1 — request NIU-specific parametrics (CF → NIU).
+    RequestSpecificParametrics = 131,
+    /// §6.8.4.2 — response to a specific-parametrics request (NIU → CF).
+    SpecificParametricsResponse = 132,
+    /// §6.8.4.3 — reset specific statistic parameters (CF → NIU).
+    ResetSpecificStatistics = 133,
+    /// §6.9.5.1 — request to open a connection (CF → NIU).
+    OpenConnection = 192,
+    /// §6.9.5.2 — response to an open-connection request (NIU → CF).
+    OpenConnectionResponse = 193,
+    /// §6.9.5.3 — request to close a connection (CF → NIU).
+    CloseConnection = 194,
+    /// §6.9.5.4 — response to a close-connection request (NIU → CF).
+    CloseConnectionResponse = 195,
 }
 
 impl NiuFunction {
@@ -169,24 +215,43 @@ impl NiuFunction {
         }
     }
 
+    /// Decode a Table 2 function code.
+    ///
+    /// Returns `None` for code 5 ("Obsolete, not to be used") and for every
+    /// reserved band: 8..=63, 68..=127, 134..=191 and 196..=255.
     #[must_use]
     pub const fn try_from_u8(value: u8) -> Option<Self> {
         match value {
-            1 => Some(Self::RequestFilterDb),
+            0 => Some(Self::RequestFilterDb),
+            1 => Some(Self::FilterDbResponse),
             2 => Some(Self::AddFilterEntry),
             3 => Some(Self::DeleteFilterEntry),
-            4 => Some(Self::DeleteAllEntries),
-            5 => Some(Self::RequestFilterMode),
-            6 => Some(Self::SetFilterMode),
-            9 => Some(Self::RequestPortConfig),
-            10 => Some(Self::PortConfigResponse),
-            11 => Some(Self::FilterDbResponse),
-            12 => Some(Self::RequestPortStats),
-            13 => Some(Self::PortStatsResponse),
-            14 => Some(Self::OpenConnection),
-            15 => Some(Self::CloseConnection),
+            4 => Some(Self::ClearFilterEntry),
+            6 => Some(Self::CreateFilterEntry),
+            7 => Some(Self::AddNameQualifiedEntries),
+            64 => Some(Self::RequestSourceAddressList),
+            65 => Some(Self::SourceAddressListResponse),
+            66 => Some(Self::RequestSourceAddressNameList),
+            67 => Some(Self::SourceAddressNameListResponse),
+            128 => Some(Self::RequestGeneralParametrics),
+            129 => Some(Self::GeneralParametricsResponse),
+            130 => Some(Self::ResetGeneralStatistics),
+            131 => Some(Self::RequestSpecificParametrics),
+            132 => Some(Self::SpecificParametricsResponse),
+            133 => Some(Self::ResetSpecificStatistics),
+            192 => Some(Self::OpenConnection),
+            193 => Some(Self::OpenConnectionResponse),
+            194 => Some(Self::CloseConnection),
+            195 => Some(Self::CloseConnectionResponse),
             _ => None,
         }
+    }
+
+    /// The Table 2 code for this function.
+    #[inline]
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
     }
 }
 
@@ -434,7 +499,7 @@ impl Default for NiuNetworkMsg {
             function: NiuFunction::RequestFilterDb,
             port_number: 0,
             filter_pgn: 0,
-            filter_mode: NiuFilterMode::PassAll,
+            filter_mode: NiuFilterMode::BlockSpecific,
             msgs_forwarded: 0,
             msgs_blocked: 0,
         }
@@ -461,10 +526,7 @@ impl NiuNetworkMsg {
                 data[3] = ((self.filter_pgn >> 8) & 0xFF) as u8;
                 data[4] = ((self.filter_pgn >> 16) & 0x03) as u8;
             }
-            NiuFunction::SetFilterMode | NiuFunction::RequestFilterMode => {
-                data[2] = self.filter_mode as u8;
-            }
-            NiuFunction::PortStatsResponse => {
+            NiuFunction::GeneralParametricsResponse => {
                 let forwarded = self.msgs_forwarded.min(u32::from(u16::MAX));
                 let blocked = self.msgs_blocked.min(u32::from(u16::MAX));
                 data[2] = (forwarded & 0xFF) as u8;
@@ -500,13 +562,7 @@ impl NiuNetworkMsg {
                 msg.filter_pgn =
                     (data[2] as Pgn) | ((data[3] as Pgn) << 8) | (((data[4] & 0x03) as Pgn) << 16);
             }
-            NiuFunction::SetFilterMode | NiuFunction::RequestFilterMode => {
-                if data[3..].iter().any(|&b| b != 0xFF) {
-                    return None;
-                }
-                msg.filter_mode = NiuFilterMode::try_from_u8(data[2])?;
-            }
-            NiuFunction::PortStatsResponse => {
+            NiuFunction::GeneralParametricsResponse => {
                 if data[6..].iter().any(|&b| b != 0xFF) {
                     return None;
                 }
@@ -554,7 +610,7 @@ impl Default for NiuConfig {
             name: "NIU".to_string(),
             forward_global_by_default: true,
             forward_specific_by_default: true,
-            filter_mode: NiuFilterMode::PassAll,
+            filter_mode: NiuFilterMode::BlockSpecific,
             loop_guard_max_recent_forwards: DEFAULT_LOOP_GUARD_MAX_RECENT_FORWARDS,
             loop_guard_window_ms: DEFAULT_LOOP_GUARD_WINDOW_MS,
             persistence_file: None,
@@ -822,7 +878,7 @@ impl Niu {
 
     pub fn set_filter_mode(&mut self, mode: NiuFilterMode) {
         self.config.filter_mode = mode;
-        let pass = matches!(mode, NiuFilterMode::PassAll);
+        let pass = matches!(mode, NiuFilterMode::BlockSpecific);
         self.config.forward_global_by_default = pass;
         self.config.forward_specific_by_default = pass;
         tracing::info!(
@@ -1012,8 +1068,8 @@ impl Niu {
 
         // No match — apply default mode.
         match self.config.filter_mode {
-            NiuFilterMode::BlockAll => (ForwardPolicy::Block, false),
-            NiuFilterMode::PassAll => {
+            NiuFilterMode::PassSpecific => (ForwardPolicy::Block, false),
+            NiuFilterMode::BlockSpecific => {
                 let allow = if is_broadcast {
                     self.config.forward_global_by_default
                 } else {
@@ -1105,11 +1161,17 @@ impl Niu {
 
         match niu_msg.function {
             NiuFunction::AddFilterEntry => {
-                self.add_filter(FilterRule::new(
-                    niu_msg.filter_pgn,
-                    ForwardPolicy::Allow,
-                    true,
-                ));
+                // What an entry *means* depends on the database's filter mode
+                // (§6.6.2.3.3 with §6.2.2/§6.2.3): in block-specific mode a
+                // listed PGN is blocked, in pass-specific mode it is passed.
+                // This always installed `Allow`, so adding an entry to a
+                // block-specific database asked the bridge to forward exactly
+                // the PGN the caller wanted stopped.
+                let policy = match self.filter_mode() {
+                    NiuFilterMode::BlockSpecific => ForwardPolicy::Block,
+                    NiuFilterMode::PassSpecific => ForwardPolicy::Allow,
+                };
+                self.add_filter(FilterRule::new(niu_msg.filter_pgn, policy, true));
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
             NiuFunction::DeleteFilterEntry => {
@@ -1122,17 +1184,13 @@ impl Niu {
                 }
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
-            NiuFunction::DeleteAllEntries => {
+            NiuFunction::ClearFilterEntry => {
                 self.filters.clear();
                 self.on_niu_message.emit(&(niu_msg, msg.source));
             }
-            NiuFunction::SetFilterMode => {
-                self.set_filter_mode(niu_msg.filter_mode);
-                self.on_niu_message.emit(&(niu_msg, msg.source));
-            }
-            NiuFunction::RequestPortStats => {
+            NiuFunction::RequestGeneralParametrics => {
                 let reply = NiuNetworkMsg {
-                    function: NiuFunction::PortStatsResponse,
+                    function: NiuFunction::GeneralParametricsResponse,
                     port_number: niu_msg.port_number,
                     msgs_forwarded: self.forwarded_count,
                     msgs_blocked: self.blocked_count,
@@ -1655,3 +1713,306 @@ pub fn niu_profile(profile: NiuProfile) -> NiuProfileSupport {
         .expect("every NIU profile has a record")
 }
 
+
+// ─── Network topology messages (ISO 11783-4 §6.7.2) ────────────────────
+
+/// One entry of a source-address/NAME list (§6.7.2.4): a 1-byte source address
+/// followed by the 8-byte ISO 11783-5 NAME that claimed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceAddressName {
+    pub address: u8,
+    pub name: u64,
+}
+
+/// `N.NTX_Request` (§6.7.2.3) and `N.NTX_Response` (§6.7.2.4).
+///
+/// These let a CF discover the control functions on the far side of a router,
+/// whose address claims it never saw because they are in a different address
+/// space. Without them the CFs behind a router are undiscoverable, which is
+/// what this stack's state was: the data existed internally and no message
+/// could carry it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NiuTopologyMsg {
+    pub function: NiuFunction,
+    /// Requested port number, 0..=14. The global port is not allowed for the
+    /// request (§6.7.2.3).
+    pub port_number: u8,
+    /// Populated on a response; empty on a request.
+    pub entries: Vec<SourceAddressName>,
+}
+
+impl NiuTopologyMsg {
+    /// Build a `N.NTX_Request` for `port_number`.
+    #[must_use]
+    pub fn request(port_number: u8) -> Self {
+        Self {
+            function: NiuFunction::RequestSourceAddressNameList,
+            port_number,
+            entries: Vec::new(),
+        }
+    }
+
+    /// Build a `N.NTX_Response` carrying `entries`.
+    #[must_use]
+    pub fn response(port_number: u8, entries: Vec<SourceAddressName>) -> Self {
+        Self {
+            function: NiuFunction::SourceAddressNameListResponse,
+            port_number,
+            entries,
+        }
+    }
+
+    /// Encode per §6.7.2.3 / §6.7.2.4.
+    ///
+    /// # Errors
+    /// A port number outside 0..=14, the global port on a request, or more
+    /// entries than a single message can describe.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.port_number > 14 {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "NIU topology port number must be 0..=14",
+            ));
+        }
+        if self.entries.len() > usize::from(u8::MAX) {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "NIU topology entry count exceeds one byte",
+            ));
+        }
+
+        let mut data = Vec::with_capacity(3 + self.entries.len() * 9);
+        data.push(self.function.as_u8());
+        // Byte 2: port pair — requested port in bits 1-4, bits 5-8 set to F.
+        data.push(0xF0 | (self.port_number & 0x0F));
+
+        match self.function {
+            NiuFunction::RequestSourceAddressNameList => {
+                // Bytes 3-8 reserved, transmitted as FF.
+                data.extend_from_slice(&[0xFF; 6]);
+            }
+            NiuFunction::SourceAddressNameListResponse => {
+                data.push(self.entries.len() as u8);
+                for entry in &self.entries {
+                    data.push(entry.address);
+                    data.extend_from_slice(&entry.name.to_le_bytes());
+                }
+            }
+            _ => {
+                return Err(Error::with_message(
+                    ErrorCode::InvalidData,
+                    "not a NIU topology function",
+                ));
+            }
+        }
+        Ok(data)
+    }
+
+    /// Decode a topology request or response.
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let function = NiuFunction::try_from_u8(*data.first()?)?;
+        let port_byte = *data.get(1)?;
+        // Bits 5-8 of the port pair are set to F on both messages.
+        if port_byte & 0xF0 != 0xF0 {
+            return None;
+        }
+        let port_number = port_byte & 0x0F;
+        if port_number > 14 {
+            return None;
+        }
+
+        match function {
+            NiuFunction::RequestSourceAddressNameList => {
+                if data.len() != 8 || data[2..].iter().any(|&b| b != 0xFF) {
+                    return None;
+                }
+                Some(Self::request(port_number))
+            }
+            NiuFunction::SourceAddressNameListResponse => {
+                let count = usize::from(*data.get(2)?);
+                if data.len() != 3 + count * 9 {
+                    return None;
+                }
+                let mut entries = Vec::with_capacity(count);
+                for i in 0..count {
+                    let base = 3 + i * 9;
+                    let mut name = [0u8; 8];
+                    name.copy_from_slice(&data[base + 1..base + 9]);
+                    entries.push(SourceAddressName {
+                        address: data[base],
+                        name: u64::from_le_bytes(name),
+                    });
+                }
+                Some(Self::response(port_number, entries))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ─── Connection management (ISO 11783-4 §6.9.5) ────────────────────────
+
+/// Why an open/close connection request failed (§6.9.5.3 byte 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ConnectionFailureReason {
+    CannotFindCfWithName = 0,
+    ConnectionsToNameExceeded = 1,
+    ConnectionsInNiuExceeded = 2,
+    Busy = 3,
+    RequestTypeNotSupported = 4,
+    #[default]
+    NotAvailable = 255,
+}
+
+impl ConnectionFailureReason {
+    #[must_use]
+    pub const fn from_u8(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Self::CannotFindCfWithName),
+            1 => Some(Self::ConnectionsToNameExceeded),
+            2 => Some(Self::ConnectionsInNiuExceeded),
+            3 => Some(Self::Busy),
+            4 => Some(Self::RequestTypeNotSupported),
+            255 => Some(Self::NotAvailable),
+            // 5..=254 reserved.
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// `N.CO_Request` / `N.CC_Request` (§6.9.5.1, §6.9.5.3) — 10 bytes.
+///
+/// A CF asks the NIU to open or close a virtual connection to a named control
+/// function on another network segment. Section 6.9 was entirely absent, so a
+/// CF could not reach a peer behind a router at all. The NAME is obtained from
+/// the topology response of §6.7.2.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NiuConnectionRequest {
+    pub function: NiuFunction,
+    /// Port of the NIU on the target CF's segment (low nibble).
+    pub to_port: u8,
+    /// Port of the NIU on the requester's segment (high nibble); normally 0.
+    pub from_port: u8,
+    /// NAME of the CF to connect to on the "to" port.
+    pub name: u64,
+}
+
+impl NiuConnectionRequest {
+    /// # Errors
+    /// A port number outside 0..=15, or a function that is not an open/close
+    /// request.
+    pub fn encode(&self) -> Result<[u8; 10]> {
+        if !matches!(
+            self.function,
+            NiuFunction::OpenConnection | NiuFunction::CloseConnection
+        ) {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "not a NIU connection request function",
+            ));
+        }
+        if self.to_port > 15 || self.from_port > 15 {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "NIU port numbers are 4-bit",
+            ));
+        }
+        let mut data = [0xFFu8; 10];
+        data[0] = self.function.as_u8();
+        data[1] = (self.from_port << 4) | (self.to_port & 0x0F);
+        data[2..10].copy_from_slice(&self.name.to_le_bytes());
+        Ok(data)
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() != 10 {
+            return None;
+        }
+        let function = NiuFunction::try_from_u8(data[0])?;
+        if !matches!(
+            function,
+            NiuFunction::OpenConnection | NiuFunction::CloseConnection
+        ) {
+            return None;
+        }
+        let mut name = [0u8; 8];
+        name.copy_from_slice(&data[2..10]);
+        Some(Self {
+            function,
+            to_port: data[1] & 0x0F,
+            from_port: data[1] >> 4,
+            name: u64::from_le_bytes(name),
+        })
+    }
+}
+
+/// `N.CO_Response` / `N.CC_Response` (§6.9.5.2, §6.9.5.4) — 8 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NiuConnectionResponse {
+    pub function: NiuFunction,
+    /// Port of the NIU on the requester's segment (low nibble).
+    pub to_port: u8,
+    /// Port of the NIU on the target CF's segment (high nibble).
+    pub from_port: u8,
+    pub success: bool,
+    /// Meaningful only when `success` is false.
+    pub reason: ConnectionFailureReason,
+}
+
+impl NiuConnectionResponse {
+    /// # Errors
+    /// A function that is not an open/close response, or an out-of-range port.
+    pub fn encode(&self) -> Result<[u8; 8]> {
+        if !matches!(
+            self.function,
+            NiuFunction::OpenConnectionResponse | NiuFunction::CloseConnectionResponse
+        ) {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "not a NIU connection response function",
+            ));
+        }
+        if self.to_port > 15 || self.from_port > 15 {
+            return Err(Error::with_message(
+                ErrorCode::InvalidData,
+                "NIU port numbers are 4-bit",
+            ));
+        }
+        let mut data = [0xFFu8; 8];
+        data[0] = self.function.as_u8();
+        data[1] = (self.from_port << 4) | (self.to_port & 0x0F);
+        // Byte 3 bits 1-2 carry success; bits 3-8 are reserved and set to 1.
+        data[2] = 0xFC | u8::from(self.success);
+        data[3] = self.reason.as_u8();
+        Ok(data)
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() != 8 {
+            return None;
+        }
+        let function = NiuFunction::try_from_u8(data[0])?;
+        if !matches!(
+            function,
+            NiuFunction::OpenConnectionResponse | NiuFunction::CloseConnectionResponse
+        ) {
+            return None;
+        }
+        Some(Self {
+            function,
+            to_port: data[1] & 0x0F,
+            from_port: data[1] >> 4,
+            success: data[2] & 0x03 == 0x01,
+            reason: ConnectionFailureReason::from_u8(data[3])?,
+        })
+    }
+}

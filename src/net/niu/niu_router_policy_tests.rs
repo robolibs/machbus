@@ -83,8 +83,8 @@ mod tests {
 
     #[test]
     fn block_all_default_drops_unlisted() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.start().unwrap();
         let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
         assert!(niu.process_frame(f, Side::Tractor, 0).is_none());
@@ -93,8 +93,8 @@ mod tests {
 
     #[test]
     fn block_all_with_explicit_allow_passes_listed() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, true);
         niu.start().unwrap();
 
@@ -286,14 +286,14 @@ mod tests {
 
     #[test]
     fn unidirectional_rule_only_applies_tractor_side() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, false); // tractor → implement only
         niu.start().unwrap();
 
         let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
         assert!(niu.process_frame(f, Side::Tractor, 0).is_some());
-        // Implement-side: rule does not apply ⇒ default mode = BlockAll → blocked.
+        // Implement-side: rule does not apply ⇒ default mode = PassSpecific → blocked.
         assert!(niu.process_frame(f, Side::Implement, 0).is_none());
     }
 
@@ -337,8 +337,8 @@ mod tests {
         let name = Name::default()
             .with_identity_number(0x3456)
             .with_manufacturer_code(0x234);
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.add_filter(FilterRule::new(PGN_DM1, ForwardPolicy::Allow, true).with_source_name(name));
         niu.start().unwrap();
 
@@ -366,8 +366,8 @@ mod tests {
         let destination_name = Name::default()
             .with_identity_number(0x6789)
             .with_manufacturer_code(0x321);
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.add_filter(
             FilterRule::new(PGN_REQUEST, ForwardPolicy::Allow, true)
                 .with_destination_name(destination_name),
@@ -541,7 +541,7 @@ mod tests {
 
         let before = niu.policy_snapshot();
         assert_eq!(before.name, "audit-niu");
-        assert_eq!(before.filter_mode, NiuFilterMode::PassAll);
+        assert_eq!(before.filter_mode, NiuFilterMode::BlockSpecific);
         assert!(!before.forward_global_by_default);
         assert!(before.forward_specific_by_default);
         assert_eq!(before.loop_guard_window_ms, 750);
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn niu_msg_round_trips_through_encode_decode() {
         let msg = NiuNetworkMsg {
-            function: NiuFunction::PortStatsResponse,
+            function: NiuFunction::GeneralParametricsResponse,
             port_number: 1,
             msgs_forwarded: 0xCAFE,
             msgs_blocked: 0xBEEF,
@@ -595,7 +595,7 @@ mod tests {
         };
         let bytes = msg.encode().unwrap();
         let decoded = NiuNetworkMsg::decode(&bytes).unwrap();
-        assert_eq!(decoded.function, NiuFunction::PortStatsResponse);
+        assert_eq!(decoded.function, NiuFunction::GeneralParametricsResponse);
         assert_eq!(decoded.port_number, 1);
         assert_eq!(decoded.msgs_forwarded, 0xCAFE);
         assert_eq!(decoded.msgs_blocked, 0xBEEF);
@@ -613,7 +613,7 @@ mod tests {
         assert!(err.message.contains("PGN"));
 
         let stats = NiuNetworkMsg {
-            function: NiuFunction::PortStatsResponse,
+            function: NiuFunction::GeneralParametricsResponse,
             msgs_forwarded: u32::MAX,
             msgs_blocked: u32::from(u16::MAX) + 1,
             ..Default::default()
@@ -698,7 +698,7 @@ mod tests {
 
         assert!(niu.filters().is_empty());
         assert!(captured.borrow().is_empty());
-        assert_eq!(niu.filter_mode(), NiuFilterMode::PassAll);
+        assert_eq!(niu.filter_mode(), NiuFilterMode::BlockSpecific);
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod tests {
         let mut router = Router::new(
             NiuConfig::default()
                 .name("audit-router")
-                .mode(NiuFilterMode::BlockAll)
+                .mode(NiuFilterMode::PassSpecific)
                 .global_default(false)
                 .specific_default(false)
                 .loop_guard_window_ms(900)
@@ -854,7 +854,7 @@ mod tests {
 
         let snapshot = router.policy_snapshot();
         assert_eq!(snapshot.niu.name, "audit-router");
-        assert_eq!(snapshot.niu.filter_mode, NiuFilterMode::BlockAll);
+        assert_eq!(snapshot.niu.filter_mode, NiuFilterMode::PassSpecific);
         assert!(!snapshot.niu.forward_global_by_default);
         assert!(!snapshot.niu.forward_specific_by_default);
         assert_eq!(snapshot.niu.loop_guard_window_ms, 900);

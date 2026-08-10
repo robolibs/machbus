@@ -90,6 +90,7 @@ fn main() -> Result<()> {
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
     // ANCHOR_END: finecontrol

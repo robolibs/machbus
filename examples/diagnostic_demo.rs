@@ -17,11 +17,13 @@ fn main() {
                 spn: 520,
                 fmi: Fmi::VoltageLow,
                 occurrence_count: 0,
+                conversion_method: false,
             },
             Dtc {
                 spn: 190,
                 fmi: Fmi::AbnormalRateChange,
                 occurrence_count: 7,
+                conversion_method: false,
             },
         ],
     };
@@ -50,6 +52,7 @@ fn main() {
         spn: 0x1_2345,
         fmi: Fmi::MechanicalFail,
         occurrence_count: 12,
+        conversion_method: false,
     };
     let dtc_bytes = dtc.encode();
     let dtc_decoded = Dtc::decode(&dtc_bytes).unwrap();

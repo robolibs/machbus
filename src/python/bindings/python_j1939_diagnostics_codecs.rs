@@ -985,6 +985,7 @@ impl PyDtc {
             spn: self.spn,
             fmi: Fmi::from_u8(self.fmi),
             occurrence_count: self.occurrence_count,
+            conversion_method: false,
         }
     }
     fn from_rust(d: Dtc) -> Self {

@@ -54,11 +54,13 @@ fn main() {
                 spn: 110,
                 fmi: Fmi::AboveNormalModerate,
                 occurrence_count: 3,
+                conversion_method: false,
             }, // coolant temp high
             Dtc {
                 spn: 190,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             }, // engine speed low
         ],
     };

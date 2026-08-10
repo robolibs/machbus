@@ -1279,6 +1279,10 @@ impl From<MachbusTimInterlocks> for TimInterlocks {
             road_transport_mode: i.road_transport_mode,
             external_stop: i.external_stop,
             implement_ready: i.implement_ready,
+            // Not yet exposed across the C ABI; a caller that needs them uses
+            // the Rust API. Defaulting them clear keeps the C surface stable.
+            operator_presence_timeout: false,
+            operator_override: false,
         }
     }
 }

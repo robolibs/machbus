@@ -50,8 +50,12 @@ fn main() -> Result<()> {
     // `command_curvature(0.0)` is the same as `command_straight`.
     {
         let g = session.get_mut::<Guidance>().expect("guidance plugged");
-        g.engage();
-        g.command_radius(50.0);
+        // Engaging can be refused — no live steering ECU, a mechanical lockout,
+        // an inactive operator switch, or a latched stop.
+        match g.engage() {
+            Ok(()) => g.command_radius(50.0),
+            Err(refusal) => println!("[guidance] engage refused: {}", refusal.as_str()),
+        }
     }
 
     now = now.add_millis(50);

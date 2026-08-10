@@ -1202,6 +1202,7 @@ impl From<Fmi> for MachbusFmi {
             Fmi::DataDriftedHigh => Self::DataDriftedHigh,
             Fmi::DataDriftedLow => Self::DataDriftedLow,
             Fmi::ConditionExists => Self::ConditionExists,
+            _ => Self::RootCauseUnknown,
         }
     }
 }
@@ -1238,6 +1239,7 @@ impl From<MachbusDtc> for Dtc {
             spn: d.spn,
             fmi: Fmi::from_u8(d.fmi),
             occurrence_count: d.occurrence_count,
+            conversion_method: false,
         }
     }
 }

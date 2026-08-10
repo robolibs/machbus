@@ -11,7 +11,7 @@ fn main() {
     let mut niu = Niu::new(
         NiuConfig::default()
             .name("demo-niu")
-            .mode(NiuFilterMode::BlockAll),
+            .mode(NiuFilterMode::PassSpecific),
     );
     niu.allow_pgn(PGN_HEARTBEAT, true);
     niu.allow_pgn_rate_limited(PGN_DM1, 100, true); // 1 frame / 100 ms

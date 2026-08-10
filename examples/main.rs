@@ -603,9 +603,9 @@ fn main() {
         let mut niu = Niu::new(
             NiuConfig::default()
                 .name("demo-niu")
-                .mode(NiuFilterMode::BlockAll), // block-all baseline
+                .mode(NiuFilterMode::PassSpecific), // pass-specific: default block, listed PGNs forwarded
         );
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, true);
         niu.allow_pgn_rate_limited(PGN_DM1, 100, true);
         niu.block_pgn(PGN_REQUEST, true);
@@ -707,6 +707,7 @@ fn main() {
             spn: 0x1_2345,
             fmi: Fmi::AbnormalRateChange,
             occurrence_count: 7,
+            conversion_method: false,
         };
         let dtc_bytes = dtc.encode();
         let dtc_decoded = Dtc::decode(&dtc_bytes).unwrap();

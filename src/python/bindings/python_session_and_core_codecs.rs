@@ -277,7 +277,50 @@ fn event_to_dict<'py>(py: Python<'py>, ev: &Event) -> PyResult<Bound<'py, PyDict
                 d.set_item("steering_ready", *steering_ready)?;
                 d.set_item("limit_status", *limit_status)?;
             }
+            GuidanceEvent::LinkLost {
+                silent_for_ms,
+                was_engaged,
+            } => {
+                d.set_item("kind", "guidance")?;
+                d.set_item("sub", "link_lost")?;
+                d.set_item("silent_for_ms", *silent_for_ms)?;
+                d.set_item("was_engaged", *was_engaged)?;
+            }
+            GuidanceEvent::LinkRestored { source } => {
+                d.set_item("kind", "guidance")?;
+                d.set_item("sub", "link_restored")?;
+                d.set_item("source", *source)?;
+            }
+            GuidanceEvent::StopRequested { was_engaged } => {
+                d.set_item("kind", "guidance")?;
+                d.set_item("sub", "stop_requested")?;
+                d.set_item("was_engaged", *was_engaged)?;
+            }
         },
+        Event::Autodrive(ae) => {
+            use crate::session::sys::AutodriveEvent;
+            d.set_item("kind", "autodrive")?;
+            match ae {
+                AutodriveEvent::StateChanged { status } => {
+                    d.set_item("sub", "state_changed")?;
+                    d.set_item("status", status.as_u8())?;
+                }
+                AutodriveEvent::SafeStop { trigger } => {
+                    d.set_item("sub", "safe_stop")?;
+                    d.set_item("trigger", trigger.as_str())?;
+                }
+                AutodriveEvent::Refused { refusal } => {
+                    d.set_item("sub", "refused")?;
+                    d.set_item("refusal", refusal.as_str())?;
+                }
+                AutodriveEvent::Engaged => {
+                    d.set_item("sub", "engaged")?;
+                }
+                AutodriveEvent::Disengaged => {
+                    d.set_item("sub", "disengaged")?;
+                }
+            }
+        }
         other => {
             d.set_item("kind", "other")?;
             d.set_item("debug", format!("{other:?}"))?;
@@ -776,6 +819,7 @@ impl PySession {
             spn,
             fmi: Fmi::from_u8(fmi),
             occurrence_count: 1,
+            conversion_method: false,
         });
         Ok(())
     }
@@ -891,8 +935,9 @@ impl PySession {
     /// steer on PGN 0xAD00); re-sends the last commanded curvature. The ECU only
     /// steers while it reports itself ready.
     fn guidance_engage(&mut self) -> PyResult<()> {
-        self.guidance()?.engage();
-        Ok(())
+        self.guidance()?
+            .engage()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
     /// Stop requesting steering: clears the engage request and commands straight.
@@ -1391,6 +1436,8 @@ impl PySession {
             road_transport_mode,
             external_stop,
             implement_ready,
+            operator_presence_timeout: false,
+            operator_override: false,
         });
         Ok(())
     }

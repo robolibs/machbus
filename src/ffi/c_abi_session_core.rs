@@ -309,6 +309,16 @@ pub enum MachbusEventKind {
     Powertrain = 89,
     TcServerPeerControlAssignment = 75,
     GuidanceMachineInfo = 90,
+    /// Steering ECU went silent; the controller was forced to the safe state.
+    GuidanceLinkLost = 91,
+    /// Machine Info resumed after a link loss.
+    GuidanceLinkRestored = 92,
+    /// Operator ISB stop latched; the controller is in the safe state.
+    GuidanceStopRequested = 93,
+    /// Combined autodrive controller changed automation state.
+    AutodriveStateChanged = 94,
+    /// Combined autodrive controller entered the safe state.
+    AutodriveSafeStop = 95,
     Other = 99,
 }
 
@@ -1023,6 +1033,13 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.kind = MachbusEventKind::BusError;
                 out.source = port;
             }
+            crate::session::sys::BusEvent::ClockWentBackwards { .. } => {
+                out.kind = MachbusEventKind::BusError;
+            }
+            crate::session::sys::BusEvent::SendFailed { pgn, .. } => {
+                out.kind = MachbusEventKind::BusError;
+                out.spn_or_pgn = pgn;
+            }
         },
         Event::Diag(d) => match d {
             DiagEvent::Raised(dtc) => {
@@ -1354,6 +1371,35 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.fmi_or_sub = u8::from(steering_ready);
                 out.u0 = u32::from(limit_status);
             }
+            GuidanceEvent::LinkLost {
+                silent_for_ms,
+                was_engaged,
+            } => {
+                out.kind = MachbusEventKind::GuidanceLinkLost;
+                out.fmi_or_sub = u8::from(was_engaged);
+                out.u0 = silent_for_ms;
+            }
+            GuidanceEvent::LinkRestored { source } => {
+                out.kind = MachbusEventKind::GuidanceLinkRestored;
+                out.source = source;
+            }
+            GuidanceEvent::StopRequested { was_engaged } => {
+                out.kind = MachbusEventKind::GuidanceStopRequested;
+                out.fmi_or_sub = u8::from(was_engaged);
+            }
+        },
+        Event::Autodrive(a) => match a {
+            crate::session::sys::AutodriveEvent::StateChanged { status } => {
+                out.kind = MachbusEventKind::AutodriveStateChanged;
+                out.fmi_or_sub = status.as_u8();
+            }
+            crate::session::sys::AutodriveEvent::SafeStop { trigger } => {
+                out.kind = MachbusEventKind::AutodriveSafeStop;
+                out.u0 = trigger.as_code();
+            }
+            _ => {
+                out.kind = MachbusEventKind::AutodriveStateChanged;
+            }
         },
         Event::Custom { pgn, source, data } => {
             out.kind = MachbusEventKind::Custom;
@@ -1424,6 +1470,7 @@ pub extern "C" fn machbus_session_diag_raise(
         spn,
         fmi: Fmi::from_u8(fmi),
         occurrence_count,
+        conversion_method: false,
     });
     clear_last_error();
     true
@@ -1718,9 +1765,18 @@ pub extern "C" fn machbus_session_guidance_engage(h: *mut MachbusSession) -> boo
         }
     };
     let g = plugin_mut!(h, Guidance);
-    g.engage();
-    clear_last_error();
-    true
+    // A refusal is reported, not swallowed: a caller that cannot tell
+    // "engaged" from "declined" is exactly how a stale intent survives.
+    match g.engage() {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(alloc::format!("guidance engage refused: {}", refusal.as_str()));
+            false
+        }
+    }
 }
 
 /// Stop requesting steering: clears the engage request and commands straight

@@ -360,7 +360,7 @@ fn tc_client_handshakes_with_server() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Implement"),
         )
         .with_element(

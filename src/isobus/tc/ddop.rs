@@ -146,6 +146,60 @@ impl DDOP {
         Ok(data)
     }
 
+    /// Enforce the Annex A.7 object hierarchy.
+    ///
+    /// A.7: "A device descriptor object pool shall contain only a single device
+    /// object and can have multiple DeviceElement, DeviceProcessData,
+    /// DeviceProperty, and DeviceValuePresentation objects." Figure A.1 labels
+    /// the DeviceObject node `ObjectId = 0`, and A.3 gives exactly one
+    /// DeviceElement of type `device`, numbered 0, as the root.
+    ///
+    /// None of this was checked, so every DDOP the crate built in its own tests
+    /// and examples — device at ObjectId 1, root element at 2 — validated
+    /// clean and was invalid on the wire.
+    fn validate_object_hierarchy(&self) -> Result<()> {
+        if self.devices.len() != 1 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.7: a DDOP shall contain exactly one DeviceObject",
+            ));
+        }
+        if self.devices[0].id != ObjectID::from(0u16) {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.7 Figure A.1: the DeviceObject has ObjectId 0",
+            ));
+        }
+
+        let roots: Vec<&DeviceElement> = self
+            .elements
+            .iter()
+            .filter(|e| matches!(e.r#type, DeviceElementType::Device))
+            .collect();
+        if roots.len() != 1 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.3: a DDOP shall contain exactly one DeviceElement of type device",
+            ));
+        }
+        if u16::from(roots[0].number) != 0 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.3: the device-type DeviceElement is element number 0",
+            ));
+        }
+
+        for elem in &self.elements {
+            if u16::from(elem.number) > crate::isobus::tc::server::MAX_PROCESS_DATA_ELEMENT_NUMBER {
+                return Err(Error::with_message(
+                    ErrorCode::PoolValidation,
+                    "element number exceeds the 12-bit process-data field",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Validate parent / child / presentation references.
     pub fn validate(&self) -> Result<()> {
         if self.devices.is_empty() {
@@ -158,6 +212,7 @@ impl DDOP {
         }
         self.validate_serializable()?;
         self.validate_unique_object_ids()?;
+        self.validate_object_hierarchy()?;
         for elem in &self.elements {
             if elem.parent_id == elem.id {
                 return Err(Error::with_message(
@@ -820,7 +875,7 @@ mod tests {
         DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("Sprayer")
                     .with_software_version("1.0")
                     .with_serial_number("SN1"),
@@ -881,7 +936,7 @@ mod tests {
         assert!(ddop.validate().is_err());
 
         let ddop =
-            DDOP::default().with_device(DeviceObject::default().with_id(1).with_designator("D"));
+            DDOP::default().with_device(DeviceObject::default().with_id(0u16).with_designator("D"));
         assert!(ddop.validate().is_err()); // no elements
 
         let ddop = dummy_ddop();
@@ -891,7 +946,7 @@ mod tests {
     #[test]
     fn validate_catches_bad_parent_ref() {
         let ddop = DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(
                 DeviceElement::default().with_id(2).with_parent(999), // non-existent
             );
@@ -901,7 +956,7 @@ mod tests {
     #[test]
     fn validate_catches_bad_child_ref() {
         let ddop = DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(DeviceElement::default().with_id(2).with_children(vec![999]));
         assert!(ddop.validate().is_err());
     }
@@ -911,7 +966,7 @@ mod tests {
         let original = DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("Sprayer")
                     .with_software_version("1.0")
                     .with_serial_number("SN-1234")
@@ -1027,7 +1082,7 @@ mod tests {
         let ddop = dummy_ddop();
         let xml = ddop.to_isoxml();
         assert!(xml.starts_with("<?xml version=\"1.0\""));
-        assert!(xml.contains("<DVC A=\"DVC-1\""));
+        assert!(xml.contains("<DVC A=\"DVC-0\""));
         assert!(xml.contains("Sprayer"));
         assert!(xml.contains("</ISO11783_TaskData>"));
     }

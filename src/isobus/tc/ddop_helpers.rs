@@ -401,7 +401,7 @@ mod tests {
         DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("Sprayer"),
             )
             // Connector with X offset.

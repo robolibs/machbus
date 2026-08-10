@@ -23,7 +23,7 @@ fn minimal_client_ddop() -> DDOP {
     DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
@@ -424,7 +424,7 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
         DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("implement")
                     .with_structure_label(*b"AGBUS1 ")
                     .with_localization_label([1, 2, 3, 4, 5, 6, 7]),
@@ -1443,6 +1443,42 @@ fn tc_server_rejects_malformed_client_version_responses_without_version_update()
         .unwrap();
     assert_eq!(server.get_client_version(0x42), 4);
     assert_eq!(*seen.borrow(), vec![(0x42, 4)]);
+}
+
+/// F6 — a "total" trigger is not a per-value retrigger.
+///
+/// ISO 11783-10 §6.8.3 makes a total something the TC stores once per Time XML
+/// element and requests at task pause/complete. The runtime treated it as
+/// "re-request on every value received": once one value had arrived,
+/// `previous.is_some()` was permanently true, so each inbound Value emitted
+/// another RequestValue whose reply was another Value — a self-sustaining storm
+/// on PGN 51968, well past §6.8 a)'s "maximum of 10 process data messages per
+/// process data variable per second".
+#[test]
+fn tc_total_trigger_does_not_re_request_on_every_value() {
+    let mut server =
+        TaskControllerServer::new(TCServerConfig::default().with_booms(1).with_sections(1));
+    server.start().unwrap();
+
+    let mut trigger = MeasurementTriggerRuntime::new(0x42, 7, 0x1234);
+    trigger.trigger_methods = TriggerMethod::Total.as_u8();
+    server.configure_measurement_trigger(trigger).unwrap();
+
+    // Two identical values, then a changed one: none of them is a reason to
+    // ask again, because a total is not sampled by request.
+    let mut emitted = 0;
+    for value in [10i32, 10, 25] {
+        let payload =
+            TaskControllerServer::build_set_value(7u16, 0x1234u16, value).expect("a valid Value payload");
+        let out = server
+            .try_handle_client_message(&Message::new(PGN_ECU_TO_TC, payload.to_vec(), 0x42))
+            .unwrap();
+        emitted += out.len();
+    }
+    assert_eq!(
+        emitted, 0,
+        "a total trigger must not answer a Value with a RequestValue"
+    );
 }
 
 #[test]

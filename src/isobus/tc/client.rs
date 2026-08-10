@@ -1070,7 +1070,7 @@ mod tests {
 
     fn dummy_ddop() -> DDOP {
         DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(
                 DeviceElement::default()
                     .with_id(2)
@@ -1080,7 +1080,7 @@ mod tests {
 
     fn named_ddop(name: &str) -> DDOP {
         DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator(name))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator(name))
             .with_element(
                 DeviceElement::default()
                     .with_id(2)
@@ -1798,7 +1798,7 @@ mod tests {
             DDOP::default()
                 .with_device(
                     DeviceObject::default()
-                        .with_id(1)
+                        .with_id(0u16)
                         .with_designator("D")
                         .with_structure_label(*b"I++1.0 ")
                         .with_localization_label([1, 0, 0, 0, 0, 0, 0]),

@@ -99,7 +99,7 @@ fn ddi_helpers_preserve_geometry_rate_and_total_semantics_with_named_dictionary_
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Named DDI implement"),
         )
         .with_property(

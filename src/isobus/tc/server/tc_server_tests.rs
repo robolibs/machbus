@@ -823,7 +823,7 @@ mod tests {
 
     fn dummy_ddop() -> DDOP {
         DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(DeviceElement::default().with_id(2))
     }
 

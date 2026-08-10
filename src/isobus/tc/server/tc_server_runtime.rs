@@ -1163,9 +1163,17 @@ impl TaskControllerServer {
             if let Some(maximum) = trigger.maximum_threshold {
                 due |= value >= maximum && previous.is_none_or(|old| old < maximum);
             }
-            if trigger.trigger_methods & super::objects::TriggerMethod::Total.as_u8() != 0 {
-                due |= previous.is_some();
-            }
+            // F6 — the "total" method is *not* a per-value retrigger. §6.8.3
+            // makes a total something the TC stores once per Time XML element
+            // and queries at task pause/complete; there is nothing here to
+            // re-request on receiving a value.
+            //
+            // As written, `previous.is_some()` became permanently true after
+            // the first value, so every inbound Value emitted another
+            // RequestValue, whose reply was another Value: a self-sustaining
+            // storm on PGN 51968 that also blows through §6.8 a)'s limit of
+            // "a maximum of 10 process data messages per process data variable
+            // per second".
             if due && let Some(request) = measurement_request(trigger) {
                 out.push(request);
             }

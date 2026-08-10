@@ -1237,12 +1237,26 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let expected = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer")
                 .with_software_version("1.0")
                 .with_serial_number("SN-1234")
                 .with_structure_label([1, 2, 3, 4, 5, 6, 7])
                 .with_localization_label([8, 9, 10, 11, 12, 13, 14]),
+        )
+        // F7 — A.7: "A device descriptor object pool shall contain only a
+        // single device object", Figure A.1 puts it at ObjectId 0, and A.3
+        // requires exactly one DeviceElement of type device, numbered 0
+        // (B.3.2: "The element number would be 0 to address the implement").
+        // This vector had no device-type element at all — it was never a valid
+        // pool, and nothing checked.
+        .with_element(
+            DeviceElement::default()
+                .with_id(1)
+                .with_type(DeviceElementType::Device)
+                .with_number(0)
+                .with_parent(0)
+                .with_designator("Sprayer"),
         )
         .with_element(
             DeviceElement::default()
@@ -1285,11 +1299,14 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
 
     let decoded = DDOP::deserialize(&bytes).expect("valid DDOP fixture must decode");
     decoded.validate().unwrap();
-    assert_eq!(decoded.object_count(), 5);
+    // Six now: the A.3 device-type root joined the five original objects.
+    assert_eq!(decoded.object_count(), 6);
     assert_eq!(decoded.devices()[0].designator, "Sprayer");
-    assert_eq!(decoded.elements()[0].r#type, DeviceElementType::Section);
+    assert_eq!(decoded.elements()[0].r#type, DeviceElementType::Device);
+    assert_eq!(decoded.elements()[0].number.raw(), 0);
+    assert_eq!(decoded.elements()[1].r#type, DeviceElementType::Section);
     assert_eq!(
-        decoded.elements()[0].child_objects,
+        decoded.elements()[1].child_objects,
         vec![ObjectID(10), ObjectID(20)]
     );
     assert_eq!(decoded.process_data()[0].ddi, DDI(0x1234));
@@ -1304,7 +1321,7 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let drill = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Drill")
                 .with_software_version("2.1")
                 .with_serial_number("DR-42")
@@ -1419,7 +1436,7 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let overlong = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("A".repeat(usize::from(u8::MAX) + 1)),
         )
         .with_element(DeviceElement::default().with_id(2));
@@ -1445,7 +1462,17 @@ fn fixture_isobus_tc_ddop_helper_expectations_are_stable() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
+                .with_id(0u16)
+                .with_designator("Two Section Sprayer"),
+        )
+        // F7 — A.3 requires exactly one device-type element, numbered 0. Its
+        // children referenced parent 1, so this is the object they meant.
+        .with_element(
+            DeviceElement::default()
                 .with_id(1)
+                .with_type(DeviceElementType::Device)
+                .with_number(0)
+                .with_parent(0)
                 .with_designator("Two Section Sprayer"),
         )
         .with_element(

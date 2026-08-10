@@ -1573,11 +1573,15 @@ fn tc_ddop_sprayer_subset_matches_agisostack_create_sprayer_expectations() {
             .with_localization_label([b'e', b'n', 0x0F, 0x04, 0x5A, 0x04, b'U']),
     )
     .unwrap();
+    // F7 — ISO 11783-10 B.3.2: "The element number would be 0 to address the
+    // implement sprayer", and A.7 Figure A.1 puts the DeviceObject at ObjectId
+    // 0. AgIsoStack numbers this element 1; machbus follows the standard, so
+    // this vector diverges from the C++ reference here deliberately.
     ddop.add_element(
         DeviceElement::default()
             .with_id(1)
             .with_type(DeviceElementType::Device)
-            .with_number(1)
+            .with_number(0)
             .with_parent(0)
             .with_designator("Sprayer"),
     )
@@ -1661,7 +1665,7 @@ fn tc_ddop_sprayer_subset_matches_agisostack_create_sprayer_expectations() {
         .find(|obj| obj.id == ObjectID(1))
         .expect("DET object 1");
     assert_eq!(sprayer.designator, "Sprayer");
-    assert_eq!(sprayer.number.raw(), 1);
+    assert_eq!(sprayer.number.raw(), 0, "B.3.2: the implement itself is element 0");
     assert_eq!(sprayer.parent_id, ObjectID(0));
     assert!(sprayer.child_objects.is_empty());
 

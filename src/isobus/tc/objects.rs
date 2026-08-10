@@ -1007,7 +1007,7 @@ mod tests {
         let overlong = "A".repeat(DDOP_TEXT_MAX_BYTES + 1);
         assert!(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator(overlong.clone())
                 .serialize()
                 .is_err()
@@ -1100,7 +1100,7 @@ mod tests {
 
         // And it really is what reaches the wire.
         let bytes = DeviceObject::default()
-            .with_id(1)
+            .with_id(0u16)
             .with_designator("X")
             .serialize()
             .unwrap();
@@ -1115,7 +1115,7 @@ mod tests {
     fn device_record_carries_the_client_name() {
         let name = 0x0123_4567_89AB_CDEFu64;
         let bytes = DeviceObject::default()
-            .with_id(1)
+            .with_id(0u16)
             .with_designator("D")
             .with_software_version("v")
             .with_client_name(name)
@@ -1211,7 +1211,7 @@ mod tests {
     #[test]
     fn extended_structure_label_is_version_gated() {
         let device = DeviceObject::default()
-            .with_id(1)
+            .with_id(0u16)
             .with_designator("D")
             .with_extended_structure_label(*b"CFG-A");
 
@@ -1228,7 +1228,7 @@ mod tests {
         assert!(v4.ends_with(b"CFG-A"));
 
         // A v4 client not using it reports a length of zero, not an omission.
-        let unused = DeviceObject::default().with_id(1).with_designator("D");
+        let unused = DeviceObject::default().with_id(0u16).with_designator("D");
         let v4_empty = unused
             .serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL)
             .unwrap();
@@ -1236,7 +1236,7 @@ mod tests {
 
         // 0..=32 bytes is the defined range.
         let overlong = DeviceObject::default()
-            .with_id(1)
+            .with_id(0u16)
             .with_extended_structure_label(vec![b'X'; 33]);
         assert!(overlong.serialize_for_version(4).is_err());
     }

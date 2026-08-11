@@ -129,8 +129,9 @@ or overlong reassembled buffers rather than prefix-decoding them.
 - byte 2 — the current sequence/step number, or the `0xFF`
   not-applicable sentinel when the sequence is merely ready;
 - byte 3 — the sequence state (`SCSequenceState`);
-- byte 4 — two busy flags (non-volatile-memory busy, SCD-parsing busy);
-- bytes 5–7 — reserved, held at `0xFF`.
+- byte 4 — two busy flags in bits 1–2 (non-volatile-memory busy, SCD-parsing
+  busy); bits 3–8 are unallocated, transmitted as `1` and ignored on receive;
+- bytes 5–7 — reserved, held at `0xFF` on transmit and ignored on receive.
 
 **Client status** (`PGN_SC_CLIENT_STATUS`) mirrors it: a client message code in
 byte 0, the client state (`SCClientState`: `Disabled`, `Enabled`, or reserved

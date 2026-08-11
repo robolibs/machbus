@@ -244,14 +244,16 @@ pub(crate) const fn sc_inactive_status_sequence_fields_are_valid(
         && sequence_number == SC_SEQUENCE_NUMBER_NOT_AVAILABLE
 }
 
+/// G3 — reserved bits are transmitted as 1 and **ignored on receive**. Both of
+/// the predicates this replaces ran before any state update and rejected the
+/// whole frame: a master status identical to `master_ready()` except for byte 5
+/// carrying its six reserved bits as 1 — which is what G3 requires an encoder
+/// to do — left the client Idle forever, and a client status with a zero-padded
+/// reserved tail left the master in Ready. machbus could not join a sequence
+/// with any conformant peer that differed in a bit neither side uses.
 #[must_use]
-pub(crate) const fn sc_master_busy_flags_are_valid(flags: u8) -> bool {
-    flags & !0x03 == 0
-}
-
-#[must_use]
-pub(crate) fn sc_status_reserved_tail_is_valid(data: &[u8]) -> bool {
-    data.len() == SC_STATUS_PAYLOAD_LEN && data[5..].iter().all(|&byte| byte == 0xFF)
+pub(crate) fn sc_status_payload_len_is_canonical(data: &[u8]) -> bool {
+    data.len() == SC_STATUS_PAYLOAD_LEN
 }
 
 // ─── ISO 11783-14 byte 5 of SCClientStatus ─────────────────────────────

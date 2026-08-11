@@ -19,8 +19,8 @@ use super::types::{
     SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
     SC_STATUS_PAYLOAD_LEN, SCClientConfig, SCClientFuncError, SCClientState, SCMasterState,
     SCSequenceState, SCState, sc_inactive_status_sequence_fields_are_valid,
-    sc_master_busy_flags_are_valid, sc_master_state_byte_is_valid, sc_sequence_state_byte_is_valid,
-    sc_status_reserved_tail_is_valid, sc_status_sequence_number_is_valid,
+    sc_master_state_byte_is_valid, sc_sequence_state_byte_is_valid,
+    sc_status_payload_len_is_canonical, sc_status_sequence_number_is_valid,
     sc_status_sequence_state_is_supported,
 };
 use crate::net::error::{Error, Result};
@@ -238,10 +238,8 @@ impl SCClient {
                 "SC master status has wrong message code",
             ));
         }
-        if !sc_status_reserved_tail_is_valid(&msg.data) {
-            return Err(Error::invalid_data(
-                "SC master status has non-0xFF reserved tail bytes",
-            ));
+        if !sc_status_payload_len_is_canonical(&msg.data) {
+            return Err(Error::invalid_data("SC master status has a wrong payload length"));
         }
         let master_state_raw = msg.get_u8(1);
         if !sc_master_state_byte_is_valid(master_state_raw) {
@@ -255,11 +253,6 @@ impl SCClient {
         ) {
             return Err(Error::invalid_data(
                 "SC master initialization state is not supported",
-            ));
-        }
-        if !sc_master_busy_flags_are_valid(msg.get_u8(4)) {
-            return Err(Error::invalid_data(
-                "SC master status has reserved busy flags",
             ));
         }
         let master_ms =
@@ -671,19 +664,32 @@ mod tests {
         assert!(ready_client.is(SCState::Active));
     }
 
+    /// G3 — reserved bits are transmitted as 1 and ignored on receive. Both of
+    /// these frames used to be rejected outright before any state update, so a
+    /// master whose byte 5 carried its six unallocated bits as 1 — exactly what
+    /// G3 requires an encoder to do — left this client Idle forever.
     #[test]
-    fn master_status_rejects_reserved_busy_bits_and_tail_bytes() {
-        let mut ready_client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+    fn undefined_bits_in_a_master_status_do_not_reject_the_frame() {
+        let mut client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
 
-        let mut bad_busy = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
-        bad_busy.data[4] = 0x80;
-        assert!(ready_client.handle_master_status(&bad_busy).is_none());
-        assert!(ready_client.is(SCState::Idle));
+        let mut reserved_busy_bits =
+            master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
+        reserved_busy_bits.data[4] = 0xFC;
+        client.handle_master_status(&reserved_busy_bits);
+        assert!(
+            client.is(SCState::Ready),
+            "byte 5 bits 3-8 are unallocated; only bits 1-2 are the busy flags"
+        );
 
-        let mut bad_tail = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
-        bad_tail.data[7] = 0;
-        assert!(ready_client.handle_master_status(&bad_tail).is_none());
-        assert!(ready_client.is(SCState::Idle));
+        let mut zero_padded_tail =
+            SCClient::new(SCClientConfig::default().with_min_spacing(0));
+        let mut zeroed = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
+        zeroed.data[7] = 0;
+        zero_padded_tail.handle_master_status(&zeroed);
+        assert!(
+            zero_padded_tail.is(SCState::Ready),
+            "a peer that zero-pads its reserved tail is still understood"
+        );
     }
 
     #[test]

@@ -32,7 +32,9 @@ fn master_ready() -> [u8; 8] {
         SCMasterState::Active.as_u8(),
         SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
         SCSequenceState::Ready.as_u8(),
-        0,
+        // G3 — byte 5 bits 3-8 are unallocated and go out as 1; only bits 1-2
+        // are the busy flags.
+        0xFC,
         0xFF,
         0xFF,
         0xFF,
@@ -45,7 +47,7 @@ fn master_playback(step_id: u8) -> [u8; 8] {
         SCMasterState::Active.as_u8(),
         step_id,
         SCSequenceState::PlayBack.as_u8(),
-        0,
+        0xFC,
         0xFF,
         0xFF,
         0xFF,
@@ -58,7 +60,7 @@ fn master_abort(step_id: u8) -> [u8; 8] {
         SCMasterState::Active.as_u8(),
         step_id,
         SCSequenceState::Abort.as_u8(),
-        0,
+        0xFC,
         0xFF,
         0xFF,
         0xFF,
@@ -126,7 +128,7 @@ fn master_inactive() -> [u8; 8] {
         SCMasterState::Inactive.as_u8(),
         SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
         SCSequenceState::NotApplicable.as_u8(),
-        0,
+        0xFC,
         0xFF,
         0xFF,
         0xFF,
@@ -868,8 +870,8 @@ fn sequence_control_master_busy_flags_are_low_bit_status_only() {
     assert_eq!(ready_with_busy[3], SCSequenceState::Ready.as_u8());
     assert_eq!(
         ready_with_busy[4] & !0x03,
-        0,
-        "master status busy information is bounded to the defined low bits"
+        0xFC,
+        "G3: byte 5 bits 3-8 are unallocated and transmitted as 1"
     );
     assert_eq!(
         ready_with_busy[4] & 0x03,
@@ -905,8 +907,9 @@ fn sequence_control_master_busy_flags_are_low_bit_status_only() {
     master.set_busy_parsing_scd(false);
     let playback_without_busy = master.update(100).unwrap();
     assert_eq!(
-        playback_without_busy[4], 0,
-        "clearing the local busy conditions must clear the wire status bits"
+        playback_without_busy[4], 0xFC,
+        "clearing the local busy conditions clears bits 1-2 and leaves the \
+         unallocated bits at 1"
     );
 }
 
@@ -964,6 +967,20 @@ fn sequence_control_rejects_malformed_statuses_without_state_mutation() {
             0xFF,
             0xFF,
         ],
+    ] {
+        assert!(
+            client
+                .try_handle_master_status(&master_status(0x10, bytes))
+                .is_err()
+        );
+        assert!(client.is(SCState::Idle));
+    }
+
+    // G3 — reserved bits are transmitted as 1 and ignored on receive. These two
+    // used to be rejected before any state update: an undefined byte-5 bit and
+    // a zero-padded reserved tail each left the client Idle forever against a
+    // peer that differed only in bits neither side uses.
+    for bytes in [
         [
             SC_MSG_CODE_MASTER,
             SCMasterState::Active.as_u8(),
@@ -985,12 +1002,13 @@ fn sequence_control_rejects_malformed_statuses_without_state_mutation() {
             0,
         ],
     ] {
+        let mut g3_client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
         assert!(
-            client
+            g3_client
                 .try_handle_master_status(&master_status(0x10, bytes))
-                .is_err()
+                .is_ok()
         );
-        assert!(client.is(SCState::Idle));
+        assert!(g3_client.is(SCState::Ready));
     }
 
     let mut master = SCMaster::new(
@@ -1062,16 +1080,6 @@ fn sequence_control_rejects_malformed_statuses_without_state_mutation() {
             0xFF,
             0xFF,
         ],
-        [
-            SC_MSG_CODE_CLIENT,
-            SCClientState::Enabled.as_u8(),
-            SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
-            SCSequenceState::Ready.as_u8(),
-            0,
-            0xFF,
-            0,
-            0xFF,
-        ],
     ] {
         assert!(
             master
@@ -1080,6 +1088,26 @@ fn sequence_control_rejects_malformed_statuses_without_state_mutation() {
         );
         assert!(master.is(SCState::Ready));
     }
+
+    // G3 — a zero in the reserved tail is not a malformed status. Rejecting it
+    // before any state update meant the master never counted the Ready of a
+    // peer that differed only in bits neither side uses.
+    let mut g3_master = SCMaster::new(
+        SCMasterConfig::default()
+            .with_status_interval(100)
+            .with_ready_timeout(1_000_000)
+            .with_active_timeout(1_000_000),
+    );
+    g3_master.add_step(sc_step(7)).unwrap();
+    g3_master.start().unwrap();
+    let mut zero_padded = client_ready();
+    zero_padded[6] = 0;
+    assert!(
+        g3_master
+            .try_handle_client_status(&client_status(0x20, zero_padded))
+            .is_ok()
+    );
+    assert!(!g3_master.is(SCState::Ready));
 }
 
 #[test]

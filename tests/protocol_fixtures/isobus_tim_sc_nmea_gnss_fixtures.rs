@@ -282,7 +282,6 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
         "client_recording_completion_step7",
         "client_reserved_state_ready",
         "client_ready_bad_func_error",
-        "client_ready_bad_tail",
     ] {
         malformed_master.handle_client_status(&Message::new(
             PGN_SC_CLIENT_STATUS,
@@ -294,6 +293,23 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
             "{malformed} must be ignored instead of prefix-decoded"
         );
     }
+
+    // G3 — reserved bits go out as 1 and are ignored on receive. A peer that
+    // zero-pads its reserved tail differs only in bits neither side uses, and
+    // used to be rejected before any state update, so the master never left
+    // Ready and the client stayed Idle forever.
+    let mut g3_master = SCMaster::new(master_cfg);
+    g3_master.add_step(sc_step(7)).unwrap();
+    g3_master.start().unwrap();
+    g3_master.handle_client_status(&Message::new(
+        PGN_SC_CLIENT_STATUS,
+        parse_named_hex_bytes(ISOBUS_SC_STATUS_HEX, "client_ready_zero_padded_tail"),
+        0x20,
+    ));
+    assert!(
+        !g3_master.is(SCState::Ready),
+        "a zero-padded reserved tail must not cost the client its Ready"
+    );
     malformed_master.handle_client_status(&Message::new(
         PGN_SC_MASTER_STATUS,
         client_ready.to_vec(),
@@ -324,8 +340,6 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
         "master_recording_step7",
         "master_recording_completion_step7",
         "master_reserved_state_ready",
-        "master_ready_bad_busy_flags",
-        "master_ready_bad_tail",
     ] {
         assert!(
             malformed_client
@@ -338,6 +352,22 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
             "{malformed} must not emit a client response"
         );
         assert!(malformed_client.is(SCState::Idle));
+    }
+
+    for g3 in [
+        "master_ready_undefined_busy_bits",
+        "master_ready_zero_padded_tail",
+    ] {
+        let mut g3_client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+        g3_client.handle_master_status(&Message::new(
+            PGN_SC_MASTER_STATUS,
+            parse_named_hex_bytes(ISOBUS_SC_STATUS_HEX, g3),
+            0x10,
+        ));
+        assert!(
+            g3_client.is(SCState::Ready),
+            "{g3} differs only in bits neither side uses; G3 says ignore them"
+        );
     }
     assert!(
         malformed_client

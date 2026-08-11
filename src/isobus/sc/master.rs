@@ -29,7 +29,7 @@ use super::types::{
     SCMasterConfig, SCMasterState, SCSequenceState, SCState, SequenceStep,
     sc_client_func_error_byte_is_valid, sc_client_state_byte_is_valid,
     sc_inactive_status_sequence_fields_are_valid, sc_sequence_state_byte_is_valid,
-    sc_status_reserved_tail_is_valid, sc_status_sequence_number_is_valid,
+    sc_status_payload_len_is_canonical, sc_status_sequence_number_is_valid,
     sc_status_sequence_state_is_supported,
 };
 use crate::net::error::{Error, Result};
@@ -386,9 +386,9 @@ impl SCMaster {
                 "SC client status has wrong message code",
             ));
         }
-        if !sc_status_reserved_tail_is_valid(&msg.data) {
+        if !sc_status_payload_len_is_canonical(&msg.data) {
             return Err(Error::invalid_data(
-                "SC client status has non-0xFF reserved tail bytes",
+                "SC client status has a wrong payload length",
             ));
         }
         let client_state_raw = msg.get_u8(1);
@@ -620,7 +620,9 @@ impl SCMaster {
         } else {
             seq.as_u8()
         };
-        data[4] = (u8::from(self.busy_nv_memory)) | (u8::from(self.busy_parsing_scd) << 1);
+        // G3 — the six unallocated bits of byte 5 go out as 1, not clobbered
+        // to 0 along with the two busy flags.
+        data[4] = 0xFC | u8::from(self.busy_nv_memory) | (u8::from(self.busy_parsing_scd) << 1);
         data
     }
 
@@ -910,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn client_status_rejects_reserved_func_error_and_tail_bytes() {
+    fn client_status_rejects_a_reserved_function_error_value() {
         let mut bad_error_master = SCMaster::new(SCMasterConfig::default());
         bad_error_master.add_step(step(7)).unwrap();
         bad_error_master.start().unwrap();
@@ -919,13 +921,19 @@ mod tests {
         bad_error_master.handle_client_status(&bad_error);
         assert!(bad_error_master.is(SCState::Ready));
 
-        let mut bad_tail_master = SCMaster::new(SCMasterConfig::default());
-        bad_tail_master.add_step(step(7)).unwrap();
-        bad_tail_master.start().unwrap();
-        let mut bad_tail = client_status(0x41, SCSequenceState::Ready, 0xFF);
-        bad_tail.data[7] = 0;
-        bad_tail_master.handle_client_status(&bad_tail);
-        assert!(bad_tail_master.is(SCState::Ready));
+        // G3 — a zero-padded reserved tail is still a valid client status. This
+        // used to be rejected before any state update, so the master never left
+        // Ready for a peer that differed in bits neither side uses.
+        let mut zero_padded_master = SCMaster::new(SCMasterConfig::default());
+        zero_padded_master.add_step(step(7)).unwrap();
+        zero_padded_master.start().unwrap();
+        let mut zeroed = client_status(0x41, SCSequenceState::Ready, 0xFF);
+        zeroed.data[7] = 0;
+        zero_padded_master.handle_client_status(&zeroed);
+        assert!(
+            !zero_padded_master.is(SCState::Ready),
+            "the client's Ready must be counted despite the zero-padded tail"
+        );
     }
 
     #[test]

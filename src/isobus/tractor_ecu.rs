@@ -168,6 +168,22 @@ impl TecuClassification {
         {
             return false;
         }
+        // ISO 11783-9 §4.4.2.6: "Front command messages can only be supported
+        // by class 3 tractor-implement interface." The front set was gated on
+        // the F addendum alone, so a Class 1 or 2 TECU with front equipment
+        // advertised commands its interface class cannot carry — the same
+        // condition the rear set above already checks. Both are necessary.
+        if !matches!(self.base_class, TecuClass::Class3)
+            && (facilities.front_hitch_command
+                || facilities.front_pto_command
+                || facilities.front_hitch_limit_status
+                || facilities.front_hitch_exit_code
+                || facilities.front_pto_engagement_request
+                || facilities.front_pto_speed_limit_status
+                || facilities.front_pto_exit_code)
+        {
+            return false;
+        }
         if !self.navigation && facilities.navigation {
             return false;
         }

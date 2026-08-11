@@ -159,9 +159,24 @@ fn encode_speed_mps_non_na(mps: f64) -> u16 {
     }
 }
 
-/// Machine Selected Speed status (PGN 0xF022). Speed: `0.001 m/s`
-/// per bit. `0xFFFF` = not available.
+/// A compact speed/direction/source triple retained for C++ parity.
+///
+/// **This is not PGN 0xF022.** It used to claim to be, and it is a second,
+/// contradictory layout for that PGN: it puts direction, source and limit
+/// status in byte 5 where ISO 11783-7 puts them in byte 8, and it reads the
+/// speed source as 2 bits rather than 3 — so raw 4 (Simulated) aliases to
+/// WheelBased, the same hazard [`MachineSelectedSpeedFull`] was already fixed
+/// for. The committed real-bus capture contradicts this layout.
+///
+/// Use [`MachineSelectedSpeedFull`] for anything that touches a bus.
+///
+/// [`MachineSelectedSpeedFull`]: crate::isobus::implement::MachineSelectedSpeedFull
+#[deprecated(
+    since = "0.1.0",
+    note = "not the ISO 11783-7 PGN 0xF022 layout; use MachineSelectedSpeedFull"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(deprecated)]
 pub struct MachineSelectedSpeedMsg {
     pub speed_raw: u16,
     pub direction: MachineDirection,
@@ -169,6 +184,7 @@ pub struct MachineSelectedSpeedMsg {
     pub limit_status: SpeedExitCode,
 }
 
+#[allow(deprecated)]
 impl Default for MachineSelectedSpeedMsg {
     fn default() -> Self {
         Self {
@@ -180,6 +196,7 @@ impl Default for MachineSelectedSpeedMsg {
     }
 }
 
+#[allow(deprecated)]
 impl MachineSelectedSpeedMsg {
     /// Speed in m/s. Returns `0.0` if the raw is the `0xFFFF`
     /// not-available sentinel.
@@ -291,11 +308,17 @@ impl MachineSpeedCommandMsg {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
+    /// The deprecated legacy layout still round-trips through itself; what it
+    /// must not do is claim to be PGN 0xF022, which
+    /// [`MachineSelectedSpeedFull`] owns.
+    ///
+    /// [`MachineSelectedSpeedFull`]: crate::isobus::implement::MachineSelectedSpeedFull
     #[test]
-    fn status_round_trip() {
+    fn legacy_status_round_trip() {
         let m = MachineSelectedSpeedMsg {
             speed_raw: 5000, // 5 m/s
             direction: MachineDirection::Forward,
@@ -306,6 +329,21 @@ mod tests {
         let decoded = MachineSelectedSpeedMsg::decode(&bytes).unwrap();
         assert_eq!(decoded, m);
         assert!((decoded.speed_mps() - 5.0).abs() < 1e-9);
+
+        // The 2-bit source read is exactly why it may not be used on a bus: a
+        // conformant transmitter's Simulated (4) is unrepresentable here.
+        assert_eq!(SpeedSource::from_u8(4), SpeedSource::Simulated);
+        let aliased = MachineSelectedSpeedMsg {
+            source: SpeedSource::Simulated,
+            ..m
+        };
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&aliased.encode())
+                .expect("round trip")
+                .source,
+            SpeedSource::WheelBased,
+            "the legacy 2-bit field aliases Simulated onto WheelBased"
+        );
     }
 
     #[test]

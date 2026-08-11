@@ -106,6 +106,48 @@ fn tecu_classification_gates_facility_advertisement_by_class_and_addendum() {
         ..Default::default()
     }));
 
+    // K4 — ISO 11783-9 §4.4.2.6: "Front command messages can only be supported
+    // by class 3 tractor-implement interface." The front set used to be gated
+    // on the F addendum alone, so a Class 2 with front equipment fitted could
+    // advertise commands its interface class cannot carry.
+    let class2_front = TecuClassification {
+        base_class: TecuClass::Class2,
+        front_mounted: true,
+        version: 1,
+        ..Default::default()
+    };
+    assert!(
+        class2_front.allows_facilities(&TractorFacilities {
+            front_hitch_position: true,
+            front_pto_speed: true,
+            ..Default::default()
+        }),
+        "front *status* only needs the F addendum"
+    );
+    for facilities in [
+        TractorFacilities {
+            front_hitch_command: true,
+            ..Default::default()
+        },
+        TractorFacilities {
+            front_pto_command: true,
+            ..Default::default()
+        },
+        TractorFacilities {
+            front_hitch_limit_status: true,
+            ..Default::default()
+        },
+        TractorFacilities {
+            front_pto_exit_code: true,
+            ..Default::default()
+        },
+    ] {
+        assert!(
+            !class2_front.allows_facilities(&facilities),
+            "front commands need Class 3 as well as the F addendum"
+        );
+    }
+
     let class3_v2_full = TecuClassification {
         base_class: TecuClass::Class3,
         navigation: true,

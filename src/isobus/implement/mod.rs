@@ -32,9 +32,7 @@ pub use inventory::{
     FamilyLevel, IMPLEMENT_FAMILIES, ImplementFamilyInfo, ImplementMessageFamily, family_info,
 };
 pub use lighting::{LightState, LightingController, LightingState};
-pub use machine_speed_cmd::{
-    MachineDirection, MachineSelectedSpeedMsg, MachineSpeedCommandMsg, SpeedExitCode, SpeedSource,
-};
+pub use machine_speed_cmd::{MachineDirection, MachineSpeedCommandMsg, SpeedExitCode, SpeedSource};
 pub use speed_distance::{
     ExitReasonCode, GroundBasedSpeedDist, HitchStatus, LimitStatus, MachineSelectedSpeedFull,
     PtoStatus, Signal, WheelBasedSpeedDist, wheel_slip_percent,

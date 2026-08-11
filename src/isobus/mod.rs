@@ -48,12 +48,12 @@ pub use implement::{
     GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd,
     HitchRollPitchCmd, HitchStatus, IMPLEMENT_FAMILIES, ImplementFamilyInfo,
     ImplementMessageFamily, LightState, LightingController, LightingState, LimitStatus,
-    MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg, MachineSpeedCommandMsg,
-    MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus,
-    RequiredFacilitiesAggregator, SpeedExitCode, SpeedSource, TECU_FACILITY_MATRIX, TecuClass,
-    TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole, TractorMode, ValveCommand,
-    ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist, curvature_within_range,
-    estimated_flow_pgn, facilities_in, family_info, measured_flow_pgn, wheel_slip_percent,
+    MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout,
+    PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, RequiredFacilitiesAggregator,
+    SpeedExitCode, SpeedSource, TECU_FACILITY_MATRIX, TecuClass, TractorControlModeMsg,
+    TractorFacilities, TractorFacilitiesRole, TractorMode, ValveCommand, ValveFailSafe,
+    ValveLimitStatus, ValveState, WheelBasedSpeedDist, curvature_within_range, estimated_flow_pgn,
+    facilities_in, family_info, measured_flow_pgn, wheel_slip_percent,
 };
 pub use sc::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_ACTIVE_RATE_MS,
@@ -82,8 +82,8 @@ mod arbitrary_decode_tests {
         AuxValveCommandMsg, AuxValveFlowMsg, DriveStrategyCmd, GroundBasedSpeedDist,
         GuidanceMachineInfo, GuidanceSystemCmd, HitchCommandMsg, HitchPtoCombinedCmd,
         HitchRollPitchCmd, HitchStatus, LightingState, MachineSelectedSpeedFull,
-        MachineSelectedSpeedMsg, MachineSpeedCommandMsg, PtoCommandMsg, PtoStatus,
-        TractorControlModeMsg, TractorFacilities, WheelBasedSpeedDist,
+        MachineSpeedCommandMsg, PtoCommandMsg, PtoStatus, TractorControlModeMsg, TractorFacilities,
+        WheelBasedSpeedDist,
     };
     use crate::net::Message;
     use crate::net::pgn_defs::{
@@ -131,7 +131,6 @@ mod arbitrary_decode_tests {
             let _ = PtoStatus::decode(&data, true);
             let _ = LightingState::decode(&data);
             let _ = AuxValveFlowMsg::decode(&data, valve_index);
-            let _ = MachineSelectedSpeedMsg::decode(&data);
             let _ = MachineSpeedCommandMsg::decode(&data);
             let _ = DriveStrategyCmd::decode(&data);
             let _ = GuidanceSystemCmd::decode(&data);
@@ -210,9 +209,6 @@ mod arbitrary_decode_tests {
                     AuxValveFlowMsg::decode(&decoded.encode(), valve_index),
                     Some(decoded)
                 );
-            }
-            if let Some(decoded) = MachineSelectedSpeedMsg::decode(&data) {
-                prop_assert_eq!(MachineSelectedSpeedMsg::decode(&decoded.encode()), Some(decoded));
             }
             if let Some(decoded) = MachineSpeedCommandMsg::decode(&data) {
                 prop_assert_eq!(MachineSpeedCommandMsg::decode(&decoded.encode()), Some(decoded));

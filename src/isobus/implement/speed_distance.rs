@@ -386,10 +386,12 @@ impl GroundBasedSpeedDist {
 
 // ─── Machine Selected Speed — full variant (PGN 0xF022) ────────────────
 
-/// Full ISO 11783-7 wire layout for `PGN_MACHINE_SELECTED_SPEED`.
-/// Includes accumulated distance + exit code, with the status nibble
-/// packed into byte 7 (3-bit `limit_status`, not 2-bit). Use
-/// `super::MachineSelectedSpeedMsg` for the simpler legacy layout.
+/// The ISO 11783-7 wire layout for `PGN_MACHINE_SELECTED_SPEED`.
+///
+/// Accumulated distance and exit code included, with the status nibble packed
+/// into byte 8 (3-bit `limit_status`, and a 3-bit speed source). This is the
+/// only layout for the PGN; the deprecated `MachineSelectedSpeedMsg` used to
+/// claim it too, with the fields two bytes earlier and a 2-bit source.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MachineSelectedSpeedFull {
     /// `0.001 m/s` per bit.

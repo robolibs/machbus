@@ -140,11 +140,16 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     assert!((decoded_selected_full.speed_mps.unwrap_or(f64::NAN)- 2.5).abs() < 1e-3);
     assert_eq!(decoded_selected_full.source, SpeedSource::GroundBased);
 
-    let selected_status = MachineSelectedSpeedMsg {
-        speed_raw: 5000,
+    // K3 — this fixture used to hold the second, contradictory layout for PGN
+    // 0xF022: direction/source/limit in byte 5 instead of byte 8, with a 2-bit
+    // speed source. There is one layout per PGN, and it is the Annex one.
+    let selected_status = MachineSelectedSpeedFull {
+        speed_mps: 5.0.into(),
+        distance_m: Signal::NotAvailable,
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::OperatorLimited,
+        limit_status: 1,
+        exit_code: 0x3F,
     };
     let selected_status_bytes = parse_named_hex_frame(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
@@ -152,7 +157,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
     assert_eq!(selected_status.encode(), selected_status_bytes);
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_status_bytes).unwrap(),
+        MachineSelectedSpeedFull::decode(&selected_status_bytes).unwrap(),
         selected_status
     );
     assert_eq!(
@@ -615,18 +620,18 @@ fn fixture_isobus_tractor_ecu_and_implement_sentinels_are_stable() {
         "machine_selected_speed_status_not_available",
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::default().encode(),
+        MachineSelectedSpeedFull::default().encode(),
         selected_default
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_default).unwrap(),
-        MachineSelectedSpeedMsg::default()
+        MachineSelectedSpeedFull::decode(&selected_default).unwrap(),
+        MachineSelectedSpeedFull::default()
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_default)
+        MachineSelectedSpeedFull::decode(&selected_default)
             .unwrap()
-            .speed_mps(),
-        0.0
+            .speed_mps,
+        Signal::NotAvailable
     );
 
     let speed_cmd_default = parse_named_hex_frame(
@@ -921,15 +926,17 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "machine_selected_speed_status_max",
     );
-    let selected_status_max_msg = MachineSelectedSpeedMsg {
-        speed_raw: 0xFFFE,
+    let selected_status_max_msg = MachineSelectedSpeedFull {
+        speed_mps: 64.254.into(),
+        distance_m: Signal::NotAvailable,
         direction: MachineDirection::Error,
         source: SpeedSource::NavigationBased,
-        limit_status: SpeedExitCode::SystemLimited,
+        limit_status: 2,
+        exit_code: 0x3F,
     };
     assert_eq!(selected_status_max_msg.encode(), selected_status_max);
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_status_max).unwrap(),
+        MachineSelectedSpeedFull::decode(&selected_status_max).unwrap(),
         selected_status_max_msg
     );
 
@@ -1192,7 +1199,7 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "malformed_lighting_short3 must be rejected"
     );
     assert!(
-        MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
+        MachineSelectedSpeedFull::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
                 "malformed_machine_selected_speed_short4",
             ))
@@ -1270,7 +1277,7 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "undefined_bits_machine_selected_speed_reserved",
     ] {
         assert!(
-            MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
+            MachineSelectedSpeedFull::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
                 name,
             ))
@@ -1446,7 +1453,7 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         assert!(AuxValveFlowMsg::decode(malformed, 3).is_none());
         assert!(LightingState::decode(malformed).is_none());
         assert!(GuidanceMachineInfo::decode(malformed).is_none());
-        assert!(MachineSelectedSpeedMsg::decode(malformed).is_none());
+        assert!(MachineSelectedSpeedFull::decode(malformed).is_none());
         assert!(MachineSpeedCommandMsg::decode(malformed).is_none());
         assert!(DriveStrategyCmd::decode(malformed).is_none());
         assert!(GuidanceSystemCmd::decode(malformed).is_none());

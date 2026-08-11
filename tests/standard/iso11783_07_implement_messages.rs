@@ -3,11 +3,10 @@ use machbus::isobus::implement::{
     DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue, GroundBasedSpeedDist,
     GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg,
     HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState, LightingState, LimitStatus,
-    MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg,
-    MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus,
-    RequestResetCommandStatus, Signal, SpeedExitCode, SpeedSource, TractorControlModeMsg,
-    TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
-    estimated_flow_pgn, measured_flow_pgn,
+    MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg,
+    MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, Signal,
+    SpeedExitCode, SpeedSource, TractorControlModeMsg, TractorMode, ValveCommand, ValveFailSafe,
+    ValveLimitStatus, ValveState, WheelBasedSpeedDist, estimated_flow_pgn, measured_flow_pgn,
 };
 use machbus::j1939::shortcut_button::{self, ShortcutButtonState};
 use machbus::j1939::{
@@ -257,17 +256,6 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     };
     assert_eq!(LightingState::decode(&lighting.encode()), Some(lighting));
 
-    let selected = MachineSelectedSpeedMsg {
-        speed_raw: 3210,
-        direction: MachineDirection::Forward,
-        source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::OperatorLimited,
-    };
-    assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected.encode()),
-        Some(selected)
-    );
-
     let selected_full = MachineSelectedSpeedFull {
         speed_mps: 4.2.into(),
         distance_m: 99.0.into(),
@@ -479,26 +467,35 @@ fn implement_aux_valve_and_machine_speed_reject_reserved_payload_bits() {
     bad_aux_index[0] = 16;
     assert_eq!(AuxValveCommandMsg::decode(&bad_aux_index), None);
 
-    let selected = MachineSelectedSpeedMsg {
-        speed_raw: 1_234,
+    // K3 — PGN 0xF022 has exactly one layout, `MachineSelectedSpeedFull`.
+    // `MachineSelectedSpeedMsg` used to claim the same PGN with direction,
+    // source and limit status in byte 5 instead of byte 8 and a 2-bit speed
+    // source, so raw 4 (Simulated) aliased to WheelBased. It is deprecated and
+    // no longer re-exported.
+    let selected = MachineSelectedSpeedFull {
+        speed_mps: 1.234.into(),
         direction: MachineDirection::Forward,
-        source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::NotLimited,
+        source: SpeedSource::Simulated,
+        ..MachineSelectedSpeedFull::default()
     };
     let selected_bytes = selected.encode();
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_bytes),
+        MachineSelectedSpeedFull::decode(&selected_bytes),
         Some(selected)
+    );
+    assert_eq!(
+        MachineSelectedSpeedFull::decode(&selected_bytes)
+            .expect("round trip")
+            .source,
+        SpeedSource::Simulated,
+        "a 3-bit speed source must not alias Simulated onto WheelBased"
     );
 
     // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
     // receive so they can be assigned later. These used to assert rejection.
     let mut reserved_clear = selected_bytes;
-    reserved_clear[4] &= 0x3F;
-    assert_eq!(
-        MachineSelectedSpeedMsg::decode(&reserved_clear),
-        Some(selected)
-    );
+    reserved_clear[6] &= 0x3F;
+    assert!(MachineSelectedSpeedFull::decode(&reserved_clear).is_some());
 
     let command = MachineSpeedCommandMsg::default()
         .with_speed_mps(2.5)

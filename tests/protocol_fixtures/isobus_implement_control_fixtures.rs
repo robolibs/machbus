@@ -1611,9 +1611,20 @@ fn fixture_isobus_control_functionalities_codecs_are_stable() {
         }
     );
 
+    // ISO 11783-12 B.9: "Functionality characteristics values reserved for ISO
+    // assignment shall be parsed without generating an error." 0x63 is
+    // unassigned in this build — A.10 keeps the 0-255 list in the online
+    // database — so the block is skipped by its declared option length rather
+    // than taking the whole message down with it.
     assert_eq!(Functionality::from_u8(0x63), None);
+    let unknown = parse_named_hex_bytes(ISOBUS_CONTROL_FUNCTIONALITIES_HEX, "unknown_functionality");
+    assert!(
+        Functionalities::decode(&unknown)
+            .expect("an unassigned functionality is parsed, not refused")
+            .is_empty()
+    );
+
     for name in [
-        "unknown_functionality",
         "truncated_tim_server",
         "trailing_after_min_cf",
         "duplicate_min_cf",

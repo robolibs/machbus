@@ -742,11 +742,25 @@ impl Functionalities {
                 )));
             }
 
-            let functionality = Functionality::from_u8(functionality_byte).ok_or_else(|| {
-                Error::invalid_data(format!(
-                    "unknown functionality byte 0x{functionality_byte:02X}",
-                ))
-            })?;
+            // ISO 11783-12 B.9: "Functionality characteristics values reserved
+            // for ISO assignment shall be parsed without generating an error."
+            // A.10 puts the functionality list in the online database at
+            // isobus.net with a value range of 0 to 255, so the set grows
+            // between revisions. Rejecting the message threw away every
+            // functionality this build *does* understand because of one it did
+            // not — a newer peer's UT and TC support became invisible.
+            //
+            // The block is skipped using its own declared option length, which
+            // is what makes an unknown block safely traversable.
+            let Some(functionality) = Functionality::from_u8(functionality_byte) else {
+                if data.len() < offset + option_len {
+                    return Err(Error::invalid_data(format!(
+                        "functionality 0x{functionality_byte:02X} option block truncated",
+                    )));
+                }
+                offset += option_len;
+                continue;
+            };
 
             let seen_bit = 1u32 << u32::from(functionality.as_u8());
             if (seen & seen_bit) != 0 {
@@ -1127,7 +1141,6 @@ mod tests {
         assert!(Functionalities::decode(&[]).is_err());
         assert!(Functionalities::decode(&[1, 0, 1, 0]).is_err());
         assert!(Functionalities::decode(&[0xFF]).is_err());
-        assert!(Functionalities::decode(&[0xFF, 1, 0x63, 1, 1, 0]).is_err());
         assert!(Functionalities::decode(&[0xFF, 1, 0, 1]).is_err());
         assert!(Functionalities::decode(&[0xFF, 1, 0, 1, 0, 0]).is_err());
         assert!(Functionalities::decode(&[0xFF, 1, 0, 0, 0, 0xFF, 0xFF, 0xFF]).is_err());
@@ -1140,6 +1153,40 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// ISO 11783-12 B.9 — "Functionality characteristics values reserved for
+    /// ISO assignment shall be parsed without generating an error", and A.10
+    /// puts the 0-255 functionality list in the online database at isobus.net,
+    /// so the set grows between revisions.
+    ///
+    /// Rejecting the whole message over one unknown code threw away every
+    /// functionality this build *does* understand — a newer peer's UT and TC
+    /// support went invisible because it also advertised something newer.
+    #[test]
+    fn an_unknown_functionality_does_not_discard_the_known_ones() {
+        // Sole block is an unassigned code: parsed, yielding nothing known.
+        let unknown_only = Functionalities::decode(&[0xFF, 1, 0x63, 1, 1, 0])
+            .expect("an unassigned functionality is not an error");
+        assert!(unknown_only.is_empty());
+
+        // Unassigned code sandwiched between two this build understands. Both
+        // known blocks must survive, and the skip must land on the right byte.
+        let mixed = Functionalities::decode(&[
+            0xFF, 3, //
+            0, 1, 1, 0x01, // Minimum CF, 1 option byte
+            0x63, 2, 2, 0xAA, 0xBB, // unassigned, 2 option bytes
+            1, 2, 0, // UT server, no options
+        ])
+        .expect("an unassigned functionality is skipped, not fatal");
+
+        let codes: Vec<u8> = mixed
+            .iter()
+            .map(|item| item.functionality.as_u8())
+            .collect();
+        assert_eq!(codes, vec![0, 1], "both known functionalities survive");
+        assert_eq!(mixed[0].option_bytes, vec![0x01]);
+        assert_eq!(mixed[1].generation, 2);
     }
 
     /// T8 / Part-12 B.9 — a peer built against a later revision sends a longer

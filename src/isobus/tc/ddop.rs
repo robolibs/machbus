@@ -844,7 +844,22 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
-/// Tables A.1-A.5 size every DDOP text field "0 to 128" bytes.
+/// Tables A.1-A.5 size every DDOP text field "0 to 128" bytes — the normative
+/// Range column, whose header is literally "Size bytes". The footnote records
+/// that this "was extended from 32 to 128 in ISO 11783-10 version 4".
+///
+/// The Description column of the same rows adds a second, looser statement:
+/// "The maximum number of characters of the designator is 32". Both are
+/// intended to hold at once — Annex A's preamble derives one from the other:
+/// "The maximum number of bytes per character of a UTF-8 coded string is
+/// 4 bytes. Therefore, the maximum length of the byte arrays is four times the
+/// length of the UTF-8 coded strings as specified in the corresponding XML
+/// definitions." 32 characters × 4 bytes = 128.
+///
+/// Only the byte limit is enforced here, because that is the normative range
+/// and it is what the one-byte length prefix counts. A 128-character ASCII
+/// designator therefore serializes even though it is four times the character
+/// guidance; keep designators to 32 characters if a strict TC is in scope.
 pub const DDOP_TEXT_MAX_BYTES: usize = 128;
 
 /// Validate a DDOP text field's *byte* length.

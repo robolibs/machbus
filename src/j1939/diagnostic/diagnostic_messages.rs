@@ -999,7 +999,7 @@ impl Dm22Message {
     }
 }
 
-// ─── DM5 — Diagnostic Protocol Identification ─────────────────────────
+// ─── Diagnostic protocol identification (ISO 11783-12 B.5) ────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -1038,7 +1038,11 @@ pub struct DiagnosticProtocolId {
     pub protocols: u8,
 }
 
-/// DM5 — Diagnostic Readiness / protocol identification.
+/// Kept for callers that reached for the J1939 name. The two are **not** the
+/// same message: J1939-73's DM5 is Diagnostic Readiness 1 on PGN 65230, while
+/// this is ISO 11783-12 B.5 "Diagnostic protocol" on PGN 64818 (0xFD32), whose
+/// byte 1 carries the A.6 protocol identification and whose bytes 2-8 are
+/// "Reserved for ISO assignment".
 pub type Dm5Message = DiagnosticProtocolId;
 
 impl Default for DiagnosticProtocolId {

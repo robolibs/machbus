@@ -645,6 +645,12 @@ mod tests {
 
         // The operator clears. The hazard has not gone away, so neither does
         // the latch — and no second PositionStale is ever coming.
+        //
+        // NOTE this only exercises `clear_stop` reading the field. That the
+        // field is *populated* by `on_event` is asserted through `Session` by
+        // `clear_stop_is_refused_through_the_session_while_the_receiver_is_stale`
+        // (G9); without that companion, deleting `self.gnss.observe(event)`
+        // kept this test green and silently reverted C3.
         auto.gnss = hazards;
         auto.clear_stop();
         assert_eq!(

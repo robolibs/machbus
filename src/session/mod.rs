@@ -891,6 +891,150 @@ mod tests {
         );
     }
 
+    /// A3 / G9 — the C3 guard was tested by building a `GnssHazards` on the
+    /// side, poking its private field and assigning the struct into the
+    /// plugin. That proves `clear_stop` reads a field; it never exercises
+    /// `on_event`, so deleting `self.gnss.observe(event)` from either
+    /// controller kept it green and silently reverted C3. This drives the
+    /// whole path through `Session` and asserts the machine-visible outcome.
+    #[test]
+    fn clear_stop_is_refused_through_the_session_while_the_receiver_is_stale() {
+        use super::plugins::{AutoDrive, Gnss, Guidance};
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_DATA;
+        use crate::nmea::NMEAConfig;
+
+        // A healthy RTK Fixed with DD209 Safe, so the fix is steerable and the
+        // watchdog that fires first is the position one.
+        fn healthy_fix() -> Vec<crate::net::Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&((52.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[15..23].copy_from_slice(&((5.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = 0xFD; // reserved ones + DD209 Safe
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        let gnss = || Gnss::new(NMEAConfig::default().with_all(true));
+        let net_config = || crate::net::NetworkConfig::default().fast_packet(true);
+
+        // AutoDrive first.
+        let mut session = Session::builder(test_name(42), 0x80)
+            .network_config(net_config())
+            .plug(AutoDrive::new())
+            .plug(gnss())
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for frame in healthy_fix() {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        assert!(
+            session
+                .get::<AutoDrive>()
+                .is_some_and(|a| a.stop_reason().is_none()),
+            "precondition: a healthy RTK Fixed is steerable"
+        );
+
+        // The cable is cut. Nothing else arrives. The position watchdog
+        // (1.5 s) fires before the quality watchdog (3 s).
+        for _ in 0..18 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::PositionStale),
+            "a receiver that stops reporting must stop the autonomy path"
+        );
+
+        // The operator presses "clear stop". The receiver is still silent, and
+        // because the trigger is edge-emitted no second PositionStale is
+        // coming — so clearing here would disarm the net permanently.
+        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::PositionStale),
+            "clear_stop must be refused while the receiver is still stale"
+        );
+
+        // And the refusal is machine-visible, not just internal state.
+        now = now.add_millis(100);
+        session.tick(now);
+        assert!(
+            !session
+                .get::<AutoDrive>()
+                .is_some_and(super::plugins::AutoDrive::is_engaged),
+            "a refused clear must leave the controller disengaged"
+        );
+
+        // A position arriving is what actually resolves it.
+        now = now.add_millis(100);
+        for frame in healthy_fix() {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "once the receiver reports again the operator can clear"
+        );
+
+        // Guidance carries the identical guard and had no test at all.
+        let mut guided = Session::builder(test_name(43), 0x80)
+            .network_config(net_config())
+            .plug(Guidance::new())
+            .plug(gnss())
+            .build()
+            .unwrap();
+        guided.start().unwrap();
+        claim(&mut guided);
+
+        let mut now = Instant::from_millis(10_000);
+        for frame in healthy_fix() {
+            guided.feed(0, &frame, now);
+        }
+        while guided.poll_event().is_some() {}
+        for _ in 0..18 {
+            now = now.add_millis(100);
+            guided.tick(now);
+            while guided.poll_event().is_some() {}
+        }
+        assert_eq!(
+            guided
+                .get::<Guidance>()
+                .and_then(super::plugins::Guidance::stop_reason),
+            Some(SafeStopTrigger::PositionStale)
+        );
+        guided.get_mut::<Guidance>().unwrap().clear_stop();
+        assert_eq!(
+            guided
+                .get::<Guidance>()
+                .and_then(super::plugins::Guidance::stop_reason),
+            Some(SafeStopTrigger::PositionStale),
+            "Guidance::clear_stop must be refused on the same terms"
+        );
+    }
+
     /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
     /// caller plugging both controllers. Both author PGN 0xAD00 from the same
     /// source address, so a safe stop commanded by one is overwritten by the

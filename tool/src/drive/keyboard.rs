@@ -131,6 +131,11 @@ impl KeyboardState {
         self.tick(dt);
     }
 
+    #[cfg(test)]
+    pub(super) fn apply_physics_for_test(&self, drive: &mut super::DriveState, dt: f64) {
+        self.apply_physics(drive, dt);
+    }
+
     fn apply_physics(&self, drive: &mut super::DriveState, dt: f64) {
         let w_eff = self.kw.intensity - self.ks.intensity;
         let s_eff = self.ks.intensity - self.kw.intensity;
@@ -172,6 +177,16 @@ impl KeyboardState {
                 drive.steer -= drive.steer.signum() * r;
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn press_for_test(
+        &mut self,
+        c: char,
+        drive: &mut super::DriveState,
+        session: &mut Session,
+    ) {
+        self.handle_press(c, drive, session);
     }
 
     fn handle_press(&mut self, c: char, drive: &mut super::DriveState, session: &mut Session) {

@@ -525,4 +525,93 @@ mod tests {
             }
         }
     }
+
+    /// The keyboard TUI cannot be launched here — it needs a CAN interface this
+    /// environment cannot create — so drive the real key handler and the real
+    /// loop arithmetic instead. This covers what a manual run would: that a key
+    /// press moves the machine, that SPACE gates it, and that stop latches.
+    #[test]
+    fn the_keyboard_drives_the_machine_end_to_end() {
+        let args = DriveArgs {
+            iface: "vcan0".into(),
+            addr: "80".into(),
+            default_speed: 2.0,
+            speed_step: 0.1,
+            max_curvature: 40.0,
+            daemon: false,
+        };
+        let name = Name::default()
+            .with_self_configurable(true)
+            .with_function_code(0x80)
+            .with_identity_number(0x42);
+        let mut session = Session::builder(name, 0x80)
+            .plug(AutoDrive::new())
+            .plug(ShortcutButton::new())
+            .plug(Implement::new())
+            .plug(Gnss::new(
+                machbus::nmea::NMEAConfig::default().with_all(true),
+            ))
+            .build()
+            .expect("plugin set assembles");
+
+        let mut drive = DriveState::new(&args);
+        let mut kb = keyboard::KeyboardState::new();
+        let dt = 1.0 / 30.0; // a 30 Hz loop, as the real one runs
+
+        // One SPACE press is not consent: the arm latch needs a continuous hold.
+        kb.press_for_test(' ', &mut drive, &mut session);
+        let active = drive.update_arm(kb.kspace.held_within(keyboard::DEADMAN_WINDOW_S), dt);
+        assert!(!active, "a single press must not arm");
+        assert!(!drive.armed);
+
+        // Hold it, as the terminal's auto-repeat does, past ARM_HOLD_SECS.
+        // Iteration counts are fixed rather than derived from the constants:
+        // deriving them means a mutated constant spins the test instead of
+        // failing it, which is a hang, not a result.
+        let mut active = false;
+        for _ in 0..60 {
+            kb.press_for_test(' ', &mut drive, &mut session);
+            kb.tick_for_test(dt);
+            active = drive.update_arm(kb.kspace.held_within(keyboard::DEADMAN_WINDOW_S), dt);
+        }
+        assert!(drive.armed, "a continuous hold arms");
+        assert!(active, "armed and held means commanding");
+        drive.engaged = active;
+
+        // W accelerates. The physics is the same call the run loop makes.
+        for _ in 0..30 {
+            kb.press_for_test('w', &mut drive, &mut session);
+            kb.tick_for_test(dt);
+            kb.apply_physics_for_test(&mut drive, dt);
+        }
+        assert!(drive.speed > 0.0, "W must accelerate, got {}", drive.speed);
+
+        // D steers right.
+        for _ in 0..30 {
+            kb.press_for_test('d', &mut drive, &mut session);
+            kb.tick_for_test(dt);
+            kb.apply_physics_for_test(&mut drive, dt);
+        }
+        assert!(drive.steer > 0.0, "D must steer right, got {}", drive.steer);
+        assert!(drive.curvature() > 0.0);
+
+        // Let go of SPACE. Past the window the dead-man reads released. Two
+        // seconds of silence is well beyond DEADMAN_WINDOW_S (0.9 s).
+        for _ in 0..60 {
+            kb.tick_for_test(dt);
+        }
+        let active = drive.update_arm(kb.kspace.held_within(keyboard::DEADMAN_WINDOW_S), dt);
+        assert!(!active, "releasing SPACE stops commanding");
+
+        // ENTER is the emergency stop: zeroes motion and disarms.
+        kb.press_for_test('\n', &mut drive, &mut session);
+        assert_eq!(drive.speed, 0.0);
+        assert_eq!(drive.steer, 0.0);
+        assert!(!drive.armed, "stop disarms");
+        assert!(!drive.engaged);
+
+        // And C asks to clear a latched stop.
+        kb.press_for_test('c', &mut drive, &mut session);
+        assert!(drive.clear_requested, "C requests the latch release");
+    }
 }

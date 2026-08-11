@@ -406,6 +406,19 @@ impl AssignmentTable {
                         ),
                         None => {
                             self.owners.push((*function, client));
+                            // §5.5.3's release only fires for a client already
+                            // in `liveness`, i.e. one heard from at least once.
+                            // A client that requests External Guidance and
+                            // Vehicle Speed and then dies before its first
+                            // status — power loss during the handshake is the
+                            // ordinary case, since B.5.2 gives the response
+                            // 1500 ms while C.3 wants a status every 100 ms —
+                            // owned both driving functions forever: `apply`
+                            // answers `FunctionNotAvailable` to everyone else
+                            // and nothing in the table could free them. Anything
+                            // that holds an assignment is on the watchdog from
+                            // the moment it holds it.
+                            self.note_client_status(client);
                             (
                                 AssignmentStatus::AssignedToRequester,
                                 AssignmentReason::AllClear,
@@ -586,6 +599,47 @@ mod tests {
         assert!(table.owner(TimFunctionId::VehicleSpeed).is_none());
 
         // And the function is now free for another client to take.
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_B,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+    }
+
+    /// K2 — §5.5.3's release only fired for a client already in `liveness`,
+    /// i.e. one heard from at least once. A client that requests External
+    /// Guidance and Vehicle Speed and then dies before its first status — power
+    /// loss during the handshake is the ordinary case, since B.5.2 gives the
+    /// response 1500 ms while C.3 wants a status every 100 ms — owned both
+    /// driving functions for the life of the process: `apply` answered
+    /// `FunctionNotAvailable` to everyone else and nothing in the table could
+    /// free them, so the operator's replacement guidance system was locked out
+    /// of steering and speed.
+    #[test]
+    fn a_client_that_dies_before_its_first_status_does_not_keep_the_functions() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![
+                    (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                    (TimFunctionId::VehicleSpeed, RequestType::Assign),
+                ],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(table.owner(TimFunctionId::ExternalGuidance), Some(CLIENT_A));
+
+        // It never sends a status at all.
+        let mut released = Vec::new();
+        for _ in 0..4 {
+            released.extend(table.tick(100));
+        }
+        assert_eq!(released, vec![CLIENT_A]);
+        assert!(table.owner(TimFunctionId::ExternalGuidance).is_none());
+        assert!(table.owner(TimFunctionId::VehicleSpeed).is_none());
+
         let response = table.apply(
             &AssignmentRequest {
                 entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],

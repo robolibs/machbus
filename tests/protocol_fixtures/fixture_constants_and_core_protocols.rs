@@ -49,9 +49,7 @@ use machbus::isobus::vt::{
 };
 use machbus::isobus::{
     AuxFunctionState, AuxFunctionType, AuxNFunction, AuxOFunction, BasicTractorEcuOptions,
-    FILE_SERVER_BUSY_STATUS_INTERVAL_MS, FILE_SERVER_STATUS_INTERVAL_MS, FS_REQUEST_TIMEOUT_MS,
-    FileAttribute, FileOperation, FileProperties, FileServerConfig as LegacyFileServerConfig,
-    FileTransferError, Functionalities, Functionality, FunctionalityData, GroupFunctionError,
+    Functionalities, Functionality, FunctionalityData, GroupFunctionError,
     GroupFunctionMsg, GroupFunctionType, MinimumControlFunctionOptions,
     TractorImplementManagementOptions,
 };
@@ -165,8 +163,6 @@ const ISOBUS_FS_CODECS_HEX: &str = include_str!("../fixtures/isobus/fs_codecs.he
 const ISOBUS_CAN_BUS_CONFIG: &str = include_str!("../fixtures/isobus/can_bus_config.txt");
 const ISOBUS_CAN_FRAME_WRAPPER_HEX: &str = include_str!("../fixtures/isobus/can_frame_wrapper.hex");
 const ISOBUS_NAME_MANAGEMENT_HEX: &str = include_str!("../fixtures/isobus/name_management.hex");
-const ISOBUS_LEGACY_FILE_TRANSFER_HEX: &str =
-    include_str!("../fixtures/isobus/legacy_file_transfer.hex");
 const ISOBUS_AUX_GROUP_CODECS_HEX: &str = include_str!("../fixtures/isobus/aux_group_codecs.hex");
 const ISOBUS_NIU_CONTROL_HEX: &str = include_str!("../fixtures/isobus/niu_control.hex");
 const REAR_HITCH_RAISE: &[u8; 8] = include_bytes!("../fixtures/isobus/rear_hitch_raise.bin");
@@ -1280,94 +1276,6 @@ fn fixture_j1939_proprietary_single_frame_codecs_are_stable() {
     assert_eq!(decoded_b.group_extension(), 0x42);
 }
 
-#[test]
-fn fixture_isobus_legacy_file_transfer_enums_are_stable() {
-    let operation_codes = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "operation_codes");
-    let expected_ops = [
-        FileOperation::Read,
-        FileOperation::Write,
-        FileOperation::Delete,
-        FileOperation::List,
-        FileOperation::GetAttributes,
-        FileOperation::SetAttributes,
-        FileOperation::OpenFile,
-        FileOperation::CloseFile,
-        FileOperation::ReadData,
-        FileOperation::WriteData,
-        FileOperation::SeekFile,
-        FileOperation::GetCurrentDir,
-        FileOperation::ChangeCurrentDir,
-        FileOperation::MakeDir,
-        FileOperation::RemoveDir,
-        FileOperation::MoveFile,
-        FileOperation::CopyFile,
-        FileOperation::GetFileSize,
-        FileOperation::GetFreeSpace,
-        FileOperation::GetVolumeInfo,
-        FileOperation::GetServerStatus,
-    ];
-    assert_eq!(operation_codes.len(), expected_ops.len());
-    for (&raw, &op) in operation_codes.iter().zip(expected_ops.iter()) {
-        assert_eq!(raw, op.as_u8());
-        assert_eq!(FileOperation::from_u8(raw), Some(op));
-    }
-    for reserved in [0x00, 0x07, 0x0F, 0x15, 0x24, 0x32, 0x42, 0x51, 0xFF] {
-        assert_eq!(FileOperation::from_u8(reserved), None);
-    }
-
-    let error_codes = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "error_codes");
-    let expected_errors = [
-        FileTransferError::NoError,
-        FileTransferError::FileNotFound,
-        FileTransferError::AccessDenied,
-        FileTransferError::DiskFull,
-        FileTransferError::InvalidFilename,
-        FileTransferError::ServerBusy,
-        FileTransferError::InvalidHandle,
-        FileTransferError::EndOfFile,
-        FileTransferError::VolumeNotMounted,
-        FileTransferError::IoError,
-        FileTransferError::InvalidSeekPosition,
-        FileTransferError::InvalidParameter,
-        FileTransferError::FileAlreadyOpen,
-        FileTransferError::DirectoryNotEmpty,
-        FileTransferError::Unknown,
-    ];
-    assert_eq!(error_codes.len(), expected_errors.len());
-    for (&raw, &err) in error_codes.iter().zip(expected_errors.iter()) {
-        assert_eq!(FileTransferError::from_u8(raw), err);
-        assert_eq!(err.as_u8(), raw);
-    }
-    assert_eq!(FileTransferError::from_u8(0xAA), FileTransferError::Unknown);
-
-    let attr_mask = parse_named_hex_bytes(
-        ISOBUS_LEGACY_FILE_TRANSFER_HEX,
-        "attribute_mask_readonly_hidden_dir_archive",
-    )[0];
-    assert_eq!(
-        attr_mask,
-        FileAttribute::ReadOnly.as_u8()
-            | FileAttribute::Hidden.as_u8()
-            | FileAttribute::Directory.as_u8()
-            | FileAttribute::Archive.as_u8()
-    );
-    let props = FileProperties {
-        name: "LOGS".into(),
-        attributes: attr_mask,
-        ..Default::default()
-    };
-    assert!(props.is_read_only());
-    assert!(props.is_hidden());
-    assert!(props.is_directory());
-
-    let default_config = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "default_config");
-    let cfg = LegacyFileServerConfig::default();
-    assert_eq!(default_config[0], 0x00);
-    assert_eq!(default_config[1], cfg.max_open_files);
-    assert_eq!(cfg.status_interval_ms, FILE_SERVER_STATUS_INTERVAL_MS);
-    assert_eq!(FILE_SERVER_BUSY_STATUS_INTERVAL_MS, 200);
-    assert_eq!(FS_REQUEST_TIMEOUT_MS, 6_000);
-}
 
 #[test]
 fn fixture_isobus_aux_and_group_function_codecs_are_stable() {

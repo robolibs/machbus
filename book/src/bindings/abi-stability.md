@@ -39,6 +39,16 @@ in the same case.
   with `0xFF` in the fields it could not interpret. Treat `0xFF` as "not
   specified" rather than as a unit value.
 
+- **`machbus_session_autodrive_stop_reason` and
+  `machbus_session_guidance_stop_reason` return `MachbusSafeStopTrigger`**
+  instead of a bare `uint32_t`. The values are unchanged — the enum mirrors
+  `SafeStopTrigger::as_code`, with `MACHBUS_SAFE_STOP_TRIGGER_NONE = 0` for "no
+  stop latched" — but the return type is now named, so a C HMI no longer has to
+  hardcode codes read out of the Rust source. **Codes 2 and 3 are permanently
+  retired** (they were `TimStatusTimeout` and `FunctionRequestTimeout`, which
+  had no producer); they must never be reused, or every value above them shifts
+  for callers built against an older header.
+
 - **`MachbusEventKind` gained `TcServerClientDisconnected` (100).** Additive:
   existing discriminants are unchanged. It fires when the TC server drops a
   client after six seconds without a Client Task message (ISO 11783-10 §6.6.3);

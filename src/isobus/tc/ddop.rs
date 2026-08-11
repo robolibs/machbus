@@ -29,13 +29,23 @@ impl DDOP {
         self.allocate_next_id().unwrap_or(ObjectID::NULL)
     }
 
+    /// The single DeviceObject always lands on ObjectId 0.
+    ///
+    /// A.7 Figure A.1 labels the DeviceObject node `ObjectId = 0` and
+    /// `validate_object_hierarchy` enforces exactly that, so there is nothing
+    /// for the caller to choose. It used to fall into the shared auto-assign
+    /// path, where `id = 0` means "pick one": a C caller got the required id
+    /// only by the accident of `next_id` starting at 0 *and* calling
+    /// `add_device` first. Adding a value presentation or process-data object
+    /// first — natural, since process data references presentations — put the
+    /// device on ObjectId 1, `validate()` rejected the pool, and
+    /// `machbus_session_tc_connect` returned false with an opaque "DDOP
+    /// validation failed".
     pub fn add_device(&mut self, mut obj: DeviceObject) -> Result<ObjectID> {
         if obj.designator.is_empty() {
             return Err(Error::invalid_state("device designator is required"));
         }
-        if obj.id == 0 {
-            obj.id = self.allocate_next_id()?;
-        }
+        obj.id = ObjectID::from(0u16);
         let id = obj.id;
         self.devices.push(obj);
         Ok(id)
@@ -220,7 +230,10 @@ impl DDOP {
                     "element parent references itself",
                 ));
             }
-            if elem.parent_id != 0 {
+            // 0xFFFF is "no parent"; 0 is the DeviceObject, which is a
+            // perfectly ordinary parent for the root element. Treating 0 as the
+            // sentinel skipped validating exactly that reference.
+            if elem.parent_id != 0xFFFF {
                 match self.object_kind(elem.parent_id) {
                     Some(TCObjectType::Device | TCObjectType::DeviceElement) => {}
                     Some(_) => {
@@ -267,7 +280,6 @@ impl DDOP {
         }
         for pd in &self.process_data {
             if pd.presentation_object_id != 0xFFFF
-                && pd.presentation_object_id != 0
                 && !self.vp_exists(pd.presentation_object_id)
             {
                 return Err(Error::with_message(
@@ -907,11 +919,13 @@ mod tests {
 
     #[test]
     fn auto_id_allocator_skips_used_and_reserved_identifiers() {
+        // The DeviceObject is always ObjectId 0 (A.7 Figure A.1), so occupy
+        // 0xFFFE with an object that *is* auto-assignable.
         let mut ddop = DDOP {
             next_id: ObjectID(0xFFFE),
             ..Default::default()
         };
-        ddop.add_device(DeviceObject::default().with_id(0xFFFE).with_designator("X"))
+        ddop.add_element(DeviceElement::default().with_id(0xFFFE))
             .unwrap();
 
         let id = ddop.add_element(DeviceElement::default()).unwrap();

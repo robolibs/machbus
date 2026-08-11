@@ -262,6 +262,60 @@ const _: () = {
     assert!(core::mem::size_of::<MachbusCanBusValidation>() > 0);
 };
 
+/// Why an autonomous controller latched a safe stop, mirroring
+/// `SafeStopTrigger::as_code`.
+///
+/// The two stop-reason entry points returned a bare `uint32_t` and their doc
+/// comments named this type, which did not exist: a C HMI telling the operator
+/// why autonomy dropped had to hardcode 1, 4, 5, … read out of `src/safety.rs`.
+/// That became dangerous when codes 2 and 3 were retired — the retirement was
+/// recorded only in a Rust comment and enforced only by a Rust test, so a C
+/// integrator had no way to learn they are permanently reserved and would reuse
+/// them. Python was never exposed to this because it reads the string form.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachbusSafeStopTrigger {
+    /// No stop is latched.
+    None = 0,
+    GuidanceLinkTimeout = 1,
+    // 2 and 3 are permanently retired: they were TimStatusTimeout and
+    // FunctionRequestTimeout, which had no producer. Never reuse them — the
+    // values below would shift for every caller built against an older header.
+    HeartbeatError = 4,
+    IsbStop = 5,
+    BusOff = 6,
+    AddressClaimLost = 7,
+    OperatorOverride = 8,
+    CommandStale = 9,
+    ClockWentBackwards = 10,
+    /// A queued safety command was refused by the network layer.
+    SendFailed = 11,
+    PositionStale = 12,
+    FixDegraded = 13,
+    KeySwitchOff = 14,
+}
+
+impl MachbusSafeStopTrigger {
+    fn from_trigger(trigger: Option<crate::session::SafeStopTrigger>) -> Self {
+        use crate::session::SafeStopTrigger as T;
+        match trigger {
+            None => Self::None,
+            Some(T::GuidanceLinkTimeout) => Self::GuidanceLinkTimeout,
+            Some(T::HeartbeatError) => Self::HeartbeatError,
+            Some(T::IsbStop) => Self::IsbStop,
+            Some(T::BusOff) => Self::BusOff,
+            Some(T::AddressClaimLost) => Self::AddressClaimLost,
+            Some(T::OperatorOverride) => Self::OperatorOverride,
+            Some(T::CommandStale) => Self::CommandStale,
+            Some(T::ClockWentBackwards) => Self::ClockWentBackwards,
+            Some(T::SendFailed(_)) => Self::SendFailed,
+            Some(T::PositionStale) => Self::PositionStale,
+            Some(T::FixDegraded) => Self::FixDegraded,
+            Some(T::KeySwitchOff) => Self::KeySwitchOff,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachbusClaimState {
@@ -1986,15 +2040,18 @@ pub extern "C" fn machbus_session_autodrive_clear_stop(h: *mut MachbusSession) -
     }
 }
 
-/// Why AutoDrive stopped, as a [`MachbusSafeStopTrigger`] code, or `0` when no
-/// stop is latched.
+/// Why AutoDrive stopped, or [`MachbusSafeStopTrigger::None`] when no stop is
+/// latched.
 #[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_autodrive_stop_reason(h: *const MachbusSession) -> u32 {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<AutoDrive>())
-        .and_then(AutoDrive::stop_reason)
-        .map_or(0, |trigger| trigger.as_code())
+pub extern "C" fn machbus_session_autodrive_stop_reason(
+    h: *const MachbusSession,
+) -> MachbusSafeStopTrigger {
+    MachbusSafeStopTrigger::from_trigger(
+        handle_ref(h)
+            .ok()
+            .and_then(|h| h.session.get::<AutoDrive>())
+            .and_then(AutoDrive::stop_reason),
+    )
 }
 
 /// Whether AutoDrive is actively commanding the machine.
@@ -2046,12 +2103,15 @@ fn autodrive_action(
 /// Without this a C caller could see the machine refuse to engage and have no
 /// way to learn why.
 #[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_stop_reason(h: *const MachbusSession) -> u32 {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .and_then(Guidance::stop_reason)
-        .map_or(0, |trigger| trigger.as_code())
+pub extern "C" fn machbus_session_guidance_stop_reason(
+    h: *const MachbusSession,
+) -> MachbusSafeStopTrigger {
+    MachbusSafeStopTrigger::from_trigger(
+        handle_ref(h)
+            .ok()
+            .and_then(|h| h.session.get::<Guidance>())
+            .and_then(Guidance::stop_reason),
+    )
 }
 
 /// Release a latched safe stop. Deliberately explicit: clearing the fault is

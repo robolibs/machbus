@@ -55,11 +55,10 @@ pub mod embedded {
     };
     pub use crate::isobus::{
         AuxFunctionState, AuxFunctionType, AuxNFunction, AuxNOptions, AuxOFunction, AuxOOptions,
-        BasicTractorEcuOptions, FileAttribute, FileClientState, FileOperation, FileProperties,
-        FileServerConfig, FileServerState, FileTransferError, Functionalities, Functionality,
+        BasicTractorEcuOptions, Functionalities, Functionality,
         FunctionalityData, GroupFunctionError, GroupFunctionMsg, GroupFunctionResponder,
-        GroupFunctionSupport, GroupFunctionType, MinimumControlFunctionOptions, OpenFileState,
-        TaskControllerGeoServerOptions, TractorImplementManagementOptions, VolumeInfo,
+        GroupFunctionSupport, GroupFunctionType, MinimumControlFunctionOptions,
+        TaskControllerGeoServerOptions, TractorImplementManagementOptions,
     };
     pub use crate::isobus::{
         AuxValve, AuxValveCommand, HitchState, MAX_AUX_VALVES, MAX_HITCH_POSITION, PtoState,

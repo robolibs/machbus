@@ -1,7 +1,7 @@
 //! ISO 11783 application-layer modules.
 //!
 //! Mirrors the C++ `machbus::isobus::*` namespace. Phase 10 covers
-//! the seven top-level files: auxiliary, file_transfer (legacy),
+//! the top-level files: auxiliary,
 //! functionalities, group_function, guidance, tim, tractor_ecu.
 //! Phases 11–15 add the subnamespaces: `implement/`, `sc/`, `vt/`,
 //! `tc/`, `fs/`.
@@ -14,7 +14,6 @@
 pub mod auxiliary;
 #[cfg(any(feature = "default", feature = "cli"))]
 pub mod conformance;
-pub mod file_transfer;
 pub mod fs;
 pub mod functionalities;
 pub mod group_function;
@@ -27,11 +26,6 @@ pub mod tractor_ecu;
 pub mod vt;
 
 pub use auxiliary::{AuxFunctionState, AuxFunctionType, AuxNFunction, AuxOFunction};
-pub use file_transfer::{
-    FILE_SERVER_BUSY_STATUS_INTERVAL_MS, FILE_SERVER_STATUS_INTERVAL_MS, FS_REQUEST_TIMEOUT_MS,
-    FileAttribute, FileClientState, FileOperation, FileProperties, FileServerConfig,
-    FileServerState, FileTransferError, OpenFileState, VolumeInfo,
-};
 pub use functionalities::{
     AuxNOptions, AuxOOptions, BasicTractorEcuOptions, Functionalities, Functionality,
     FunctionalityData, MinimumControlFunctionOptions, TaskControllerGeoServerOptions,

@@ -155,6 +155,40 @@ typedef enum {
 } MachbusValveCommand;
 
 /**
+ * Why an autonomous controller latched a safe stop, mirroring
+ * `SafeStopTrigger::as_code`.
+ *
+ * The two stop-reason entry points returned a bare `uint32_t` and their doc
+ * comments named this type, which did not exist: a C HMI telling the operator
+ * why autonomy dropped had to hardcode 1, 4, 5, … read out of `src/safety.rs`.
+ * That became dangerous when codes 2 and 3 were retired — the retirement was
+ * recorded only in a Rust comment and enforced only by a Rust test, so a C
+ * integrator had no way to learn they are permanently reserved and would reuse
+ * them. Python was never exposed to this because it reads the string form.
+ */
+typedef enum {
+  /**
+   * No stop is latched.
+   */
+  MACHBUS_SAFE_STOP_TRIGGER_NONE = 0,
+  MACHBUS_SAFE_STOP_TRIGGER_GUIDANCE_LINK_TIMEOUT = 1,
+  MACHBUS_SAFE_STOP_TRIGGER_HEARTBEAT_ERROR = 4,
+  MACHBUS_SAFE_STOP_TRIGGER_ISB_STOP = 5,
+  MACHBUS_SAFE_STOP_TRIGGER_BUS_OFF = 6,
+  MACHBUS_SAFE_STOP_TRIGGER_ADDRESS_CLAIM_LOST = 7,
+  MACHBUS_SAFE_STOP_TRIGGER_OPERATOR_OVERRIDE = 8,
+  MACHBUS_SAFE_STOP_TRIGGER_COMMAND_STALE = 9,
+  MACHBUS_SAFE_STOP_TRIGGER_CLOCK_WENT_BACKWARDS = 10,
+  /**
+   * A queued safety command was refused by the network layer.
+   */
+  MACHBUS_SAFE_STOP_TRIGGER_SEND_FAILED = 11,
+  MACHBUS_SAFE_STOP_TRIGGER_POSITION_STALE = 12,
+  MACHBUS_SAFE_STOP_TRIGGER_FIX_DEGRADED = 13,
+  MACHBUS_SAFE_STOP_TRIGGER_KEY_SWITCH_OFF = 14,
+} MachbusSafeStopTrigger;
+
+/**
  * ISO 11783-13:2022 B.15 Attributes.
  *
  * Bits 0 and 1 describe the entry; bits 2 and 5-7 describe the volume it
@@ -1337,10 +1371,10 @@ bool machbus_session_autodrive_command(MachbusSession *h,
 bool machbus_session_autodrive_clear_stop(MachbusSession *h);
 
 /**
- * Why AutoDrive stopped, as a [`MachbusSafeStopTrigger`] code, or `0` when no
- * stop is latched.
+ * Why AutoDrive stopped, or [`MachbusSafeStopTrigger::None`] when no stop is
+ * latched.
  */
-uint32_t machbus_session_autodrive_stop_reason(const MachbusSession *h);
+MachbusSafeStopTrigger machbus_session_autodrive_stop_reason(const MachbusSession *h);
 
 /**
  * Whether AutoDrive is actively commanding the machine.
@@ -1360,7 +1394,7 @@ uint8_t machbus_session_autodrive_status(const MachbusSession *h);
  * Without this a C caller could see the machine refuse to engage and have no
  * way to learn why.
  */
-uint32_t machbus_session_guidance_stop_reason(const MachbusSession *h);
+MachbusSafeStopTrigger machbus_session_guidance_stop_reason(const MachbusSession *h);
 
 /**
  * Release a latched safe stop. Deliberately explicit: clearing the fault is

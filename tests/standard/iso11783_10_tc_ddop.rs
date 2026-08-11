@@ -156,11 +156,16 @@ fn tc_ddop_rejects_wrong_kind_element_parent_and_child_references() {
 
 #[test]
 fn tc_ddop_rejects_null_and_self_referential_object_ids() {
-    let null_device = DDOP::default()
+    // K5 — A.7 Figure A.1 labels the DeviceObject node `ObjectId = 0`, so the
+    // id is not the caller's to choose: `add_device` normalises it. It used to
+    // share the auto-assign path, where `id = 0` means "pick one", so a caller
+    // who added a value presentation first got the device on ObjectId 1 and an
+    // opaque "DDOP validation failed" from `machbus_session_tc_connect`.
+    let normalised = DDOP::default()
         .with_device(
             DeviceObject::default()
                 .with_id(ObjectID::NULL)
-                .with_designator("bad-device"),
+                .with_designator("implement"),
         )
         .with_element(
             DeviceElement::default()
@@ -169,10 +174,10 @@ fn tc_ddop_rejects_null_and_self_referential_object_ids() {
                 .with_parent(ObjectID::NULL)
                 .with_designator("root"),
         );
-    assert!(
-        null_device.validate().is_err(),
-        "0xFFFF is the null/no-object marker and must not identify a real DDOP object"
-    );
+    assert_eq!(normalised.devices()[0].id, ObjectID::from(0u16));
+    normalised
+        .validate()
+        .expect("the DeviceObject id is normalised, not rejected");
 
     let self_parent = DDOP::default()
         .with_device(

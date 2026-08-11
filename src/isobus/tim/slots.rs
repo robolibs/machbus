@@ -285,8 +285,14 @@ impl TimSlot {
                 {
                     SPECIAL_RELEASED_ACCEPT_INCREASE
                 }
-                TimValue::ReleasedAcceptIncrease => SPECIAL_RELEASED_AWAIT_OPERATOR,
-                TimValue::ServerSetPositive => SPECIAL_RELEASED_ACCEPT_INCREASE,
+                // Both guarded variants fall through together: splitting the
+                // combined arm left this one unguarded, so the hitch still
+                // transmitted 0xFBFE — a raw its own decoder returns `None` for,
+                // and an undefined value in a three-point-hitch setpoint on a
+                // conformant TIM server.
+                TimValue::ReleasedAcceptIncrease | TimValue::ServerSetPositive => {
+                    SPECIAL_RELEASED_AWAIT_OPERATOR
+                }
                 TimValue::ReadyToControl => SPECIAL_READY_TO_CONTROL,
             };
         }
@@ -442,6 +448,29 @@ mod tests {
             assert_eq!(slot.decode(0xFBF0), None);
             assert_eq!(slot.decode(0xFC00), None);
             assert_eq!(slot.decode(0xFFFF), None);
+
+            // K1 — no encoder may emit a raw its own decoder rejects. Splitting
+            // the combined FBFE arm left `ServerSetPositive` unguarded on the
+            // hitch, so the crate transmitted a value it could not read back
+            // and a conformant TIM server saw an undefined three-point-hitch
+            // setpoint. The previous assertions only exercised
+            // `ReleasedAcceptIncrease`, so nothing caught it.
+            // The slot-specific commands (Float, Stop, Lower/RaiseUntilStop)
+            // share raws across slots and are covered by the per-slot loops
+            // below; these five are defined on every slot.
+            for value in [
+                TimValue::ServerSetNegative,
+                TimValue::ServerSetPositive,
+                TimValue::ReleasedAwaitOperator,
+                TimValue::ReleasedAcceptIncrease,
+                TimValue::ReadyToControl,
+            ] {
+                let raw = slot.encode(value);
+                assert!(
+                    slot.decode(raw).is_some(),
+                    "{value:?} encodes to {raw:#06X}, which this slot's own decoder rejects"
+                );
+            }
         }
 
         // The steering SLOT is the one that matters most here.

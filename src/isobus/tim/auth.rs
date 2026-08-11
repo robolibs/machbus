@@ -268,7 +268,7 @@ impl CertificateChain {
         Ok(())
     }
 
-    /// `true` when any certificate's serial number appears in `revoked`.
+    /// `true` when any certificate's `(issuer, serial)` appears in `revoked`.
     #[must_use]
     pub fn is_revoked(&self, revoked: &CertificateRevocationList) -> bool {
         self.revoked_role(revoked).is_some()
@@ -280,7 +280,10 @@ impl CertificateChain {
     pub fn revoked_role(&self, revoked: &CertificateRevocationList) -> Option<CertificateRole> {
         self.certificates.iter().enumerate().find_map(|(i, c)| {
             revoked
-                .contains(c.tbs_certificate.serial_number.as_bytes())
+                .contains(
+                    &c.tbs_certificate.issuer.to_der().unwrap_or_default(),
+                    c.tbs_certificate.serial_number.as_bytes(),
+                )
                 .then(|| {
                     CertificateRole::CHAIN
                         .get(i)
@@ -361,7 +364,18 @@ fn verify_link(parent: &Certificate, child: &Certificate) -> Result<(), ()> {
 /// caller can assert conformance.
 #[derive(Debug, Default)]
 pub struct CertificateRevocationList {
-    serials: Vec<Vec<u8>>,
+    /// `(issuer DN, serial)`. RFC 5280 §4.1.2.2: "It MUST be unique for each
+    /// certificate issued by a given CA (i.e., the issuer name and serial
+    /// number identify a unique certificate)" — uniqueness is scoped to the
+    /// issuer, never global.
+    ///
+    /// Keying on the bare serial meant that revoking one manufacturer's device
+    /// with serial 0x01 refused every peer whose root, lab, manufacturer or
+    /// series certificate also carried serial 0x01 — routine for CA-issued
+    /// intermediates in a five-deep AEF chain — and reported the wrong Table 20
+    /// code, because `revoked_role` returns the position of whichever link
+    /// collided first: a valid implement was told its *root* was revoked.
+    entries: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 /// Minimum CRL size an implementation must support (§4.4.7).
@@ -373,24 +387,29 @@ impl CertificateRevocationList {
         Self::default()
     }
 
-    /// Add a revoked certificate serial number.
-    pub fn revoke(&mut self, serial: &[u8]) {
-        self.serials.push(serial.to_vec());
+    /// Revoke the certificate identified by `(issuer, serial)`.
+    ///
+    /// `issuer` is the DER encoding of the issuer distinguished name, as
+    /// [`CertificateChain::revoked_role`] derives it from the certificate.
+    pub fn revoke(&mut self, issuer: &[u8], serial: &[u8]) {
+        self.entries.push((issuer.to_vec(), serial.to_vec()));
     }
 
     #[must_use]
-    pub fn contains(&self, serial: &[u8]) -> bool {
-        self.serials.iter().any(|s| s.as_slice() == serial)
+    pub fn contains(&self, issuer: &[u8], serial: &[u8]) -> bool {
+        self.entries
+            .iter()
+            .any(|(i, s)| i.as_slice() == issuer && s.as_slice() == serial)
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.serials.len()
+        self.entries.len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.serials.is_empty()
+        self.entries.is_empty()
     }
 }
 
@@ -974,18 +993,37 @@ mod tests {
 
     #[test]
     fn revoked_certificates_are_refused() {
+        const MAKER: &[u8] = b"CN=Maker,O=Example";
+        const ROOT: &[u8] = b"CN=AEF Root";
+
         let mut crl = CertificateRevocationList::new();
         assert!(crl.is_empty());
-        crl.revoke(&[0x01, 0x02, 0x03]);
-        assert!(crl.contains(&[0x01, 0x02, 0x03]));
-        assert!(!crl.contains(&[0x09]));
+        crl.revoke(MAKER, &[0x01, 0x02, 0x03]);
+        assert!(crl.contains(MAKER, &[0x01, 0x02, 0x03]));
+        assert!(!crl.contains(MAKER, &[0x09]));
+
+        // RFC 5280 §4.1.2.2: "It MUST be unique for each certificate issued by
+        // a given CA (i.e., the issuer name and serial number identify a unique
+        // certificate)." Keying on the bare serial made revoking one
+        // manufacturer's device with serial 0x01 refuse every peer whose root,
+        // lab, manufacturer or series certificate also carried serial 0x01 —
+        // routine for CA-issued intermediates in a five-deep AEF chain — and
+        // report the wrong Table 20 code, so a valid implement was told its
+        // *root* certificate had been revoked.
+        crl.revoke(MAKER, &[0x01]);
+        assert!(crl.contains(MAKER, &[0x01]));
+        assert!(
+            !crl.contains(ROOT, &[0x01]),
+            "the same serial under a different issuer is a different certificate"
+        );
 
         // Section 4.4.7 asks for at least 1000 entries.
         for i in 0..MIN_CRL_ENTRIES {
-            crl.revoke(&(i as u32).to_be_bytes());
+            crl.revoke(MAKER, &(i as u32).to_be_bytes());
         }
         assert!(crl.len() > MIN_CRL_ENTRIES);
-        assert!(crl.contains(&500u32.to_be_bytes()));
+        assert!(crl.contains(MAKER, &500u32.to_be_bytes()));
+        assert!(!crl.contains(ROOT, &500u32.to_be_bytes()));
     }
 
     #[test]

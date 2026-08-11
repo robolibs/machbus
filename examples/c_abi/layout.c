@@ -34,6 +34,16 @@ _Static_assert(sizeof(MachbusPto) == 4, "MachbusPto size changed");
 _Static_assert(sizeof(MachbusHitchCommand) == 4, "MachbusHitchCommand size changed");
 _Static_assert(sizeof(MachbusPtoCommand) == 4, "MachbusPtoCommand size changed");
 _Static_assert(sizeof(MachbusValveCommand) == 4, "MachbusValveCommand size changed");
+_Static_assert(sizeof(MachbusSafeStopTrigger) == 4, "MachbusSafeStopTrigger size changed");
+
+/*
+ * Codes 2 and 3 are permanently retired (they were TimStatusTimeout and
+ * FunctionRequestTimeout, which had no producer). Reusing either would shift
+ * nothing on this side but would silently change meaning for a caller built
+ * against an older header, so pin the two values that bracket the gap.
+ */
+_Static_assert(MACHBUS_SAFE_STOP_TRIGGER_GUIDANCE_LINK_TIMEOUT == 1, "retired-code gap moved");
+_Static_assert(MACHBUS_SAFE_STOP_TRIGGER_HEARTBEAT_ERROR == 4, "retired-code gap moved");
 
 /* ─── MachbusConfig ─────────────────────────────────────────────────── */
 _Static_assert(sizeof(MachbusConfig) == 48, "MachbusConfig size changed");

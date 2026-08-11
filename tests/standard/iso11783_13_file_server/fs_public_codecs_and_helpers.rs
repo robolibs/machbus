@@ -1,4 +1,3 @@
-use machbus::isobus::file_transfer::{FileOperation, FileTransferError};
 use machbus::isobus::fs::{
     FS_SUPPORTED_COUNT_MAX, FS_V2_PROPERTIES_VERSION, FS_VERSION_NUMBER, FSError,
     FSFunction, FileAttributes, FileClient, FileClientConfig, FileServer, FileServerConfig,
@@ -52,74 +51,7 @@ fn file_server_public_error_decoder_rejects_noncanonical_bytes() {
     }
 }
 
-#[test]
-fn file_server_legacy_transfer_error_decoder_rejects_noncanonical_bytes() {
-    let valid = [
-        FileTransferError::NoError,
-        FileTransferError::FileNotFound,
-        FileTransferError::AccessDenied,
-        FileTransferError::DiskFull,
-        FileTransferError::InvalidFilename,
-        FileTransferError::ServerBusy,
-        FileTransferError::InvalidHandle,
-        FileTransferError::EndOfFile,
-        FileTransferError::VolumeNotMounted,
-        FileTransferError::IoError,
-        FileTransferError::InvalidSeekPosition,
-        FileTransferError::InvalidParameter,
-        FileTransferError::FileAlreadyOpen,
-        FileTransferError::DirectoryNotEmpty,
-        FileTransferError::Unknown,
-    ];
-    for error in valid {
-        assert_eq!(FileTransferError::try_from_u8(error.as_u8()), Some(error));
-    }
-    for raw in [0x0E, 0x0F, 0x10, 0x7F, 0x80, 0xFE] {
-        assert_eq!(FileTransferError::try_from_u8(raw), None);
-    }
-}
 
-#[test]
-fn file_server_legacy_operation_decoder_rejects_noncanonical_bytes() {
-    let valid = [
-        FileOperation::Read,
-        FileOperation::Write,
-        FileOperation::Delete,
-        FileOperation::List,
-        FileOperation::GetAttributes,
-        FileOperation::SetAttributes,
-        FileOperation::OpenFile,
-        FileOperation::CloseFile,
-        FileOperation::ReadData,
-        FileOperation::WriteData,
-        FileOperation::SeekFile,
-        FileOperation::GetCurrentDir,
-        FileOperation::ChangeCurrentDir,
-        FileOperation::MakeDir,
-        FileOperation::RemoveDir,
-        FileOperation::MoveFile,
-        FileOperation::CopyFile,
-        FileOperation::GetFileSize,
-        FileOperation::GetFreeSpace,
-        FileOperation::GetVolumeInfo,
-        FileOperation::GetServerStatus,
-    ];
-    for operation in valid {
-        assert_eq!(
-            FileOperation::try_from_u8(operation.as_u8()),
-            Some(operation)
-        );
-        assert_eq!(FileOperation::from_u8(operation.as_u8()), Some(operation));
-    }
-    for raw in [0x00, 0x07, 0x0F, 0x15, 0x24, 0x32, 0x42, 0x51, 0x61, 0xFE] {
-        assert_eq!(
-            FileOperation::try_from_u8(raw),
-            None,
-            "legacy file-operation public decoder must reject reserved operation bytes"
-        );
-        assert_eq!(FileOperation::from_u8(raw), None);
-    }
-}
 
 fn fs_request(data: Vec<u8>, source: u8) -> Message {
     Message::new(PGN_FILE_CLIENT_TO_SERVER, data, source)

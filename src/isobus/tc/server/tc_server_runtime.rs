@@ -142,6 +142,8 @@ pub struct TCClientInfo {
     pub tc_booms: u8,
     pub tc_sections: u8,
     pub tc_channels: u8,
+    /// B.8.2 byte 5 bit 1: the client reports its task totals are active.
+    pub task_totals_active: bool,
 }
 
 /// Server config.
@@ -950,6 +952,29 @@ impl TaskControllerServer {
                 }
                 self.handle_peer_control(msg)
             }
+            ProcessDataCommands::ClientTask => {
+                // §6.6.3: "All clients that maintain a connection with a TC
+                // shall indicate their presence by transmitting to the TC a
+                // cyclic Client Task message at an interval of 2 s ... If the TC
+                // does not receive this message for at least 6 s, it assumes an
+                // uncontrolled shutdown of the client." This arm did not exist,
+                // so the very message that proves a client is alive was rejected
+                // as unsupported: at t+6 s the server dropped the `TCClientInfo`
+                // — taking `ddop` and `pool_activated` with it, with no periodic
+                // call site to re-add it — and from then on answered every
+                // Activate/Deactivate `ThereAreErrorsInTheDDOP`. B.8.2 defines
+                // no response.
+                if msg.data.len() != 8 {
+                    return Err(Error::invalid_data(
+                        "TC client-task process-data frame must be an 8-byte frame",
+                    ));
+                }
+                self.ensure_client(msg.source);
+                if let Some(client) = self.find_client_mut(msg.source) {
+                    client.task_totals_active = msg.data[4] & 0x01 != 0;
+                }
+                Vec::new()
+            }
             command => {
                 return Err(Error::invalid_state(format!(
                     "unsupported ECU-to-TC process-data command {:?}",
@@ -996,6 +1021,7 @@ impl TaskControllerServer {
                     && client.last_ddop_transfer == payload
             });
             if is_duplicate_accepted_pool {
+                self.ensure_client(msg.source);
                 ObjectPoolErrorCodes::NoErrors
             } else {
                 match DDOP::deserialize(payload).and_then(|pool| {
@@ -1117,6 +1143,8 @@ impl TaskControllerServer {
         if msg.data.len() != 8 {
             return Vec::new();
         }
+        // Any well-formed traffic from a client is liveness (§6.6.3).
+        self.ensure_client(msg.source);
         let elem_raw = ((msg.data[0] >> 4) & 0x0F) as u16 | ((msg.data[1] as u16) << 4);
         let ddi_raw = (msg.data[2] as u16) | ((msg.data[3] as u16) << 8);
         let element = ElementNumber(elem_raw);
@@ -1185,6 +1213,8 @@ impl TaskControllerServer {
         if !is_padded_fixed8(&msg.data, 4) {
             return Vec::new();
         }
+        // Any well-formed traffic from a client is liveness (§6.6.3).
+        self.ensure_client(msg.source);
         let elem_raw = ((msg.data[0] >> 4) & 0x0F) as u16 | ((msg.data[1] as u16) << 4);
         let ddi_raw = (msg.data[2] as u16) | ((msg.data[3] as u16) << 8);
         let element = ElementNumber(elem_raw);
@@ -1209,6 +1239,7 @@ impl TaskControllerServer {
         else {
             return Vec::new();
         };
+        self.ensure_client(msg.source);
         self.on_peer_control_assignment_received.emit(&assignment);
 
         let Some(cb) = self.peer_control_cb.as_mut() else {

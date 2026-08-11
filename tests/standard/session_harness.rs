@@ -498,6 +498,83 @@ fn tc_client_handshakes_with_server() {
     );
 }
 
+/// F1 — §6.6.3: the client must send a Client Task every 2 s and the TC drops
+/// it after 6 s without one. The client half landed and the server half did
+/// not, so the fix that was meant to *stop* the TC declaring an uncontrolled
+/// shutdown guaranteed it on machbus's own stack: at t+6 s the server dropped
+/// the `TCClientInfo`, taking `ddop` and `pool_activated` with it, and from then
+/// on answered every Activate `ThereAreErrorsInTheDDOP`. Nothing fed the
+/// client's bytes to the in-crate server, so the suite stayed green.
+#[test]
+fn a_tc_server_keeps_a_client_alive_past_the_six_second_shutdown_window() {
+    let server = TcServer::new(TCServerConfig::default().with_booms(1).with_sections(1))
+        .expect("tc server config");
+    let ddop = DDOP::default()
+        .with_device(
+            DeviceObject::default()
+                .with_id(0u16)
+                .with_designator("Implement"),
+        )
+        .with_element(
+            DeviceElement::default()
+                .with_id(2)
+                .with_type(DeviceElementType::Device)
+                .with_designator("Root"),
+        );
+    let client = TcClient::new(TCClientConfig::default(), ddop);
+
+    let mut bus = TwoNode::new(
+        make_name(0x105, 0x80),
+        0x80,
+        vec![boxed(server)],
+        make_name(0x205, 0x80),
+        0x81,
+        vec![boxed(client)],
+    )
+    .expect("build two-node bus");
+    assert!(bus.run_until_claimed().expect("claim"));
+
+    bus.a
+        .with_mut::<TcServer, _>(|s| s.server_mut().start())
+        .expect("plugin present")
+        .expect("server start");
+    bus.b
+        .with_mut::<TcClient, _>(TcClient::connect)
+        .expect("plugin present")
+        .expect("client connect");
+
+    bus.run(60, 100).expect("run");
+    assert_eq!(
+        bus.a
+            .with_mut::<TcServer, _>(|s| s.server_mut().clients().len())
+            .expect("server"),
+        1,
+        "precondition: the handshake registered the client"
+    );
+
+    // Twenty seconds — more than three shutdown windows — of the client doing
+    // nothing but keeping its connection alive.
+    for _ in 0..200 {
+        bus.step(100).expect("step");
+        assert_eq!(
+            bus.a
+                .with_mut::<TcServer, _>(|s| s.server_mut().clients().len())
+                .expect("server"),
+            1,
+            "a client sending its cyclic Client Task must never be declared dead"
+        );
+    }
+    assert!(
+        !bus.events_a()
+            .iter()
+            .any(|e| matches!(
+                e,
+                Event::TcServer(TcServerEvent::ClientDisconnected { .. })
+            )),
+        "no uncontrolled shutdown should have been declared"
+    );
+}
+
 /// 6. ISO 11783-7 Heartbeat: both nodes broadcast heartbeats on cadence;
 ///    each tracks the other and observes `HeartbeatEvent::Received`.
 #[test]

@@ -114,6 +114,12 @@ typedef enum {
    */
   MACHBUS_EVENT_KIND_GNSS_FIX_RESTORED = 98,
   MACHBUS_EVENT_KIND_OTHER = 99,
+  /**
+   * ISO 11783-10 §6.6.3 — six seconds without a Client Task, so the TC
+   * assumed an uncontrolled shutdown and dropped the client's DDOP.
+   * `source` is the client address.
+   */
+  MACHBUS_EVENT_KIND_TC_SERVER_CLIENT_DISCONNECTED = 100,
 } MachbusEventKind;
 
 typedef enum {

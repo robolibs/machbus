@@ -133,6 +133,11 @@ fn wire_events(server: &mut TaskControllerServer, sink: &Rc<RefCell<Vec<TcServer
                 .push(TcServerEvent::ClientVersionReceived { address, version });
         });
     let s = sink.clone();
+    server.on_client_disconnected.subscribe(move |&address| {
+        s.borrow_mut()
+            .push(TcServerEvent::ClientDisconnected { address });
+    });
+    let s = sink.clone();
     server
         .on_peer_control_assignment_received
         .subscribe(move |a: &PeerControlAssignment| {

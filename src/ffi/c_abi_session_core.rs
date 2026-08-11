@@ -42,7 +42,8 @@ use crate::time::Instant;
 ///   and several `repr(C)` PODs widened. A caller built against a v3 header
 ///   that skipped this guard would call the five-argument seek with four,
 ///   reading `out_tan` from an uninitialised slot and writing through it.
-/// - `5` makes the two `clear_stop` entry points report their refusal.
+/// - `5` makes the two `clear_stop` entry points report their refusal, and adds
+///   `MachbusEventKind::TcServerClientDisconnected` (100).
 ///   `machbus_session_autodrive_clear_stop` and
 ///   `machbus_session_guidance_clear_stop` returned `true` unconditionally and
 ///   cleared the last error even when the plugin had refused to release the
@@ -371,6 +372,10 @@ pub enum MachbusEventKind {
     /// A steerable fix returned; `fmi_or_sub` is the NMEA fix type.
     GnssFixRestored = 98,
     Other = 99,
+    /// ISO 11783-10 §6.6.3 — six seconds without a Client Task, so the TC
+    /// assumed an uncontrolled shutdown and dropped the client's DDOP.
+    /// `source` is the client address.
+    TcServerClientDisconnected = 100,
 }
 
 /// A flattened, C-friendly view of one [`Event`].
@@ -1404,6 +1409,10 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
             TcServerEvent::StateChanged(state) => {
                 out.kind = MachbusEventKind::TcServerStateChanged;
                 out.u0 = state as u32;
+            }
+            TcServerEvent::ClientDisconnected { address } => {
+                out.kind = MachbusEventKind::TcServerClientDisconnected;
+                out.source = address;
             }
             TcServerEvent::ClientVersionReceived { address, version } => {
                 out.kind = MachbusEventKind::TcServerClientVersionReceived;

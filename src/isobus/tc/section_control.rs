@@ -99,6 +99,10 @@ pub enum SectionState {
     Off = 0,
     On = 1,
     Error = 2,
+    /// Value 11. The data dictionary names it "not installed" for the work
+    /// state DDIs (161-176) and "no change" for the setpoint DDIs (290-305) —
+    /// two readings of the same encoding, and both mean "this slot is not a
+    /// section I am saying anything about".
     NotInstalled = 3,
 }
 
@@ -145,10 +149,18 @@ pub const CONDENSED_DDI_COUNT: usize = 16;
 /// as section 1 = not-installed — and "not installed" and "error" had no
 /// representation at all, so a failed section was indistinguishable from a
 /// closed one.
+/// Unused slots are filled with 11, not 00: DDI 161 requires "if less than 16
+/// child device element actual work states are available, then the unused bits
+/// shall be set to value 11 (not installed)", and DDI 290 repeats it for
+/// setpoints with 11 = "no change". Zero-filling made a 12-section sprayer
+/// report four phantom sections as "disabled/off", so a conformant TC logged
+/// coverage and as-applied area for them — and on the setpoint DDIs 00 is a
+/// positive command to shut that section down rather than an abstention.
 #[must_use]
 pub fn pack_condensed_work_state(sections: &[SectionState]) -> u32 {
-    let mut packed = 0u32;
+    let mut packed = u32::MAX;
     for (i, &state) in sections.iter().take(SECTIONS_PER_CONDENSED_DDI).enumerate() {
+        packed &= !(0x03 << (i * 2));
         packed |= u32::from(state.as_u8()) << (i * 2);
     }
     packed
@@ -167,7 +179,9 @@ pub fn unpack_condensed_work_state(packed: u32, count: usize) -> Vec<SectionStat
 /// describe them.
 #[must_use]
 pub fn pack_condensed_work_state_256(sections: &[SectionState]) -> [u32; CONDENSED_DDI_COUNT] {
-    let mut packed = [0u32; CONDENSED_DDI_COUNT];
+    // Same DDI 161 rule, and worse here: zero-filling reported up to 240
+    // sections the implement does not have as "off".
+    let mut packed = [u32::MAX; CONDENSED_DDI_COUNT];
     for (i, &state) in sections
         .iter()
         .take(SECTIONS_PER_CONDENSED_DDI * CONDENSED_DDI_COUNT)
@@ -175,6 +189,7 @@ pub fn pack_condensed_work_state_256(sections: &[SectionState]) -> [u32; CONDENS
     {
         let slot = i / SECTIONS_PER_CONDENSED_DDI;
         let within = i % SECTIONS_PER_CONDENSED_DDI;
+        packed[slot] &= !(0x03 << (within * 2));
         packed[slot] |= u32::from(state.as_u8()) << (within * 2);
     }
     packed
@@ -253,7 +268,12 @@ mod tests {
         use SectionState::{Error, NotInstalled, Off, On};
 
         // The exact case from the finding: two sections on, the rest off.
-        assert_eq!(pack_condensed_work_state(&[On, On, Off]), 0b0101);
+        // DDI 161: "If less than 16 child device element actual work states are
+        // available, then the unused bits shall be set to value 11 (not
+        // installed)." Slots 4-16 are unused here, so they are all ones —
+        // zero-filling them reported thirteen phantom sections as
+        // "disabled/off", which a conformant TC logs coverage for.
+        assert_eq!(pack_condensed_work_state(&[On, On, Off]), 0xFFFF_FFC5);
         assert_ne!(
             pack_condensed_work_state(&[On, On, Off]),
             0b11,
@@ -262,7 +282,7 @@ mod tests {
 
         let states = [On, Off, Error, NotInstalled];
         let packed = pack_condensed_work_state(&states);
-        assert_eq!(packed, 0b11_10_00_01);
+        assert_eq!(packed, 0xFFFF_FFE1);
         assert_eq!(unpack_condensed_work_state(packed, 4), states);
 
         // Every state survives a round trip, in every slot.
@@ -292,6 +312,23 @@ mod tests {
         sections[15] = NotInstalled;
         sections[16] = Error;
         sections[255] = On;
+
+        // A 12-section sprayer: everything past slot 12 is unused, so DDI 161
+        // requires all-ones. Zero-filling reported 244 sections the implement
+        // does not have as "disabled/off", and on the setpoint DDIs that is a
+        // positive command to shut each of them down.
+        let twelve = pack_condensed_work_state_256(&[On; 12]);
+        assert_eq!(
+            twelve[0], 0xFF55_5555,
+            "slots 13-16 of the first DDI are not installed"
+        );
+        for (i, value) in twelve.iter().enumerate().skip(1) {
+            assert_eq!(
+                *value,
+                u32::MAX,
+                "DDI {i} covers sections this implement does not have"
+            );
+        }
 
         let packed = pack_condensed_work_state_256(&sections);
         assert_eq!(packed[0] & 0x03, u32::from(On.as_u8()));

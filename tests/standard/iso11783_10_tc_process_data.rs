@@ -390,7 +390,6 @@ fn tc_process_data_try_handlers_reject_reserved_and_unsupported_commands() {
         ProcessDataCommands::MeasurementTimeInterval.as_u8(),
         ProcessDataCommands::MeasurementDistanceInterval.as_u8(),
         ProcessDataCommands::Acknowledge.as_u8(),
-        ProcessDataCommands::ClientTask.as_u8(),
     ] {
         let payload = vec![unsupported, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let err = client
@@ -414,6 +413,40 @@ fn tc_process_data_try_handlers_reject_reserved_and_unsupported_commands() {
         );
         assert!(server.clients().is_empty());
     }
+
+    // §6.6.3 Client Task is ECU-to-TC only: the client rejects it as before,
+    // and the server must accept it as the liveness message it is. Rejecting it
+    // meant the server dropped the client at t+6 s — losing its DDOP and
+    // `pool_activated` with no periodic call site to re-add it — and answered
+    // every later Activate `ThereAreErrorsInTheDDOP`.
+    let client_task = vec![
+        ProcessDataCommands::ClientTask.as_u8(),
+        0xFF,
+        0xFF,
+        0xFF,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+    ];
+    let err = client
+        .try_handle_tc_message(&Message::new(PGN_TC_TO_ECU, client_task.clone(), 0x33))
+        .expect_err("a TC never sends Client Task to an ECU");
+    assert_eq!(err.code, ErrorCode::InvalidState);
+
+    assert!(
+        server
+            .try_handle_client_message(&Message::new(PGN_ECU_TO_TC, client_task, 0x42))
+            .expect("B.8.2 Client Task is accepted")
+            .is_empty(),
+        "B.8.2 defines no response to Client Task"
+    );
+    assert_eq!(
+        server.clients().len(),
+        1,
+        "Client Task is what proves the client is alive"
+    );
+    assert!(server.clients()[0].task_totals_active);
 }
 
 #[test]

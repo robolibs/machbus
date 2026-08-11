@@ -252,7 +252,7 @@ pub fn prescription_rate_from_engineering(ddi: DDI, engineering_value: f64) -> R
         return Err(Error::invalid_data("rate DDI has invalid resolution"));
     }
     let raw = round_f64(engineering_value / resolution);
-    if raw < f64::from(min_value) || raw > f64::from(max_value) {
+    if raw < f64::from(min_value) || raw > max_value as f64 {
         return Err(Error::invalid_data(format!(
             "prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -264,7 +264,7 @@ pub fn prescription_rate_from_engineering(ddi: DDI, engineering_value: f64) -> R
 /// defined by a known ISO 11783 rate DDI.
 pub fn prescription_rate_to_engineering(ddi: DDI, raw_value: i32) -> Result<f64> {
     let (ddi_raw, _resolution, min_value, max_value) = validate_rate_ddi(ddi)?;
-    if raw_value < min_value || raw_value > max_value {
+    if i64::from(raw_value) < i64::from(min_value) || i64::from(raw_value) > max_value {
         return Err(Error::invalid_data(format!(
             "raw prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -276,7 +276,7 @@ pub fn prescription_rate_to_engineering(ddi: DDI, raw_value: i32) -> Result<f64>
 /// payload for a known ISO 11783 rate DDI.
 pub fn prescription_rate_process_data_payload(ddi: DDI, raw_value: i32) -> Result<[u8; 8]> {
     let (ddi_raw, _resolution, min_value, max_value) = validate_rate_ddi(ddi)?;
-    if raw_value < min_value || raw_value > max_value {
+    if i64::from(raw_value) < i64::from(min_value) || i64::from(raw_value) > max_value {
         return Err(Error::invalid_data(format!(
             "raw prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -284,7 +284,7 @@ pub fn prescription_rate_process_data_payload(ddi: DDI, raw_value: i32) -> Resul
     Ok(encode_value_pd(ddi, raw_value))
 }
 
-fn validate_rate_ddi(ddi: DDI) -> Result<(u16, f64, i32, i32)> {
+fn validate_rate_ddi(ddi: DDI) -> Result<(u16, f64, i32, i64)> {
     let ddi_raw: u16 = ddi.into();
     let Some(definition) = ddi_lookup(ddi_raw) else {
         return Err(Error::invalid_data(format!(

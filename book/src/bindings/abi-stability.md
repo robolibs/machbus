@@ -32,6 +32,12 @@ No signature or layout changed; the **error contract** of two functions did.
 The Python `autodrive_clear_stop` / `guidance_clear_stop` raise `RuntimeError`
 in the same case.
 
+- **`MachbusEventKind` gained `TcServerClientDisconnected` (100).** Additive:
+  existing discriminants are unchanged. It fires when the TC server drops a
+  client after six seconds without a Client Task message (ISO 11783-10 §6.6.3);
+  `source` is the client address. A caller with an exhaustive switch over the
+  enum must add an arm.
+
 ### v3 → v4
 
 Conformance work against ISO 11783-13 and ISO 11783-7 changed four things a C

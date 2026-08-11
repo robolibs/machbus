@@ -1698,6 +1698,24 @@ const fn nmea_time_of_day_raw_is_canonical(value: u32) -> bool {
     value <= MAX_TIME_OF_DAY_RAW || value == 0xFFFF_FFFF
 }
 
+/// DD056/DF53 Sequence ID: "0 - 252 = binding available … 253 - 254 = reserved
+/// for future use, 255 = No binding provided."
+///
+/// Note what rejecting one costs. The SID carries no measurement — it exists so
+/// that "identical SID values within two or more different PGN transmissions
+/// identifies those PGN transmissions as a single related data set" — yet every
+/// handler that calls this drops the **whole** parameter group, so a receiver
+/// using a reserved SID would lose its position and DOP entirely rather than
+/// just its correlation tag.
+///
+/// That strictness is kept deliberately, on two grounds: 253-254 are unassigned
+/// so no conformant device emits them today, and the failure is fail-safe here
+/// — position simply stops arriving, which trips [`GnssHazards`] and safe-stops
+/// [`AutoDrive`](crate::session::plugins::AutoDrive) rather than feeding it a
+/// stale fix. Unlike the reserved-*bit* rules in ISO 11783-7 §5.4 and the
+/// file-server volume flags, nothing in NMEA 2000 requires a receiver to
+/// tolerate a reserved SID value, so there is no citation to fix this against.
+/// Revisit if a real receiver is ever seen using one.
 #[inline]
 const fn nmea_sequence_id_is_canonical(value: u8) -> bool {
     value <= 0xFC || value == 0xFF

@@ -16,8 +16,8 @@ use crate::net::pgn_defs::{
     PGN_GNSS_POSITION_RAPID, PGN_HEADING_TRACK, PGN_MAGNETIC_VARIATION, PGN_RATE_OF_TURN,
     PGN_SYSTEM_TIME,
 };
-use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
-use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+use crate::net::{BROADCAST_ADDRESS, Message, Pgn};
+use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface, nmea2000_default_priority};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{Event, GnssEvent};
 use crate::time::Instant;
@@ -251,7 +251,14 @@ impl Plugin for Gnss {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         for (pgn, data) in self.pending.drain(..) {
-            ctx.send(pgn, data, BROADCAST_ADDRESS, Priority::Default);
+            // NMEA 2000 Appendix B.1 gives each parameter group its own
+            // "Priority Default"; they are not all 6.
+            ctx.send(
+                pgn,
+                data,
+                BROADCAST_ADDRESS,
+                nmea2000_default_priority(pgn),
+            );
         }
 
         // A receiver that stops reporting is a fault, not a hold: the position

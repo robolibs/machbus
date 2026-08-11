@@ -1820,3 +1820,38 @@ impl Default for XTEData {
     }
 }
 
+
+/// The NMEA 2000 default transmit priority for `pgn`.
+///
+/// Appendix B.1 gives every parameter group its own "Priority Default", and
+/// they differ by four levels across the set this crate transmits: the rapid
+/// navigation groups (position, COG/SOG, heading, rate of turn, engine rapid)
+/// are 2, the detailed and attitude groups 3, and the housekeeping groups
+/// (DOPs, satellites in view, magnetic variation) 6.
+///
+/// Everything went out at the J1939 general default of 6 instead, so a 10 Hz
+/// position stream that another node's autonomy gates on was arbitrating below
+/// its own dilution-of-precision report.
+///
+/// Unlisted PGNs fall back to 6, which is Appendix B.1's most common value and
+/// the safe choice for a group whose default this crate has not recorded.
+#[must_use]
+pub const fn nmea2000_default_priority(pgn: crate::net::types::Pgn) -> crate::net::Priority {
+    use crate::net::Priority;
+    match pgn {
+        // Priority 2 — rapid navigation and propulsion.
+        129_025 | 129_026 | 129_027 | 127_250 | 127_251 | 127_237 | 127_245 | 127_488
+        | 127_489 | 127_493 => Priority::AboveNormal,
+        // Priority 3 — detailed position, attitude, time, switch state.
+        129_029 | 129_033 | 126_992 | 127_252 | 127_257 | 127_233 | 127_501 | 127_502 => {
+            Priority::Normal
+        }
+        // Priority 5 — engine trip totals.
+        127_497 => Priority::Low,
+        // Priority 7 — the N2K heartbeat.
+        126_993 => Priority::Lowest,
+        // Priority 6 — DOPs, satellites in view, magnetic variation, and the
+        // default for anything not recorded here.
+        _ => Priority::Default,
+    }
+}

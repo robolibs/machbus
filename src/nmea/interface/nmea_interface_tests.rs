@@ -10,6 +10,54 @@ mod tests {
         Message::new(pgn, data, 0x10)
     }
 
+    /// NMEA 2000 Appendix B.1 gives every parameter group its own "Priority
+    /// Default", spanning four levels across the groups this crate transmits.
+    /// They all went out at the J1939 general default of 6, so the 10 Hz
+    /// position stream an autonomy consumer gates on arbitrated below its own
+    /// dilution-of-precision report.
+    #[test]
+    fn each_parameter_group_carries_its_own_default_priority() {
+        use crate::net::Priority;
+        use crate::nmea::nmea2000_default_priority;
+
+        // Rapid navigation and propulsion.
+        for pgn in [129_025, 129_026, 129_027, 127_250, 127_251, 127_488] {
+            assert_eq!(
+                nmea2000_default_priority(pgn),
+                Priority::AboveNormal,
+                "PGN {pgn} is Priority Default 2"
+            );
+        }
+        // Detailed position, attitude, time.
+        for pgn in [129_029, 126_992, 127_257] {
+            assert_eq!(
+                nmea2000_default_priority(pgn),
+                Priority::Normal,
+                "PGN {pgn} is Priority Default 3"
+            );
+        }
+        assert_eq!(
+            nmea2000_default_priority(127_497),
+            Priority::Low,
+            "engine trip totals are Priority Default 5"
+        );
+        assert_eq!(
+            nmea2000_default_priority(126_993),
+            Priority::Lowest,
+            "the N2K heartbeat is Priority Default 7"
+        );
+        // DOPs and satellites in view really are 6, as is the fallback.
+        for pgn in [129_539, 129_540, 127_258, 0x0000_FFFF] {
+            assert_eq!(nmea2000_default_priority(pgn), Priority::Default);
+        }
+
+        // The detailed fix must not outrank the rapid one it refines.
+        assert!(
+            nmea2000_default_priority(129_025) < nmea2000_default_priority(129_029),
+            "lower Priority value wins arbitration"
+        );
+    }
+
     #[test]
     fn position_rapid_round_trip() {
         let pos = GNSSPosition {

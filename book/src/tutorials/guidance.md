@@ -204,6 +204,11 @@ certified for steering of any kind.
 
 ## See also
 
+- [AutoDrive (steering + speed)](autodrive.md) — the newer combined controller.
+  It supersedes this plugin: same two PGNs, but with an ISO 11783-7 automation
+  status instead of a boolean, refusals instead of silent clamping, and the
+  machine's limit status fed back for anti-windup. The two are mutually
+  exclusive. That page also answers **"do I need TIM for speed?"**.
 - [Automatic guidance (autosteer)](../standards/autosteer.md) — the curvature model
   and the two PGNs, explained.
 - [TIM and automation](tim.md) — steering under granted, revocable authority.

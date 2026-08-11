@@ -27,9 +27,25 @@ mechanical limits, and the speed-dependent geometry. The guidance controller onl
 has to say *how hard to turn*, not *how to move the wheels*.
 
 **Speed is a separate concern.** A curvature command says nothing about how fast
-the machine travels. The tractor owns its speed. If you also want to influence
-speed, that is a different facility (see [TIM](tim.md)) and a different message.
-Keep the two ideas apart: guidance is geometry, not throttle.
+the machine travels. The tractor owns its speed. Keep the two ideas apart:
+guidance is geometry, not throttle.
+
+If you also want to influence speed, there are **two different facilities**, and
+they are not interchangeable:
+
+- **Machine Selected Speed Command (PGN 0xFD43)** — the ISO 11783-7 message, sent
+  as a plain broadcast with no authority handshake. This is what the
+  [`AutoDrive`](../tutorials/autodrive.md) plugin uses alongside the curvature
+  command.
+- **[TIM](tim.md)** — a separate protocol on its own PGNs, where speed is a
+  function that must be explicitly assigned and authenticated before you may
+  command it.
+
+Which one a given tractor acts on is a property of that tractor. An AEF-certified
+machine will generally guard speed behind TIM; a retrofit or bench system will
+generally take the native message. See
+[AutoDrive → Do I need TIM?](../tutorials/autodrive.md#do-i-need-tim) for the
+full comparison.
 
 **Turning a path into curvature is the application's job.** Each control cycle,
 something has to look at the planned line, the current GNSS position and heading,

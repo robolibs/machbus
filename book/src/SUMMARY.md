@@ -96,6 +96,7 @@
     - [Implement ECU](tutorials/implement-ecu.md)
     - [Powertrain](tutorials/powertrain.md)
     - [Guidance](tutorials/guidance.md)
+    - [AutoDrive (steering + speed)](tutorials/autodrive.md)
     - [Sequence Control](tutorials/sequence-control.md)
     - [TIM and automation](tutorials/tim.md)
   - [Diagnostics and files]()

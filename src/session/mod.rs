@@ -965,7 +965,10 @@ mod tests {
         // The operator presses "clear stop". The receiver is still silent, and
         // because the trigger is edge-emitted no second PositionStale is
         // coming — so clearing here would disarm the net permanently.
-        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session.get_mut::<AutoDrive>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
         assert_eq!(
             session
                 .get::<AutoDrive>()
@@ -990,7 +993,7 @@ mod tests {
             session.feed(0, &frame, now);
         }
         while session.poll_event().is_some() {}
-        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        session.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
         assert_eq!(
             session
                 .get::<AutoDrive>()
@@ -1025,7 +1028,10 @@ mod tests {
                 .and_then(super::plugins::Guidance::stop_reason),
             Some(SafeStopTrigger::PositionStale)
         );
-        guided.get_mut::<Guidance>().unwrap().clear_stop();
+        assert_eq!(
+            guided.get_mut::<Guidance>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
         assert_eq!(
             guided
                 .get::<Guidance>()
@@ -1106,7 +1112,10 @@ mod tests {
         );
 
         // Clearing is refused while the receiver still says Unsafe.
-        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session.get_mut::<AutoDrive>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
         assert_eq!(
             session
                 .get::<AutoDrive>()
@@ -1122,7 +1131,7 @@ mod tests {
             session.feed(0, &frame, now);
         }
         while session.poll_event().is_some() {}
-        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        session.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
         assert_eq!(
             session
                 .get::<AutoDrive>()

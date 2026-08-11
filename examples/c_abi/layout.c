@@ -14,10 +14,10 @@
 #if UINTPTR_MAX == UINT64_MAX
 
 /*
- * Every assertion below describes ABI v4. If one of them fails, the fix is not
+ * Every assertion below describes ABI v5. If one of them fails, the fix is not
  * to update the number in place: a widened POD shipping under an unchanged
  * version lets a stale-header caller past the runtime guard in demo.c and
- * full_demo.c. Bump MACHBUS_C_ABI_VERSION, update the two `!= 4` checks and
+ * full_demo.c. Bump MACHBUS_C_ABI_VERSION, update the two `!= 5` checks and
  * the version table in book/src/bindings/abi-stability.md.
  *
  * The Rust side carries the same expectations as const assertions next to the

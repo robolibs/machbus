@@ -179,6 +179,10 @@ pub enum AutodriveRefusal {
     CurvatureOutOfRange,
     /// The commanded speed is not a finite number.
     SpeedNotFinite,
+    /// The hazard that caused the safe stop is still present, so the latch
+    /// cannot be released yet. Distinct from [`Self::StopLatched`], which
+    /// reports the latch itself blocking an *engage*.
+    StopConditionLive,
 }
 
 impl AutodriveRefusal {
@@ -197,6 +201,7 @@ impl AutodriveRefusal {
             Self::StatusNotActive => "status_not_active",
             Self::CurvatureOutOfRange => "curvature_out_of_range",
             Self::SpeedNotFinite => "speed_not_finite",
+            Self::StopConditionLive => "stop_condition_live",
         }
     }
 }

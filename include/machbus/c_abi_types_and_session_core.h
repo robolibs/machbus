@@ -1324,8 +1324,9 @@ bool machbus_session_autodrive_command(MachbusSession *h,
                                        double speed_mps);
 
 /**
- * Release a latched safe stop. Refused while the operator is still holding the
- * Auxiliary Shortcut Button.
+ * Release a latched safe stop. Refused, with `false` and a last-error string,
+ * while the operator is still holding the Auxiliary Shortcut Button or a GNSS
+ * hazard is live.
  */
 bool machbus_session_autodrive_clear_stop(MachbusSession *h);
 
@@ -1360,8 +1361,10 @@ uint32_t machbus_session_guidance_stop_reason(const MachbusSession *h);
  * not by itself consent to move, and [`machbus_session_guidance_engage`] still
  * has to succeed afterwards.
  *
- * Returns `false` when the guidance subsystem is not plugged. Without this the
- * latch was a trap door for C and Python callers — reachable, with no exit.
+ * Returns `false` when the guidance subsystem is not plugged, or when the
+ * clear is refused because the stop condition is still live; the reason is in
+ * the last-error string. Without this the latch was a trap door for C and
+ * Python callers — reachable, with no exit.
  */
 bool machbus_session_guidance_clear_stop(MachbusSession *h);
 

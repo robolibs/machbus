@@ -42,7 +42,16 @@ use crate::time::Instant;
 ///   and several `repr(C)` PODs widened. A caller built against a v3 header
 ///   that skipped this guard would call the five-argument seek with four,
 ///   reading `out_tan` from an uninitialised slot and writing through it.
-pub const MACHBUS_C_ABI_VERSION: u32 = 4;
+/// - `5` makes the two `clear_stop` entry points report their refusal.
+///   `machbus_session_autodrive_clear_stop` and
+///   `machbus_session_guidance_clear_stop` returned `true` unconditionally and
+///   cleared the last error even when the plugin had refused to release the
+///   latch. They now return `false` and set a last-error string when the stop
+///   condition is still live. No signature or layout changed, but a caller
+///   that treated the return as "always succeeded" was reading a lie: the
+///   error contract did, which is a bump under the rules in
+///   book/src/bindings/abi-stability.md.
+pub const MACHBUS_C_ABI_VERSION: u32 = 5;
 
 // The POD layouts this version promises. A `repr(C)` struct that grows a field
 // breaks these at compile time, in the same file as the version constant, so
@@ -51,7 +60,7 @@ pub const MACHBUS_C_ABI_VERSION: u32 = 4;
 // against the old header past the runtime `abi_version()` check in
 // examples/c_abi/demo.c and then read a field that moved.
 //
-// If one of these fails: bump MACHBUS_C_ABI_VERSION, update the two `!= 4`
+// If one of these fails: bump MACHBUS_C_ABI_VERSION, update the two `!= 5`
 // checks in the C examples, record the delta in
 // book/src/bindings/abi-stability.md, and mirror the new sizes in
 // examples/c_abi/layout.c.
@@ -1943,8 +1952,9 @@ pub extern "C" fn machbus_session_autodrive_command(
     }
 }
 
-/// Release a latched safe stop. Refused while the operator is still holding the
-/// Auxiliary Shortcut Button.
+/// Release a latched safe stop. Refused, with `false` and a last-error string,
+/// while the operator is still holding the Auxiliary Shortcut Button or a GNSS
+/// hazard is live.
 #[unsafe(no_mangle)]
 pub extern "C" fn machbus_session_autodrive_clear_stop(h: *mut MachbusSession) -> bool {
     let h = match handle_mut(h) {
@@ -1955,9 +1965,16 @@ pub extern "C" fn machbus_session_autodrive_clear_stop(h: *mut MachbusSession) -
         }
     };
     let d = plugin_mut!(h, AutoDrive);
-    d.clear_stop();
-    clear_last_error();
-    true
+    match d.clear_stop() {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(format!("autodrive clear_stop refused: {}", refusal.as_str()));
+            false
+        }
+    }
 }
 
 /// Why AutoDrive stopped, as a [`MachbusSafeStopTrigger`] code, or `0` when no
@@ -2032,8 +2049,10 @@ pub extern "C" fn machbus_session_guidance_stop_reason(h: *const MachbusSession)
 /// not by itself consent to move, and [`machbus_session_guidance_engage`] still
 /// has to succeed afterwards.
 ///
-/// Returns `false` when the guidance subsystem is not plugged. Without this the
-/// latch was a trap door for C and Python callers — reachable, with no exit.
+/// Returns `false` when the guidance subsystem is not plugged, or when the
+/// clear is refused because the stop condition is still live; the reason is in
+/// the last-error string. Without this the latch was a trap door for C and
+/// Python callers — reachable, with no exit.
 #[unsafe(no_mangle)]
 pub extern "C" fn machbus_session_guidance_clear_stop(h: *mut MachbusSession) -> bool {
     let h = match handle_mut(h) {
@@ -2044,9 +2063,16 @@ pub extern "C" fn machbus_session_guidance_clear_stop(h: *mut MachbusSession) ->
         }
     };
     let g = plugin_mut!(h, Guidance);
-    g.clear_stop();
-    clear_last_error();
-    true
+    match g.clear_stop() {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(format!("guidance clear_stop refused: {}", refusal.as_str()));
+            false
+        }
+    }
 }
 
 /// Whether a safe stop is latched on the guidance controller.
@@ -2171,3 +2197,70 @@ pub extern "C" fn machbus_session_vt_show(h: *mut MachbusSession, object_id: u16
     bool_result(vt.show(ObjectID(object_id)))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::pgn_defs::PGN_SHORTCUT_BUTTON;
+    use crate::net::{BROADCAST_ADDRESS, Identifier, Priority};
+
+    /// B8 — `clear_stop` became a conditional no-op without the bindings that
+    /// report its outcome being touched. Both C functions answered
+    /// unconditional success and additionally cleared the last error, so an HMI
+    /// showed the fault cleared and re-enabled Engage with the latch still set.
+    /// Driven through the C entry points, because that is where the defect was.
+    #[test]
+    fn the_c_abi_reports_a_refused_clear_stop() {
+        fn isb_frame(state: u8) -> (u32, [u8; 8]) {
+            let id =
+                Identifier::encode(Priority::Default, PGN_SHORTCUT_BUTTON, 0x26, BROADCAST_ADDRESS);
+            (
+                id.raw,
+                [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFC | state],
+            )
+        }
+
+        for autodrive in [true, false] {
+            let cfg = MachbusConfig {
+                enable_autodrive: autodrive,
+                enable_guidance: !autodrive,
+                ..MachbusConfig::default()
+            };
+            let h = machbus_session_new(&raw const cfg);
+            assert!(!h.is_null());
+            assert!(machbus_session_start_address_claim(h));
+            for _ in 0..30 {
+                assert!(machbus_session_tick(h, 100));
+            }
+
+            let clear = if autodrive {
+                machbus_session_autodrive_clear_stop
+            } else {
+                machbus_session_guidance_clear_stop
+            };
+
+            // Operator holds the stop.
+            let (id, data) = isb_frame(0);
+            assert!(machbus_session_feed(h, 0, id, data.as_ptr(), data.len()));
+            assert!(machbus_session_tick(h, 100));
+
+            assert!(!clear(h), "a held ISB must refuse the clear");
+            let err = machbus_session_last_error();
+            assert!(!err.is_null(), "the refusal must be readable");
+            // SAFETY: non-null, NUL-terminated, owned by the thread-local slot.
+            let text = unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned();
+            assert!(
+                text.contains("stop_condition_live"),
+                "last error should name the refusal, got {text}"
+            );
+
+            // Operator releases it.
+            let (id, data) = isb_frame(1);
+            assert!(machbus_session_feed(h, 0, id, data.as_ptr(), data.len()));
+            assert!(machbus_session_tick(h, 100));
+            assert!(clear(h), "a released ISB must let the clear through");
+
+            machbus_session_free(h);
+        }
+    }
+}

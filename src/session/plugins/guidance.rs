@@ -196,11 +196,16 @@ impl Guidance {
     /// Refused while the operator is still asserting stop on the Auxiliary
     /// Shortcut Button, or while a seen ISB source is silent — clearing there
     /// opened a window of commanded motion against a held-down stop.
-    pub fn clear_stop(&mut self) {
+    pub fn clear_stop(&mut self) -> Result<(), AutodriveRefusal> {
+        // G7 — the refusal has to be reportable. Clearing while the operator is
+        // still on the shortcut button, or while a GNSS hazard is live, was a
+        // silent no-op: an HMI showed the fault cleared and re-enabled Engage
+        // with the latch still set.
         if self.isb.is_asserted() || self.gnss.is_live() {
-            return;
+            return Err(AutodriveRefusal::StopConditionLive);
         }
         self.stop.clear();
+        Ok(())
     }
 
     /// `true` while the operator is commanding stop on the Auxiliary Shortcut
@@ -1145,7 +1150,10 @@ mod tests {
 
         // Clearing is refused while the button is still held: doing it there
         // opened a window of commanded motion against a held-down stop.
-        s.get_mut::<Guidance>().unwrap().clear_stop();
+        assert_eq!(
+            s.get_mut::<Guidance>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
         assert!(
             s.get::<Guidance>().unwrap().is_stop_latched(),
             "clear_stop must not release a held ISB"
@@ -1166,7 +1174,7 @@ mod tests {
         );
         let released_at = Instant::from_millis(base + u64::from(MIN_TX_INTERVAL_MS) + 30);
         s.feed(0, &release, released_at);
-        s.get_mut::<Guidance>().unwrap().clear_stop();
+        s.get_mut::<Guidance>().unwrap().clear_stop().unwrap();
         feed_machine_info(
             &mut s,
             Instant::from_millis(base + u64::from(MIN_TX_INTERVAL_MS) + 40),

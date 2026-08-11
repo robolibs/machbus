@@ -1013,11 +1013,12 @@ impl PySession {
             .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
-    /// Release a latched safe stop. Refused while the operator is still holding
-    /// the Auxiliary Shortcut Button.
+    /// Release a latched safe stop. Raises while the operator is still holding
+    /// the Auxiliary Shortcut Button or a GNSS hazard is live.
     fn autodrive_clear_stop(&mut self) -> PyResult<()> {
-        self.autodrive()?.clear_stop();
-        Ok(())
+        self.autodrive()?
+            .clear_stop()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
     /// Why AutoDrive stopped (a short stable identifier), or `None`.
@@ -1050,9 +1051,11 @@ impl PySession {
     /// Release a latched safe stop. Deliberately explicit: clearing the fault is
     /// not by itself consent to move, and `guidance_engage` still has to
     /// succeed afterwards. Without this the latch had no exit from Python.
+    /// Raises when the stop condition that latched it is still live.
     fn guidance_clear_stop(&mut self) -> PyResult<()> {
-        self.guidance()?.clear_stop();
-        Ok(())
+        self.guidance()?
+            .clear_stop()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
     /// `True` if the controller is currently requesting steering (its own intent,

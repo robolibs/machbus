@@ -4,9 +4,9 @@ The C ABI has an explicit version surface and a generated header. ABI stability
 means C callers can rely on ownership and layout rules within the documented
 version boundary.
 
-## Current version: 4
+## Current version: 5
 
-The ABI is **version 4**, reported by `machbus_session_abi_version()`.
+The ABI is **version 5**, reported by `machbus_session_abi_version()`.
 
 C examples intentionally fail fast if the runtime reports a different version.
 That guard is the only thing standing between a stale header and undefined
@@ -14,6 +14,23 @@ behaviour, so it is load-bearing: a caller built against v3 that skipped it
 would call the five-argument `machbus_session_fs_client_seek` with four
 arguments, reading `out_tan` from an uninitialised stack slot and writing
 through it.
+
+### v4 → v5
+
+No signature or layout changed; the **error contract** of two functions did.
+
+- **`machbus_session_autodrive_clear_stop` and
+  `machbus_session_guidance_clear_stop` can now return `false`.** Releasing a
+  latched safe stop has been a conditional no-op inside the plugins since the
+  ISB and GNSS hazard interlocks landed, but both C functions returned `true`
+  unconditionally and cleared the last error. A caller that showed the fault as
+  cleared on a `true` return re-enabled Engage with the latch still set. They
+  now return `false` and set a last-error string naming the refusal
+  (`stop_condition_live`) when the operator is still holding the Auxiliary
+  Shortcut Button or a GNSS hazard is live.
+
+The Python `autodrive_clear_stop` / `guidance_clear_stop` raise `RuntimeError`
+in the same case.
 
 ### v3 → v4
 

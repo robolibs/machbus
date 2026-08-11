@@ -39,7 +39,7 @@ static const char *event_kind_str(MachbusEventKind k) {
 }
 
 int main(void) {
-    if (machbus_session_abi_version() != 4) {
+    if (machbus_session_abi_version() != 5) {
         fprintf(stderr, "unexpected machbus C ABI version: %u\n",
                 machbus_session_abi_version());
         return 1;

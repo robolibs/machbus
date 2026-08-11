@@ -268,14 +268,19 @@ impl AutoDrive {
     /// Refused while the operator is still asserting stop on the Auxiliary
     /// Shortcut Button: clearing there produced a window of commanded motion
     /// against a stop that was being held down.
-    pub fn clear_stop(&mut self) {
+    pub fn clear_stop(&mut self) -> Result<(), AutodriveRefusal> {
+        // G7 — the refusal has to be reportable. Clearing while the operator is
+        // still on the shortcut button, or while a GNSS hazard is live, was a
+        // silent no-op: an HMI showed the fault cleared and re-enabled Engage
+        // with the latch still set.
         if self.isb.is_asserted() || self.gnss.is_live() {
-            return;
+            return Err(AutodriveRefusal::StopConditionLive);
         }
         self.stop.clear();
         if self.status == AutomationStatus::Fault {
             self.status = AutomationStatus::NotReady;
         }
+        Ok(())
     }
 
     /// `true` while the operator is commanding stop on the Auxiliary Shortcut
@@ -652,7 +657,7 @@ mod tests {
         // (G9); without that companion, deleting `self.gnss.observe(event)`
         // kept this test green and silently reverted C3.
         auto.gnss = hazards;
-        auto.clear_stop();
+        assert_eq!(auto.clear_stop(), Err(AutodriveRefusal::StopConditionLive));
         assert_eq!(
             auto.stop_reason(),
             Some(SafeStopTrigger::PositionStale),
@@ -765,7 +770,7 @@ mod tests {
             s.get_mut::<AutoDrive>().unwrap().engage(),
             Err(AutodriveRefusal::StopLatched)
         );
-        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        s.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
         s.get_mut::<AutoDrive>().unwrap().engage().unwrap();
         assert!(s.get::<AutoDrive>().unwrap().is_engaged());
     }
@@ -853,7 +858,10 @@ mod tests {
         );
 
         // Still held: clearing must not take, and engage must stay refused.
-        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            s.get_mut::<AutoDrive>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
         assert!(s.get::<AutoDrive>().unwrap().is_isb_stop_asserted());
         assert_eq!(
             s.get::<AutoDrive>().unwrap().stop_reason(),
@@ -872,7 +880,7 @@ mod tests {
             ShortcutButtonState::PermitAllImplementsToOperate,
             now,
         );
-        s.get_mut::<AutoDrive>().unwrap().clear_stop();
+        s.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
         assert!(!s.get::<AutoDrive>().unwrap().is_isb_stop_asserted());
         assert_eq!(s.get::<AutoDrive>().unwrap().stop_reason(), None);
     }

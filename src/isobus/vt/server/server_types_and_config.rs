@@ -337,6 +337,12 @@ pub(crate) enum CommandOutcome {
     InvalidObject,
     /// Anything else: a malformed payload, an unknown client, a refused change.
     Other,
+    /// The command's *second* object reference is bad, where the clause gives
+    /// that its own bit — Change Active Mask (F.35) separates an invalid
+    /// Working Set (bit 0) from an invalid mask (bit 1), so a Working Set whose
+    /// runtime pool update removed the mask can tell the two apart and
+    /// re-upload instead of retrying.
+    InvalidSecondaryObject,
 }
 
 /// Annex F response shape for a VT command the Working Set must wait on.
@@ -362,6 +368,9 @@ pub(crate) struct VtResponseShape {
     pub invalid_object_bit: u8,
     /// Bit for "any other error" in this command's error byte.
     pub other_error_bit: u8,
+    /// Bit for an invalid *second* object reference, where the clause defines
+    /// one. Zero elsewhere, which folds the case back onto `other_error_bit`.
+    pub invalid_secondary_object_bit: u8,
 }
 
 impl VtResponseShape {
@@ -370,7 +379,13 @@ impl VtResponseShape {
             echo,
             invalid_object_bit,
             other_error_bit,
+            invalid_secondary_object_bit: 0,
         }
+    }
+
+    const fn with_secondary(mut self, bit: u8) -> Self {
+        self.invalid_secondary_object_bit = bit;
+        self
     }
 
     /// The Annex F shape for `function`, or `None` if it has no such response.
@@ -393,7 +408,7 @@ impl VtResponseShape {
             | cmd::CHANGE_POLYGON_POINT
             | cmd::SELECT_COLOUR_MAP => Self::new(2, 0x01, 0x10),
             // F.35 uses bit 0 for an invalid Working Set and bit 1 for the mask.
-            cmd::CHANGE_ACTIVE_MASK => Self::new(2, 0x02, 0x10),
+            cmd::CHANGE_ACTIVE_MASK => Self::new(2, 0x01, 0x10).with_secondary(0x02),
             // F.21 / F.39 / F.41: Object ID + one parameter byte, error in byte 5.
             cmd::CHANGE_BACKGROUND_COLOUR | cmd::CHANGE_ATTRIBUTE | cmd::CHANGE_PRIORITY => {
                 Self::new(3, 0x01, 0x10)
@@ -413,6 +428,12 @@ impl VtResponseShape {
             // F.47 / F.49: one echoed byte, error in byte 3.
             cmd::LOCK_UNLOCK_MASK => Self::new(1, 0x01, 0x04),
             cmd::EXECUTE_MACRO => Self::new(1, 0x01, 0x04),
+            // Same shape with a 16-bit Object ID: the extended macro echoes
+            // bytes 2-3 and puts the error in byte 4. Missing from this table,
+            // the command was carried out and never answered, so a VT-5 working
+            // set blocked 1,5 s and retried — re-running the macro through the
+            // render runtime on each retry.
+            cmd::EXECUTE_EXTENDED_MACRO => Self::new(2, 0x01, 0x04),
             _ => return None,
         })
     }
@@ -423,6 +444,13 @@ impl VtResponseShape {
             CommandOutcome::Done => 0,
             CommandOutcome::InvalidObject => self.invalid_object_bit,
             CommandOutcome::Other => self.other_error_bit,
+            CommandOutcome::InvalidSecondaryObject => {
+                if self.invalid_secondary_object_bit == 0 {
+                    self.other_error_bit
+                } else {
+                    self.invalid_secondary_object_bit
+                }
+            }
         }
     }
 

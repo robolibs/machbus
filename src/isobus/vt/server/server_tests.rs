@@ -525,6 +525,60 @@ mod tests {
         );
     }
 
+    /// The hand-maintained list above is only as complete as whoever last
+    /// edited it: `cmd::EXECUTE_EXTENDED_MACRO` was dispatched through
+    /// `annex_f_response` for a command `VtResponseShape::for_command` had no
+    /// arm for, so the macro ran and the Working Set was never answered. Scan
+    /// the dispatcher instead of trusting the list.
+    #[test]
+    fn every_dispatched_annex_f_command_has_a_response_shape() {
+        let dispatcher = include_str!("server_lifecycle_queries_upload.rs");
+        let shapes = include_str!("server_types_and_config.rs");
+        let table = shapes
+            .split("fn for_command")
+            .nth(1)
+            .expect("for_command exists");
+
+        let mut dispatched: Vec<&str> = Vec::new();
+        for (i, line) in dispatcher.lines().enumerate() {
+            let Some(rest) = line.trim().strip_prefix("cmd::") else {
+                continue;
+            };
+            let Some(name) = rest.split(|c: char| !c.is_ascii_uppercase() && c != '_').next() else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            // A block arm whose body answers via annex_f_response. Anchoring on
+            // `=> {` keeps single-expression arms such as `cmd::END_OF_POOL =>
+            // self.handle_end_of_pool(msg)` out of the scan.
+            if !line.trim_end().ends_with("=> {") {
+                continue;
+            }
+            let answers = dispatcher
+                .lines()
+                .skip(i + 1)
+                .take(3)
+                .any(|l| l.contains("self.annex_f_response(msg, outcome)"));
+            if answers && !dispatched.contains(&name) {
+                dispatched.push(name);
+            }
+        }
+        assert!(
+            dispatched.len() > 20,
+            "the scan found only {dispatched:?}; it stopped matching the dispatcher"
+        );
+        for name in dispatched {
+            assert!(
+                table.contains(&format!("cmd::{name}")),
+                "cmd::{name} is answered through annex_f_response but has no \
+                 VtResponseShape arm, so the VT carries the command out and \
+                 sends nothing (Annex F.1)"
+            );
+        }
+    }
+
     /// E1 — Annex F.1: "The VT shall respond to these commands even if no object
     /// pool of the originating Working Set is loaded. The originator shall wait
     /// for a response before sending another command. Unless stated otherwise,
@@ -565,6 +619,7 @@ mod tests {
             cmd::SELECT_COLOUR_MAP,
             cmd::LOCK_UNLOCK_MASK,
             cmd::EXECUTE_MACRO,
+            cmd::EXECUTE_EXTENDED_MACRO,
         ] {
             let mut data = [0xFFu8; 8];
             data[0] = function;
@@ -992,6 +1047,51 @@ mod tests {
             s.clients()[0].object_state.visibility.get(&ObjectID(0x11)),
             Some(&true),
             "malformed canonical-bool command must not mutate cached VT state"
+        );
+    }
+
+    /// C3 — F.35 gives an invalid Working Set bit 0 and an invalid mask bit 1.
+    /// The table had the two swapped and folded the invalid-mask case into "any
+    /// other error", so bit 0 was never set for any input and a Working Set
+    /// whose runtime pool update removed the mask could not tell that the mask
+    /// ID was the problem — it retried instead of re-uploading, and the alarm
+    /// never came up.
+    #[test]
+    fn change_active_mask_separates_a_bad_working_set_from_a_bad_mask() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        activate_valid_pool(&mut s, 0x42);
+
+        let error_byte = |server: &mut VTServer, ws: u16, mask: u16| {
+            let [ws_lo, ws_hi] = ws.to_le_bytes();
+            let [mask_lo, mask_hi] = mask.to_le_bytes();
+            let out = server.handle_ecu_message(&ecu_msg(
+                vec![
+                    cmd::CHANGE_ACTIVE_MASK,
+                    ws_lo,
+                    ws_hi,
+                    mask_lo,
+                    mask_hi,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                ],
+                0x42,
+            ));
+            assert_eq!(out.len(), 1, "F.1: the command must be answered");
+            out[0].data[3]
+        };
+
+        assert_eq!(error_byte(&mut s, 0x0001, 0x0002), 0x00, "the valid pair");
+        assert_eq!(
+            error_byte(&mut s, 0x7FFF, 0x0002),
+            0x01,
+            "F.35 bit 0: invalid Working Set Object ID"
+        );
+        assert_eq!(
+            error_byte(&mut s, 0x0001, 0x7FFE),
+            0x02,
+            "F.35 bit 1: invalid Data/Alarm Mask Object ID"
         );
     }
 

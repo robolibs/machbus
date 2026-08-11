@@ -94,6 +94,20 @@ impl TwoNode {
         Ok(())
     }
 
+    /// Advance the clock and poll both drivers *without* pumping the bus, so no
+    /// frame crosses between the nodes. Models a link dropout — a terminal
+    /// power-cycled, or a bus segment saturated for longer than a timeout.
+    pub fn step_severed(&mut self, dt_ms: u64) -> Result<()> {
+        self.now = self.now.add_millis(dt_ms);
+        while let Some(e) = self.da.poll_at(self.now)? {
+            self.ea.push(e);
+        }
+        while let Some(e) = self.db.poll_at(self.now)? {
+            self.eb.push(e);
+        }
+        Ok(())
+    }
+
     /// Run `steps` iterations of `dt_ms`.
     pub fn run(&mut self, steps: usize, dt_ms: u64) -> Result<()> {
         for _ in 0..steps {
@@ -348,6 +362,67 @@ fn vt_client_connects_to_server() {
         server_state,
         VTServerState::Disconnected,
         "VT server should be running after start"
+    );
+}
+
+/// C5 — §4.6.9 lets a working set restart initialisation after a VT shutdown,
+/// but `VTState::Disconnected` had no tick arm and the plugin consumes its
+/// `connect_requested` flag exactly once. An operator power-cycling the
+/// terminal, or a >3 s dropout under load, left the implement absent from the
+/// VT for the rest of the session while every other plugin kept running.
+#[test]
+fn a_vt_client_reconnects_after_the_terminal_goes_away() {
+    let server = VtServer::new(VTServerConfig::default()).expect("vt server config");
+    let pool = ObjectPool::default()
+        .with_object(create_working_set(1, &WorkingSetBody::default()).with_children([10u16]))
+        .with_object(create_data_mask(10, &DataMaskBody::default()));
+    let client = VtClient::new(VTClientConfig::default(), pool, WorkingSet::default());
+
+    let mut bus = TwoNode::new(
+        make_name(0x104, 0x80),
+        0x80,
+        vec![boxed(server)],
+        make_name(0x204, 0x80),
+        0x81,
+        vec![boxed(client)],
+    )
+    .expect("build two-node bus");
+    assert!(bus.run_until_claimed().expect("claim"));
+
+    bus.a
+        .with_mut::<VtServer, _>(|s| s.start())
+        .expect("plugin present")
+        .expect("server start");
+    let target = bus.a.address();
+    bus.b.with_mut::<VtClient, _>(|c| c.connect_to(target));
+    bus.run(40, 100).expect("run");
+
+    let connected = bus.b.with::<VtClient, _>(VtClient::state).expect("client");
+    assert_ne!(
+        connected,
+        VTState::Disconnected,
+        "precondition: the client reached the VT"
+    );
+
+    // The terminal drops off the bus for well over the 3 s §4.6.9 window.
+    for _ in 0..50 {
+        bus.step_severed(100).expect("severed step");
+    }
+    // The session is dropped and immediately re-armed: the client is back at
+    // WaitForVTStatus, waiting for a terminal that is not there.
+    assert_eq!(
+        bus.b.with::<VtClient, _>(VtClient::state).expect("client"),
+        VTState::WaitForVTStatus,
+        "3 s without a VT Status is a VT shutdown, and §4.6.9 restarts init"
+    );
+
+    // It comes back. Nothing in the crate, the FFI examples or the book calls
+    // `connect_to` again, so the client has to restart on its own.
+    bus.run(60, 100).expect("run");
+    assert_eq!(
+        bus.b.with::<VtClient, _>(VtClient::state).expect("client"),
+        VTState::Connected,
+        "the working set must re-upload its pool and reconnect once the VT is back"
     );
 }
 

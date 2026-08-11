@@ -216,6 +216,10 @@ pub struct VTClient {
     vt_supports_extended_versions: bool,
     unsupported_functions: Vec<u8>,
     is_active_ws: bool,
+    /// Set while a VT session is meant to exist, so a §4.6.9 shutdown can
+    /// restart initialisation. Cleared by an explicit `disconnect()`, which is
+    /// the application saying it wants no session at all.
+    session_wanted: bool,
     /// Address of *this* client's control function — used to detect
     /// whether the active-WS-master address in VT_STATUS is us.
     /// `None` until the user calls [`Self::set_self_address`]; while
@@ -297,6 +301,7 @@ impl VTClient {
             vt_supports_extended_versions: false,
             unsupported_functions: Vec::new(),
             is_active_ws: false,
+            session_wanted: false,
             self_address: None,
             current_language: LanguageCode::default(),
             vt_language: LanguageCode::default(),
@@ -343,7 +348,9 @@ impl VTClient {
     /// C++ obtains this via `cf_->cf().address()` — we accept it
     /// directly since we don't carry a CF reference.
     pub fn set_self_address(&mut self, addr: Address) {
-        self.self_address = Some(addr);
+        // NULL is "no address", not an address; storing it as `Some` defeated
+        // the guarantee documented on the field.
+        self.self_address = (addr != NULL_ADDRESS).then_some(addr);
     }
 
     // ─── Connect / disconnect ─────────────────────────────────────────
@@ -354,6 +361,7 @@ impl VTClient {
         }
         let _ = serialize_pool_for_vt_transfer(&self.pool)?;
         self.clear_vt_session_binding();
+        self.session_wanted = true;
         self.transition(VTState::WaitForVTStatus);
         self.timer_ms = 0;
         self.pending_end_of_pool_delay_ms = 0;
@@ -362,6 +370,7 @@ impl VTClient {
 
     pub fn disconnect(&mut self) -> Result<()> {
         self.clear_vt_session_binding();
+        self.session_wanted = false;
         self.transition(VTState::Disconnected);
         self.pending_end_of_pool_delay_ms = 0;
         Ok(())
@@ -1445,7 +1454,22 @@ impl VTClient {
                     ));
                 }
             }
-            VTState::Disconnected => {}
+            VTState::Disconnected => {
+                // §4.6.9: the working set "may restart initialisation" after a
+                // VT shutdown. Without this the state was terminal — the plugin
+                // consumes `connect_requested` once and nothing re-arms it — so
+                // an operator power-cycling the terminal, or a >3 s dropout
+                // under load, left the implement absent from the VT for the
+                // rest of the session while every other plugin kept running.
+                // An explicit `disconnect()` clears `session_wanted`, so only a
+                // lost session restarts.
+                if self.session_wanted && !self.pool.is_empty() {
+                    self.transition(VTState::WaitForVTStatus);
+                    self.timer_ms = 0;
+                    self.since_vt_status_ms = 0;
+                    self.pending_end_of_pool_delay_ms = 0;
+                }
+            }
         }
         out
     }
@@ -1519,13 +1543,21 @@ impl VTClient {
         // the working set then advertised that number back to it. The real
         // version arrives in the Get Memory response (Annex D.3, byte 2).
         self.vt_busy_codes = msg.data[6];
-        if let Some(self_addr) = self.self_address {
-            let active_addr = msg.data[1];
-            let was_active = self.is_active_ws;
-            self.is_active_ws = active_addr == self_addr;
-            if was_active != self.is_active_ws {
-                self.on_active_ws_status.emit(&self.is_active_ws);
-            }
+        // Annex G.2 byte 2 is the SA of the active Working Set Master, and
+        // ISO 11783-5 gives 254 as the NULL address — a VT saying "no working
+        // set owns me". The plugin calls `set_self_address(ctx.address())`
+        // every tick, including before the claim completes and after an address
+        // is surrendered, so a plain equality made NULL match NULL and told the
+        // application it was the active working set at the moment its control
+        // function had no address at all. Evaluated unconditionally so a
+        // surrendered address also *clears* the flag.
+        let active_addr = msg.data[1];
+        let was_active = self.is_active_ws;
+        self.is_active_ws = self.self_address.is_some_and(|self_addr| {
+            self_addr != NULL_ADDRESS && active_addr != NULL_ADDRESS && active_addr == self_addr
+        });
+        if was_active != self.is_active_ws {
+            self.on_active_ws_status.emit(&self.is_active_ws);
         }
         if self.state() == VTState::WaitForVTStatus {
             self.transition(VTState::SendWorkingSetMaster);

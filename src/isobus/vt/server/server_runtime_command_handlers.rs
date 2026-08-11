@@ -353,7 +353,7 @@ impl VTServer {
             mask,
             &[ObjectType::DataMask, ObjectType::AlarmMask],
         ) {
-            return CommandOutcome::Other;
+            return CommandOutcome::InvalidSecondaryObject;
         }
         if let Some(state) = self.client_object_state_mut(msg.source) {
             state.active_data_mask = mask;

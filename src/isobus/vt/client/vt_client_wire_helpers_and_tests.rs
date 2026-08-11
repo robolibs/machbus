@@ -1631,4 +1631,45 @@ mod tests {
         c.handle_vt_message(&vt_msg(data, 0x80));
         assert!(!c.is_active_ws());
     }
+
+    /// C6 — Annex G.2 byte 2 is the SA of the active Working Set Master and
+    /// ISO 11783-5 gives 254 as NULL. The plugin calls `set_self_address`
+    /// every tick, including before the claim completes, so a plain equality
+    /// made NULL match NULL: a VT broadcasting "no working set owns me" told an
+    /// unclaimed client it was the active working set.
+    #[test]
+    fn a_null_address_is_never_the_active_working_set() {
+        let no_active_ws = |busy: u8| {
+            let mut data = vec![cmd::VT_STATUS, NULL_ADDRESS];
+            data.resize(8, 0xFF);
+            data[6] = busy;
+            data
+        };
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        c.set_self_address(NULL_ADDRESS);
+        c.handle_vt_message(&vt_msg(no_active_ws(4), 0x80));
+        assert!(
+            !c.is_active_ws(),
+            "an unclaimed control function owns no working set"
+        );
+
+        // Claimed, and the VT names us: active.
+        c.set_self_address(0x42);
+        let mut ours = vec![cmd::VT_STATUS, 0x42];
+        ours.resize(8, 0xFF);
+        ours[6] = 4;
+        c.handle_vt_message(&vt_msg(ours, 0x80));
+        assert!(c.is_active_ws());
+
+        // The address is surrendered: the flag has to drop, not linger.
+        c.set_self_address(NULL_ADDRESS);
+        c.handle_vt_message(&vt_msg(no_active_ws(4), 0x80));
+        assert!(
+            !c.is_active_ws(),
+            "surrendering the address must clear active-WS status"
+        );
+    }
 }

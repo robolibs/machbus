@@ -590,4 +590,38 @@ mod tests {
 
         assert_eq!(c.server_status(), Some(status));
     }
+
+    /// 4.3.3: "If a request response takes longer than 200 ms ... the FS shall
+    /// send the status message to indicate busy state to the client. This
+    /// provides a request timeout of 600 ms if the FS status message does not
+    /// show a busy status."
+    ///
+    /// The client used to drop a busy-writing status outright (bit 1 fell
+    /// outside its mask), so a slow flush timed out mid-write.
+    #[test]
+    fn a_busy_status_holds_pending_requests_open() {
+        let mut c = FileClient::new(FileClientConfig::default().with_request_timeout(600));
+        force_connected(&mut c);
+        let request = c.open_file("slow.bin", OpenFlags::Write.bit()).unwrap();
+        let tan = request.data[1];
+        assert!(c.pending_requests().contains_key(&tan));
+
+        let busy = FileServerStatus {
+            busy_reading: false,
+            busy_writing: true,
+            number_of_open_files: 1,
+        };
+        for _ in 0..5 {
+            c.update(400);
+            c.handle_server_response(&server_msg(busy.encode().to_vec(), 0x80));
+        }
+        assert!(
+            c.pending_requests().contains_key(&tan),
+            "a busy server must not have its client give up on the request"
+        );
+
+        // Once it stops reporting busy, the 600 ms timeout applies again.
+        c.update(700);
+        assert!(!c.pending_requests().contains_key(&tan));
+    }
 }

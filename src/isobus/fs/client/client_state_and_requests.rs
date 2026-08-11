@@ -410,6 +410,12 @@ impl FileClient {
         &self.open_files
     }
 
+    /// Requests still awaiting a response, by TAN.
+    #[must_use]
+    pub fn pending_requests(&self) -> &BTreeMap<TAN, PendingRequest> {
+        &self.pending_requests
+    }
+
     // ─── File operations ──────────────────────────────────────────────
 
     pub fn request_server_properties(&mut self) -> FSClientOutbound {
@@ -1046,6 +1052,16 @@ impl FileClient {
             return false;
         }
         if let Some(status) = FileServerStatus::decode(data) {
+            // 4.3.3: a busy server tells the client to keep waiting. Restart
+            // the age of every in-flight request so the 600 ms request timeout
+            // only counts time the server was *not* busy — otherwise a large
+            // task-log flush to a stick times out while it is still running.
+            if status.is_busy() {
+                let now = self.current_time_ms;
+                for pending in self.pending_requests.values_mut() {
+                    pending.timestamp_ms = now;
+                }
+            }
             self.server_status = Some(status);
             return true;
         }

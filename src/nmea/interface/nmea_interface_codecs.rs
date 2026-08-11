@@ -1562,12 +1562,18 @@ impl NMEAInterface {
         });
         let fix_method = (type_byte >> 4) & 0x0F;
         let fix_type = GNSSFixType::try_from_u8(fix_method).unwrap_or(GNSSFixType::Error);
-        if !gnss_position_detail_integrity_byte_is_canonical(msg.data[32]) {
-            return;
-        }
         // DD209 sits in the low two bits of byte 33 (field 9). It used to be
         // validated and then discarded, so a Caution/Unsafe RTK Fixed reached
         // the steer gate looking exactly like a Safe one.
+        //
+        // G3 — the six reserved bits above it are read as don't-care, matching
+        // `handle_gnss_dops` two hundred lines up, which already reads
+        // `data[1] & 0x07` without inspecting its reserved bits. Requiring them
+        // to be all-ones dropped the *entire* position PG from any transmitter
+        // that zero-fills reserved bits, so latitude and longitude went with
+        // them and the operator was told "fix degraded" rather than "frame
+        // rejected". This file states the receive-side rule for its siblings at
+        // the 129539 and 129026 handlers; this decoder was the miss.
         let integrity = GNSSIntegrity::try_from_u8(msg.data[32] & 0x03)
             .expect("two-bit field covers every DD209 value");
         if !nmea_u8_count_raw_is_canonical(msg.data[33]) {
@@ -1660,11 +1666,6 @@ fn gnss_position_detail_payload_len_is_canonical(data: &[u8]) -> bool {
 #[inline]
 const fn gnss_reference_station_type_is_defined(station_type: u8) -> bool {
     ReferenceStationType::try_from_u8(station_type).is_some()
-}
-
-#[inline]
-const fn gnss_position_detail_integrity_byte_is_canonical(value: u8) -> bool {
-    value & 0xFC == 0xFC
 }
 
 #[inline]

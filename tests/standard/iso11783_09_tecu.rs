@@ -347,7 +347,7 @@ fn tecu_facility_payload_requires_complete_fixed_frame_and_reserved_bits() {
 }
 
 #[test]
-fn tecu_maintain_power_requires_canonical_fixed_frame_and_valid_source() {
+fn tecu_maintain_power_requires_a_fixed_frame_and_valid_source() {
     let request = MaintainPowerData {
         implement_in_work_state: MaintainPowerState::Active,
         implement_park_state: MaintainPowerState::Active,
@@ -365,13 +365,27 @@ fn tecu_maintain_power_requires_canonical_fixed_frame_and_valid_source() {
         MaintainPowerRequirement::RequirementFor2SecondsMore
     );
 
-    let mut bad_low_reserved = encoded;
-    bad_low_reserved[0] &= 0xFE;
-    assert_eq!(MaintainPowerData::decode(&bad_low_reserved), None);
+    // G3 / ISO 11783-7 §5.4 — undefined bits are don't-care on receive. This
+    // file already asserts that rule by name for Tractor Facilities a few
+    // hundred lines up; PGN 65095 is the same kind of PG and was the miss.
+    // Rejecting these dropped the implement's request to hold power.
+    let mut undefined_low_bit = encoded;
+    undefined_low_bit[0] &= 0xFE;
+    assert_eq!(
+        MaintainPowerData::decode(&undefined_low_bit)
+            .expect("an undefined byte-1 bit is don't-care")
+            .maintain_ecu_power,
+        MaintainPowerRequirement::RequirementFor2SecondsMore
+    );
 
-    let mut bad_tail = encoded;
-    bad_tail[2] = 0x00;
-    assert_eq!(MaintainPowerData::decode(&bad_tail), None);
+    let mut zero_filled_tail = encoded;
+    zero_filled_tail[2] = 0x00;
+    assert_eq!(
+        MaintainPowerData::decode(&zero_filled_tail)
+            .expect("a zero-filled tail is don't-care")
+            .maintain_ecu_power,
+        MaintainPowerRequirement::RequirementFor2SecondsMore
+    );
 
     let mut valid_helper = Message::new(PGN_MAINTAIN_POWER, encoded.to_vec(), 0x80);
     valid_helper.timestamp_us = 123;

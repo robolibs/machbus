@@ -1035,6 +1035,165 @@ mod tests {
         );
     }
 
+    /// B5 — round 5 filed the DD209 change as converting a previously-working
+    /// receiver into a "permanent stop ... with no operator recovery". Half of
+    /// that is right and half is not, and the difference matters:
+    ///
+    /// - Under the reserved-as-ones rule an all-0xFF integrity byte *is*
+    ///   `0xFC | 3` = Unsafe. There is no distinct "not reported" encoding for
+    ///   a 2-bit field whose reserved neighbours are required to be ones, so a
+    ///   receiver sending 0xFF is asserting Unsafe and refusing to steer on it
+    ///   is correct, not a regression. Changing the mapping would need the
+    ///   DD209 table (G2), and would be wrong on this evidence.
+    /// - The stop is **not** permanent. As soon as the receiver reports any
+    ///   non-degraded integrity the plugin emits `FixRestored`, the hazard
+    ///   clears, and the operator's `clear_stop()` is accepted.
+    ///
+    /// What is genuinely true is that a receiver which *always* sends 0xFF can
+    /// never be autosteered — which is the intended reading of "this fix is
+    /// unsafe", and is the release-note item rather than a code change.
+    #[test]
+    fn an_unsafe_dd209_stops_autonomy_and_a_safe_one_lets_the_operator_clear() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_DATA;
+        use crate::nmea::{GNSSIntegrity, NMEAConfig};
+
+        fn fix(integrity_byte: u8) -> Vec<crate::net::Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&((52.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[15..23].copy_from_slice(&((5.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = integrity_byte;
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        let mut session = Session::builder(test_name(44), 0x80)
+            .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+            .plug(AutoDrive::new())
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        // An all-0xFF fill decodes as Unsafe, and stops the machine.
+        let now = Instant::from_millis(10_000);
+        for frame in fix(0xFF) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        assert_eq!(
+            session
+                .get::<Gnss>()
+                .and_then(super::plugins::Gnss::latest_position)
+                .map(|p| p.integrity),
+            Some(GNSSIntegrity::Unsafe),
+            "0xFF is 0xFC | 3 under the reserved-as-ones rule"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded)
+        );
+
+        // Clearing is refused while the receiver still says Unsafe.
+        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "an Unsafe fix is not something the operator can dismiss"
+        );
+
+        // The receiver reports Safe. That is what makes the stop clearable —
+        // the lockout is not permanent.
+        let now = now.add_millis(100);
+        for frame in fix(0xFD) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        session.get_mut::<AutoDrive>().unwrap().clear_stop();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "once the receiver reports Safe the operator can clear the stop"
+        );
+    }
+
+    /// B2 / G3 — the §8 heartbeat receiver used to require an all-0xFF tail,
+    /// and it returned *before* `receiver_for(source)`. A peer whose padding
+    /// differed was therefore never registered as a tracked peer at all: the
+    /// §8.3.4 loss-of-communication window never ran for it, and when it died
+    /// `SafeStopTrigger::HeartbeatError` was never produced. Fail-open on a
+    /// watchdog, which is the shape this rule exists to prevent.
+    #[test]
+    fn a_zero_padded_heartbeat_peer_is_still_supervised() {
+        use super::plugins::{AutoDrive, Heartbeat};
+        use crate::j1939::HB_COMM_ERROR_TIMEOUT_MS;
+        use crate::net::pgn_defs::PGN_HEARTBEAT;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+
+        // Byte 1 is the sequence; bytes 2-8 are undefined and zero-filled here,
+        // which is how plenty of stacks build a frame.
+        let beat = |sequence: u8| {
+            let mut data = [0x00u8; 8];
+            data[0] = sequence;
+            Frame::new(
+                Identifier::encode(Priority::Default, PGN_HEARTBEAT, 0x33, BROADCAST_ADDRESS),
+                data,
+                8,
+            )
+        };
+
+        let mut session = Session::builder(test_name(45), 0x80)
+            .plug(AutoDrive::new())
+            .plug(Heartbeat::every(100))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for sequence in 1..=3u8 {
+            session.feed(0, &beat(sequence), now);
+            while session.poll_event().is_some() {}
+            now = now.add_millis(100);
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "precondition: a healthy peer does not stop anything"
+        );
+
+        // The peer dies. Being supervised is exactly what makes that a stop.
+        for _ in 0..((HB_COMM_ERROR_TIMEOUT_MS / 100) + 4) {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::HeartbeatError),
+            "a zero-padded peer must be tracked, so its death stops the machine"
+        );
+    }
+
     /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
     /// caller plugging both controllers. Both author PGN 0xAD00 from the same
     /// source address, so a safe stop commanded by one is overwritten by the

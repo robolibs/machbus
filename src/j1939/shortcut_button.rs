@@ -91,13 +91,20 @@ pub fn decode_message(msg: &Message) -> Option<ShortcutButtonMessage> {
     if msg.data.len() != 8 {
         return None;
     }
-    if msg.data[..6].iter().any(|&byte| byte != 0xFF) {
-        return None;
-    }
-    let reserved = msg.data[7] & 0xFC;
-    if reserved != 0x00 && reserved != 0xFC {
-        return None;
-    }
+    // G3 — ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+    // 'don't care' (either masked out or ignored). This permits them to be
+    // defined and used in the future without causing any incompatibilities."
+    //
+    // This is the one decoder in the crate whose output actuates a stop, and it
+    // used to demand an exact six-byte 0xFF prefix and one of two byte-8
+    // reserved patterns. On `None` both controllers drop the whole ISB branch:
+    // `IsbGuard::observe` is never called, so `SafeStopTrigger::IsbStop` never
+    // trips *and* `last_seen_at` is never set — which means the silence
+    // watchdog cannot save it either. A machine whose ISB transmitter machbus
+    // could not decode had no stop authority at all, and `engage()` was happy.
+    // That the crate already accepted two different byte-8 patterns is the
+    // evidence: it met a second implementation and widened the test instead of
+    // deleting it. A third pattern was a dead stop button.
     Some(ShortcutButtonMessage {
         state: ShortcutButtonState::try_from_u8(msg.data[7] & 0x03)?,
         transition_count: msg.data[6],
@@ -178,19 +185,31 @@ mod tests {
         assert_eq!(decode(&msg), None);
     }
 
+    /// G3 / ISO 11783-7 §5.4 — undefined bits are don't-care on receive. This
+    /// test asserted the reverse on the one decoder in the crate that
+    /// actuates a stop, so a transmitter differing in a bit neither side uses
+    /// had its operator STOP silently discarded.
     #[test]
-    fn decode_rejects_reserved_bits_and_tails() {
+    fn decode_accepts_undefined_bits_because_the_stop_must_get_through() {
+        // An unassigned bit set in the state byte.
         let mut payload = encode(ShortcutButtonState::StopImplementOperations);
-        payload[7] = 0x04;
+        payload[7] = 0x04 | ShortcutButtonState::StopImplementOperations.as_u8();
         assert_eq!(
-            decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x10,)),
-            None
+            decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x10)),
+            Some(ShortcutButtonState::StopImplementOperations)
         );
 
+        // A zero-filled reserved prefix, which is how many stacks build a frame.
         let mut payload = encode(ShortcutButtonState::StopImplementOperations);
         payload[0] = 0x00;
         assert_eq!(
-            decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x10,)),
+            decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x10)),
+            Some(ShortcutButtonState::StopImplementOperations)
+        );
+
+        // Length is still load-bearing: the state lives in byte 8.
+        assert_eq!(
+            decode(&Message::new(PGN_SHORTCUT_BUTTON, vec![0xFF; 7], 0x10)),
             None
         );
     }

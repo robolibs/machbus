@@ -129,9 +129,21 @@ impl Plugin for Heartbeat {
         let Some(&sequence) = msg.data.first() else {
             return;
         };
-        let valid_width = msg.data.len() == 1
-            || (msg.data.len() == 8 && msg.data[1..].iter().all(|&b| b == 0xFF));
-        if !valid_width || sequence == hb_seq::RESERVED_LOW || sequence == hb_seq::RESERVED_HIGH {
+        // G3 — ISO 11783-7 §5.4: the heartbeat PG defines only byte 1, so the
+        // tail is don't-care on receive. Requiring it to be all-0xFF returned
+        // *before* `receiver_for(source)`, so a peer whose padding differed was
+        // never registered as a tracked peer at all: the §8.3.4 window below
+        // never ran for it, `any_peer_faulted()` stayed false, and
+        // `SafeStopTrigger::HeartbeatError` was never produced. If the
+        // safety-critical peer it was watching died, autonomy was not stopped.
+        // Fail-open on a watchdog.
+        //
+        // The RESERVED_LOW/RESERVED_HIGH rejection stays: those are defined
+        // values of a defined field, not reserved bits.
+        if msg.data.is_empty()
+            || sequence == hb_seq::RESERVED_LOW
+            || sequence == hb_seq::RESERVED_HIGH
+        {
             return;
         }
         let source = msg.source;

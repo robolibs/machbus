@@ -80,12 +80,19 @@ fn gnss_position_detail_carries_dd209_integrity() {
     assert!(GNSSIntegrity::Caution.is_degraded());
     assert!(GNSSIntegrity::Unsafe.is_degraded());
 
-    // The reserved bits are still required to be sent as ones.
+    // G3 — the six reserved bits above DD209 are don't-care on receive. This
+    // used to assert the opposite, so a transmitter that zero-fills them lost
+    // its entire position PG, latitude and longitude included, and the operator
+    // saw "fix degraded" rather than "frame rejected".
     let mut iface = NMEAInterface::new(NMEAConfig::default());
-    let mut bad = standard_position_detail_frame();
-    bad[32] = 0x01;
-    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, bad, 0x1C));
-    assert!(iface.latest_position().is_none());
+    let mut zero_filled = standard_position_detail_frame();
+    zero_filled[32] = 0x01; // reserved bits cleared, DD209 = Safe
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, zero_filled, 0x1C));
+    let pos = iface
+        .latest_position()
+        .expect("zero-filled reserved bits must not cost the position");
+    assert_eq!(pos.integrity, GNSSIntegrity::Safe);
+    assert!((pos.wgs.latitude - 52.0).abs() < 1e-6);
 }
 
 fn nmea0183_with_checksum(body: &str) -> String {
@@ -1028,8 +1035,10 @@ fn nmea2000_position_detail_rejects_reference_station_reserved_age_before_cache_
     );
 }
 
+/// G3 — the DD209 reserved bits are don't-care on receive, so a frame that
+/// clears them still updates the cache. This test asserted the reverse.
 #[test]
-fn nmea2000_position_detail_rejects_noncanonical_integrity_reserved_bits_before_cache_update() {
+fn nmea2000_position_detail_accepts_zero_filled_integrity_reserved_bits() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<_>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -1042,19 +1051,18 @@ fn nmea2000_position_detail_rejects_noncanonical_integrity_reserved_bits_before_
     iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, valid.clone(), 0x44));
     assert_eq!(positions.borrow().len(), 1);
 
-    let cached = iface.latest_position().unwrap();
-    let mut noncanonical = valid;
-    noncanonical[32] = 0x03;
-    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, noncanonical, 0x44));
+    let mut zero_filled = valid;
+    zero_filled[32] = 0x03; // reserved bits cleared, DD209 = Unsafe
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, zero_filled, 0x44));
     assert_eq!(
         positions.borrow().len(),
-        1,
-        "integrity byte with noncanonical reserved bits must not emit a second position event"
+        2,
+        "zero-filled reserved bits must still yield a position event"
     );
     assert_eq!(
-        iface.latest_position().unwrap(),
-        cached,
-        "integrity byte with noncanonical reserved bits must not replace cached GNSS position"
+        iface.latest_position().unwrap().integrity,
+        GNSSIntegrity::Unsafe,
+        "the two DD209 bits are still read from a frame with cleared reserved bits"
     );
 }
 

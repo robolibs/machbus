@@ -811,12 +811,26 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in ["shortcut_bad_reserved_bits", "shortcut_bad_reserved_tail"] {
-        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, malformed);
-        assert!(
-            shortcut_button::decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x80,))
-                .is_none(),
-            "{malformed} must be rejected"
+    // G3 / ISO 11783-7 §5.4 — these two were filed as malformed and asserted
+    // to be rejected. They are conformant: one sets an unassigned bit in the
+    // state byte, the other zero-fills the reserved prefix. On the one decoder
+    // in the crate that actuates a stop, rejecting them discarded the
+    // operator's STOP and left the silence watchdog unarmed as well.
+    for (name, expected) in [
+        (
+            "undefined_bits_shortcut_unassigned_state_bit",
+            shortcut_button::ShortcutButtonState::StopImplementOperations,
+        ),
+        (
+            "undefined_bits_shortcut_zero_filled_prefix",
+            shortcut_button::ShortcutButtonState::StopImplementOperations,
+        ),
+    ] {
+        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, name);
+        assert_eq!(
+            shortcut_button::decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x80)),
+            Some(expected),
+            "{name} must decode: the stop has to get through"
         );
     }
 

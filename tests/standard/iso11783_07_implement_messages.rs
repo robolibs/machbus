@@ -354,25 +354,37 @@ fn implement_shortcut_button_rejects_wrong_pgn_invalid_source_and_noncanonical_p
         );
     }
 
-    let mut bad_reserved = payload;
-    bad_reserved[7] = 0x04;
+    // G3 / ISO 11783-7 §5.4 — the envelope is load-bearing, the undefined bits
+    // are not. Both of these used to be asserted as rejected; on the one
+    // decoder that actuates a stop, that discarded the operator's STOP and left
+    // the ISB silence watchdog unarmed, so `engage()` stayed happy.
+    let mut unassigned_bit = payload;
+    unassigned_bit[7] = 0x04 | ShortcutButtonState::StopImplementOperations.as_u8();
     assert_eq!(
         shortcut_button::decode_message(&Message::new(
             PGN_SHORTCUT_BUTTON,
-            bad_reserved.to_vec(),
+            unassigned_bit.to_vec(),
             0x74,
-        )),
-        None
+        ))
+        .map(|m| m.state),
+        Some(ShortcutButtonState::StopImplementOperations)
     );
 
-    let mut bad_tail = payload;
-    bad_tail[0] = 0x00;
+    let mut zero_filled = payload;
+    zero_filled[0] = 0x00;
     assert_eq!(
         shortcut_button::decode_message(&Message::new(
             PGN_SHORTCUT_BUTTON,
-            bad_tail.to_vec(),
+            zero_filled.to_vec(),
             0x74,
-        )),
+        ))
+        .map(|m| m.state),
+        Some(ShortcutButtonState::StopImplementOperations)
+    );
+
+    // Length still is: the state lives in byte 8.
+    assert_eq!(
+        shortcut_button::decode_message(&Message::new(PGN_SHORTCUT_BUTTON, vec![0xFFu8; 7], 0x74,)),
         None
     );
 }

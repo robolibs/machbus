@@ -720,14 +720,17 @@ fn fixture_j1939_heartbeat_and_maintain_power_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in ["maintain_bad_reserved_flags", "maintain_bad_reserved_tail"] {
+    // G3 / ISO 11783-7 §5.4 — both of these are conformant frames that merely
+    // differ in bits nobody has assigned. Rejecting them dropped an
+    // implement's request to hold power, and the TECU cut ECU_PWR/PWR on it.
+    for name in ["undefined_bits_maintain_flags", "undefined_bits_maintain_tail"] {
         assert!(
             MaintainPowerData::decode(&parse_named_hex_bytes(
                 J1939_HEARTBEAT_MAINTAIN_POWER_HEX,
-                malformed,
+                name,
             ))
-            .is_none(),
-            "{malformed} must be rejected"
+            .is_some(),
+            "{name} must decode: undefined bits are don't-care on receive"
         );
     }
 

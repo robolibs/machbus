@@ -222,12 +222,18 @@ impl MaintainPowerData {
         if data.len() != 8 {
             return None;
         }
-        if data[0] & 0x0F != 0x0F {
-            return None;
-        }
-        if data[2..].iter().any(|&byte| byte != 0xFF) {
-            return None;
-        }
+        // G3 — ISO 11783-7 §5.4, which this crate quotes at
+        // `isobus/implement/tractor_facilities.rs` and applies there. PGN 65095
+        // is an ISO 11783-7 PG, so its undefined byte-1 nibble and bytes 3-8 are
+        // don't-care on receive. Rejecting them dropped the message before
+        // `PowerManager::handle_message` — the only thing that resets
+        // `maintain_timer_ms` — so a peer that zero-fills padding had its
+        // request ignored and the TECU cut ECU_PWR/PWR out from under an
+        // implement mid flash-write or mid boom-fold. The same discard
+        // suppressed `MaintainPowerEvent::PowerOff`, which is what arms ISO
+        // 11783-9 safe mode, so the guard was not armed on the path that had
+        // just cut power. `TractorFacilities::decode` in this same crate
+        // already reads length-only, and a test asserts that rule by name.
         Some(Self {
             implement_in_work_state: MaintainPowerState::try_from_u8((data[0] >> 4) & 0x03)?,
             implement_park_state: MaintainPowerState::try_from_u8(data[0] >> 6)?,
@@ -516,21 +522,33 @@ mod tests {
         assert!(MaintainPowerData::decode(&[bytes.as_slice(), &[0x00]].concat()).is_none());
     }
 
+    /// G3 / ISO 11783-7 §5.4 — undefined bits are don't-care on receive. This
+    /// asserted the reverse, so a peer that zero-fills padding had its request
+    /// to hold power dropped before `PowerManager::handle_message` ever saw it,
+    /// and the TECU cut power on an implement that had asked to keep it.
     #[test]
-    fn maintain_power_data_rejects_reserved_bits_and_tails() {
-        let mut bytes = MaintainPowerData {
+    fn maintain_power_data_accepts_undefined_bits_and_tails() {
+        let original = MaintainPowerData {
             maintain_ecu_power: MaintainPowerRequirement::NoFurtherRequirement,
             timestamp_us: 0,
             ..Default::default()
-        }
-        .encode();
-
+        };
+        let mut bytes = original.encode();
         bytes[0] &= !0x01;
-        assert!(MaintainPowerData::decode(&bytes).is_none());
+        let decoded =
+            MaintainPowerData::decode(&bytes).expect("an undefined byte-1 bit is don't-care");
+        assert_eq!(decoded.maintain_ecu_power, original.maintain_ecu_power);
 
         let mut bytes = MaintainPowerData::default().encode();
         bytes[2] = 0x00;
-        assert!(MaintainPowerData::decode(&bytes).is_none());
+        let decoded = MaintainPowerData::decode(&bytes).expect("a zero-filled tail is don't-care");
+        assert_eq!(
+            decoded.maintain_actuator_power,
+            MaintainPowerData::default().maintain_actuator_power
+        );
+
+        // Length is still load-bearing.
+        assert!(MaintainPowerData::decode(&[0xFFu8; 7]).is_none());
     }
 
     #[test]

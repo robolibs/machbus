@@ -207,18 +207,20 @@ pub enum Tab {
     Pgn,
     Nmea,
     Nodes,
+    Autodrive,
     Stats,
     Filter,
     Help,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] = [
+    pub const ALL: [Tab; 9] = [
         Tab::Live,
         Tab::Sniffer,
         Tab::Pgn,
         Tab::Nmea,
         Tab::Nodes,
+        Tab::Autodrive,
         Tab::Stats,
         Tab::Filter,
         Tab::Help,
@@ -232,6 +234,7 @@ impl Tab {
             Tab::Pgn => "PGN",
             Tab::Nmea => "NMEA 2000",
             Tab::Nodes => "Nodes",
+            Tab::Autodrive => "AutoDrive",
             Tab::Stats => "Stats",
             Tab::Filter => "Filter",
             Tab::Help => "Help",
@@ -241,7 +244,7 @@ impl Tab {
     /// Numeric hotkey, derived from the tab's position (1-based).
     #[must_use]
     pub fn hotkey(self) -> &'static str {
-        const KEYS: [&str; 8] = ["1", "2", "3", "4", "5", "6", "7", "8"];
+        const KEYS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         KEYS[self as usize]
     }
 
@@ -253,6 +256,7 @@ impl Tab {
             "pgn" => Some(Self::Pgn),
             "nmea" | "nmea2000" | "n2k" => Some(Self::Nmea),
             "nodes" | "node" | "j1939" | "addr" | "address" | "claim" => Some(Self::Nodes),
+            "autodrive" | "auto" | "drive" | "guidance" | "steer" => Some(Self::Autodrive),
             "stats" => Some(Self::Stats),
             "filter" | "filters" => Some(Self::Filter),
             "help" | "?" => Some(Self::Help),
@@ -396,4 +400,80 @@ pub fn since_epoch_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+// ── Autodrive tab ───────────────────────────────────────────────────────
+
+use machbus::isobus::implement::guidance::GuidanceMachineInfo;
+use machbus::isobus::implement::{GuidanceSystemCmd, MachineSpeedCommandMsg};
+use machbus::net::pgn_defs::{
+    PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
+};
+
+/// Live view of the automatic-guidance conversation, built from observed
+/// traffic alone — this tab transmits nothing.
+///
+/// Three messages make up the exchange: the controller's curvature command and
+/// speed command, and the steering ECU's feedback. Seeing them side by side is
+/// what tells you whether a command is actually being followed, which is not
+/// something any single frame shows.
+pub struct AutodriveTable {
+    /// Last Guidance System Command (PGN 0xAD00) and who sent it.
+    pub cmd: Option<(u8, GuidanceSystemCmd, Instant)>,
+    /// Last Machine Info (PGN 0xAC00) from the steering ECU.
+    pub info: Option<(u8, GuidanceMachineInfo, Instant)>,
+    /// Last Machine Selected Speed Command (PGN 0xFD43).
+    pub speed: Option<(u8, MachineSpeedCommandMsg, Instant)>,
+    /// Command frames seen, for a cadence read — the command is a heartbeat,
+    /// so a stalled stream is itself a fault.
+    pub cmd_count: u64,
+    pub info_count: u64,
+}
+
+impl AutodriveTable {
+    pub fn new() -> Self {
+        Self {
+            cmd: None,
+            info: None,
+            speed: None,
+            cmd_count: 0,
+            info_count: 0,
+        }
+    }
+
+    pub fn observe(&mut self, pgn: u32, src: u8, data: &[u8], now: Instant) {
+        match pgn {
+            PGN_GUIDANCE_SYSTEM_CMD => {
+                if let Some(c) = GuidanceSystemCmd::decode(data) {
+                    self.cmd = Some((src, c, now));
+                    self.cmd_count += 1;
+                }
+            }
+            PGN_GUIDANCE_MACHINE_INFO => {
+                if let Some(i) = GuidanceMachineInfo::decode(data) {
+                    self.info = Some((src, i, now));
+                    self.info_count += 1;
+                }
+            }
+            PGN_MACHINE_SELECTED_SPEED_CMD => {
+                if let Some(s) = MachineSpeedCommandMsg::decode(data) {
+                    self.speed = Some((src, s, now));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Rows the tab renders, so the key handler can size its selection.
+    pub fn len(&self) -> usize {
+        usize::from(self.cmd.is_some())
+            + usize::from(self.info.is_some())
+            + usize::from(self.speed.is_some())
+    }
+}
+
+impl Default for AutodriveTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }

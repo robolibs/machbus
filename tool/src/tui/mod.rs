@@ -135,6 +135,8 @@ pub struct App {
     pub sniff: model::SniffTable,
     /// J1939 address-claim table.
     pub nodes: model::NodeTable,
+    /// Automatic-guidance conversation, decoded from observed traffic.
+    pub autodrive: model::AutodriveTable,
 }
 
 impl App {
@@ -185,6 +187,7 @@ impl App {
             frames_this_tick: 0,
             sniff: model::SniffTable::new(),
             nodes: model::NodeTable::new(),
+            autodrive: model::AutodriveTable::new(),
         })
     }
 
@@ -203,6 +206,12 @@ impl App {
                         entry.decoded.pgn.unwrap_or(0),
                         entry.decoded.source.unwrap_or(0),
                         &entry.data,
+                        now,
+                    );
+                    self.autodrive.observe(
+                        entry.decoded.pgn.unwrap_or(0),
+                        entry.decoded.source.unwrap_or(0),
+                        &entry.data[..usize::from(entry.dlc).min(8)],
                         now,
                     );
                     self.log_entry(&entry);
@@ -411,6 +420,7 @@ impl App {
             Tab::Pgn => self.pgn_rows.len(),
             Tab::Nmea => self.nmea_rows.len(),
             Tab::Nodes => self.nodes.rows.len(),
+            Tab::Autodrive => self.autodrive.len(),
             _ => return,
         };
         match code {
@@ -571,22 +581,23 @@ mod tests {
     fn digit_switches_from_live() {
         let mut app = make_app();
         assert_eq!(app.tab, Tab::Live);
-        // Tab order: 1 Live 2 Sniffer 3 PGN 4 NMEA 5 Nodes 6 Stats 7 Filter 8 Help.
-        app.handle_key(key('7'));
-        assert_eq!(app.tab, Tab::Filter, "'7' should switch Live -> Filter");
+        // Tab order: 1 Live 2 Sniffer 3 PGN 4 NMEA 5 Nodes 6 AutoDrive
+        //            7 Stats 8 Filter 9 Help.
+        app.handle_key(key('8'));
+        assert_eq!(app.tab, Tab::Filter, "'8' should switch Live -> Filter");
     }
 
     #[test]
     fn digit_and_tab_escape_from_filter() {
         let mut app = make_app();
-        app.handle_key(key('7'));
+        app.handle_key(key('8'));
         assert_eq!(app.tab, Tab::Filter);
         // The bug: pressing a digit while on Filter must STILL switch tabs.
         app.handle_key(key('1'));
         assert_eq!(app.tab, Tab::Live, "'1' must escape Filter -> Live");
         // Tab must also escape from Filter (Filter is second-to-last, so
         // next() wraps to Help).
-        app.handle_key(key('7'));
+        app.handle_key(key('8'));
         assert_eq!(app.tab, Tab::Filter);
         app.handle_key(tab_key());
         assert_ne!(app.tab, Tab::Filter, "Tab must leave the Filter tab");
@@ -596,12 +607,12 @@ mod tests {
     #[test]
     fn filter_field_cycling_does_not_trap() {
         let mut app = make_app();
-        app.handle_key(key('7')); // -> Filter
+        app.handle_key(key('8')); // -> Filter
         app.handle_key(key('j')); // cycle field down
         app.handle_key(key('k')); // cycle field up
         assert_eq!(app.tab, Tab::Filter);
-        // Numeric tab-switch still works after cycling fields (6 = Stats).
-        app.handle_key(key('6'));
+        // Numeric tab-switch still works after cycling fields (7 = Stats).
+        app.handle_key(key('7'));
         assert_eq!(app.tab, Tab::Stats);
     }
 
@@ -618,7 +629,7 @@ mod tests {
     #[test]
     fn ctrl_c_quits_even_while_editing() {
         let mut app = make_app();
-        app.handle_key(key('7')); // Filter
+        app.handle_key(key('8')); // Filter
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())); // edit field
         assert!(app.editing.is_some());
         // Ctrl+C must still quit from edit mode.
@@ -633,6 +644,95 @@ mod tests {
         assert_eq!(app.tab, Tab::Sniffer);
         app.handle_key(key('5'));
         assert_eq!(app.tab, Tab::Nodes);
+        app.handle_key(key('6'));
+        assert_eq!(app.tab, Tab::Autodrive);
+    }
+
+    /// The AutoDrive tab is built from three PGNs that are only meaningful
+    /// together. Feed the real encoders' output and assert each half lands —
+    /// a decode that silently drops one message would render an empty panel
+    /// that looks exactly like "no traffic".
+    #[test]
+    fn autodrive_tab_decodes_the_guidance_conversation() {
+        use crate::tui::model::AutodriveTable;
+        use machbus::isobus::implement::guidance::GuidanceMachineInfo;
+        use machbus::isobus::implement::{CurvatureCommandStatus, GuidanceSystemCmd, Signal};
+        use machbus::net::pgn_defs::{PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD};
+        use std::time::Instant;
+
+        let mut t = AutodriveTable::new();
+        let now = Instant::now();
+        assert_eq!(t.len(), 0);
+
+        let cmd = GuidanceSystemCmd {
+            commanded_curvature: Signal::Value(20.0),
+            status: CurvatureCommandStatus::IntendedToSteer,
+        };
+        t.observe(PGN_GUIDANCE_SYSTEM_CMD, 0x81, &cmd.encode(), now);
+
+        let info = GuidanceMachineInfo {
+            estimated_curvature: Signal::Value(19.5),
+            ..GuidanceMachineInfo::default()
+        };
+        t.observe(PGN_GUIDANCE_MACHINE_INFO, 0x1C, &info.encode(), now);
+
+        let (src, decoded, _) = t.cmd.expect("the command decodes");
+        assert_eq!(src, 0x81);
+        assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
+        assert_eq!(decoded.commanded_curvature.value(), Some(20.0));
+
+        let (src, decoded, _) = t.info.expect("the machine info decodes");
+        assert_eq!(src, 0x1C);
+        assert!(
+            decoded
+                .estimated_curvature
+                .value()
+                .is_some_and(|v| (v - 19.5).abs() < 0.5)
+        );
+
+        assert_eq!(t.cmd_count, 1);
+        assert_eq!(t.info_count, 1);
+        assert_eq!(t.len(), 2);
+
+        // An unrelated PGN must not disturb it.
+        t.observe(0xFEE6, 0x20, &[0xFF; 8], now);
+        assert_eq!(t.cmd_count, 1);
+    }
+
+    /// End-to-end: real capture bytes through the ingest path and out to a
+    /// rendered frame. The unit test above proves the decoder; this proves the
+    /// tab is actually wired to it — `observe` being called with the right
+    /// slice is the part a decoder test cannot see.
+    #[test]
+    fn autodrive_tab_renders_from_ingested_frames() {
+        use crate::tui::decode;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = make_app();
+        // 0x0CADFF81 — Guidance System Command from 0x81, curvature 0x07D0.
+        // 0x0CAC1CFF — Machine Info from 0x1C.
+        for (raw_id, data) in [
+            (0x0CADFF81u32, [0xD0, 0x07, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            (0x0CAC1CFFu32, [0xA8, 0x7D, 0x04, 0x7F, 0x5B, 0xFF, 0xFF, 0xFF]),
+        ] {
+            let decoded = decode::decode_frame(raw_id, true, false, false, &data);
+            app.autodrive.observe(
+                decoded.pgn.unwrap_or(0),
+                decoded.source.unwrap_or(0),
+                &data,
+                std::time::Instant::now(),
+            );
+        }
+
+        assert_eq!(app.autodrive.cmd_count, 1, "the command reached the tab");
+        assert_eq!(app.autodrive.info_count, 1, "the feedback reached the tab");
+        assert_eq!(app.autodrive.len(), 2);
+
+        app.tab = Tab::Autodrive;
+        let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+        term.draw(|f| view::render(f, &mut app))
+            .expect("the AutoDrive tab must render");
     }
 
     #[test]
@@ -709,6 +809,7 @@ mod tests {
             Tab::Pgn,
             Tab::Nmea,
             Tab::Nodes,
+            Tab::Autodrive,
             Tab::Stats,
             Tab::Filter,
             Tab::Help,

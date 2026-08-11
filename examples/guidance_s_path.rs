@@ -3,7 +3,7 @@
 //!
 //! This is the whole pipeline end to end:
 //!   1. open a SocketCAN interface and wrap it as a session transport,
-//!   2. build a `Session` with the `Guidance` plugin and `spawn` its `Driver`,
+//!   2. build a `Session` with the `AutoDrive` plugin and `spawn` its `Driver`,
 //!   3. drive the ISO 11783-5 address-claim handshake (NAME → address),
 //!   4. stream a serpentine "S" as a sweep of curvature commands (PGN 0xAD00),
 //!      reading the steering ECU's machine info (PGN 0xAC00) back as it arrives.
@@ -35,8 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use machbus::Instant;
     use machbus::isobus::implement::Signal;
     use machbus::net::Name;
-    use machbus::session::plugins::Guidance;
-    use machbus::session::{EndpointTransport, Event, GuidanceEvent, Session};
+    use machbus::session::plugins::AutoDrive;
+    use machbus::session::{
+        DriveCommand, EndpointTransport, Event, GuidanceEvent, SafeStopTrigger, Session,
+    };
     use wirebit::can::{CanConfig, CanEndpoint, SocketCanConfig, SocketCanLink};
 
     // ── Tunables (env-overridable) ───────────────────────────────────────────
@@ -73,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_function_code(0x80) // generic; pick your real function
         .with_self_configurable(true);
     let (ctrl, mut drv) = Session::builder(name, 0x80)
-        .plug(Guidance::new())
+        .plug(AutoDrive::new())
         .spawn(EndpointTransport::new(0, endpoint))?;
     ctrl.start()?; // begin address claiming
 
@@ -97,7 +99,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 4. Stream the S path: sweep curvature κ(t) = κmax·sin(2π·t/T) ─────────
     // Engage first: assert "intend to steer" so the steering ECU acts on the
     // curvature stream instead of treating each command as advisory.
-    ctrl.with_mut::<Guidance, _>(|g| g.engage());
+    // Arm, then engage. Both report the first unmet precondition rather than
+    // failing silently — with no steering ECU on the bus this refuses with
+    // `link_down`, which is the honest answer.
+    if let Some(Err(refusal)) =
+        ctrl.with_mut::<AutoDrive, _>(|d| d.arm().and_then(|()| d.engage()))
+    {
+        println!("engage refused: {} — commands stay advisory", refusal.as_str());
+    }
     println!("steering the S (Ctrl-C to stop)…");
     let dt = Duration::from_secs_f64(1.0 / rate_hz);
     let s_start = wall.elapsed().as_secs_f64();
@@ -109,7 +118,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // The whole abstraction: one curvature number for "how hard to bend now".
         let kappa = kappa_max * (2.0 * PI * t / period_s).sin();
-        ctrl.with_mut::<Guidance, _>(|g| g.command_curvature(kappa));
+        // Steering only: speed stays with whoever already owns it. Refreshing
+        // every cycle is required — `AutoDrive` stops itself after 300 ms
+        // without a fresh setpoint rather than steering on forever.
+        let _ = ctrl.with_mut::<AutoDrive, _>(|d| d.command(DriveCommand::steer(kappa)));
 
         // Pump the driver (flushes the command, reads inbound frames as events).
         while let Some(event) = drv.poll_at(now(&wall))? {
@@ -135,13 +147,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         // Fine-control read-back is also available any time, without an event:
-        //   let est = ctrl.with::<Guidance, _>(|g| g.estimated_curvature());
+        //   let est = ctrl.with::<AutoDrive, _>(|d| d.estimated_curvature());
         sleep(dt);
     }
 
     // ── 5. Settle straight, disengage, and finish ────────────────────────────
-    ctrl.with_mut::<Guidance, _>(|g| g.command_straight());
-    ctrl.with_mut::<Guidance, _>(|g| g.disengage());
+    let _ = ctrl.with_mut::<AutoDrive, _>(|d| d.command(DriveCommand::steer(0.0)));
+    ctrl.with_mut::<AutoDrive, _>(|d| d.disengage(SafeStopTrigger::OperatorOverride));
     for _ in 0..5 {
         while drv.poll_at(now(&wall))?.is_some() {}
         sleep(Duration::from_millis(20));

@@ -288,7 +288,8 @@ an older header. See [ABI stability](../bindings/abi-stability.md).
 ## Validate locally
 
 ```sh
-cargo run --example autodrive_keyboard
+cargo run --example autodrive_keyboard   # the full driving lifecycle
+cargo run --example guidance_autosteer   # the curvature conversation alone
 make test
 ```
 

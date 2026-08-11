@@ -11,10 +11,29 @@ If you have not read the concept page yet, start with
 [Automatic guidance](../standards/automatic-guidance.md) — it explains the
 points-vs-angles-vs-curvature answer and the two PGNs in full. Here we build.
 
-> **Prefer [`AutoDrive`](autodrive.md) for new work.** It speaks the same two
-> messages with a real automation status, refusals instead of silent clamping,
-> and one engage lifecycle across steering *and* speed. The two plugins are
-> mutually exclusive.
+> **This plugin is superseded.** Use [`AutoDrive`](autodrive.md) for new work:
+> same two messages, but with a real ISO 11783-7 automation status instead of a
+> boolean, refusals instead of silent codec clamping, the machine's limit status
+> fed back for anti-windup, and one engage lifecycle across steering *and*
+> speed. The two are mutually exclusive — a session that plugs both is refused
+> at build.
+>
+> `Guidance` remains public and works; the repository's examples and the
+> `machbus drive` tool have all moved to `AutoDrive`, so the compiled example
+> code lives on the [AutoDrive page](autodrive.md). The snippets below are
+> illustrative rather than extracted from a running example.
+>
+> | `Guidance` | `AutoDrive` |
+> | --- | --- |
+> | `engage()` | `arm()` then `engage()` |
+> | `disengage()` | `disengage(trigger)` — infallible |
+> | `command_curvature(k)` | `command(DriveCommand::steer(k))?` |
+> | `command_radius(r)` | `command(DriveCommand::steer(curvature_per_km_from_radius(r)))?` |
+> | `command_straight()` | `command(DriveCommand::steer(0.0))?` |
+> | `command_velocity(v, ω)` | `command(DriveCommand { speed_mps, curvature_km_inv })?` |
+> | `is_engaged() -> bool` | `status() -> AutomationStatus` |
+> | `estimated_curvature()` | same |
+> | `is_link_alive()` | same |
 
 ## Safety first
 
@@ -54,7 +73,21 @@ session core is sans-IO, so you drive it: tick it forward and let it claim an
 address before you command anything.
 
 ```rust,ignore
-{{#include ../../../examples/guidance_autosteer.rs:build}}
+let mut session = Session::builder(name, 0x80)
+    .plug(Guidance::new())
+    .build()?;
+session.start()?;
+
+// The session core is sans-IO, so drive it until the claim completes.
+let mut now = Instant::ZERO;
+for _ in 0..40 {
+    now = now.add_millis(50);
+    session.tick(now);
+    while session.poll_transmit().is_some() {}
+    if session.is_claimed() {
+        break;
+    }
+}
 ```
 
 ## 2. Command a curvature
@@ -69,7 +102,12 @@ The command is queued on the plugin and flushed to the transmit buffer on the ne
 `tick`, where it becomes a Guidance System Command frame (PGN 0xAD00).
 
 ```rust,ignore
-{{#include ../../../examples/guidance_autosteer.rs:command}}
+let g = session.get_mut::<Guidance>().expect("guidance plugged");
+match g.engage() {
+    // A 50 m radius is 1000/50 = 20 1/km.
+    Ok(()) => g.command_radius(50.0),
+    Err(refusal) => println!("engage refused: {}", refusal.as_str()),
+}
 ```
 
 Every command also carries the controller's **intent to steer** — and that is what
@@ -139,7 +177,12 @@ the tractor's own view:
   dropped out. See [the signals, in plain terms](../standards/automatic-guidance.md#what-each-signal-means-in-plain-terms).
 
 ```rust,ignore
-{{#include ../../../examples/guidance_autosteer.rs:feedback}}
+let g = session.get::<Guidance>().expect("guidance plugged");
+println!(
+    "steering ready: {}   estimated curvature: {:?}",
+    g.is_steering_ready(),
+    g.estimated_curvature(),
+);
 ```
 
 ## 4. React to the machine-info event
@@ -189,13 +232,12 @@ estimated curvature and readiness.
 ## Validate locally
 
 ```sh
-cargo run --example guidance_autosteer
 make test
 ```
 
-The example claims an address, commands a 50 m-radius turn, prints the resulting
-Guidance System Command frame, and reads back the steering readiness and estimated
-curvature.
+`examples/guidance_autosteer.rs` now demonstrates the same curvature
+conversation through `AutoDrive`; see the
+[AutoDrive tutorial](autodrive.md) for its walkthrough.
 
 ## What this proves / does not prove
 

@@ -619,18 +619,20 @@ mod tests {
     /// at all: no error, no event, and no frame on the bus.
     #[test]
     fn send_refused_before_claim_is_reported() {
-        use super::plugins::Guidance;
+        use super::plugins::AutoDrive;
         use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
 
         let mut session = Session::builder(test_name(23), 0x80)
-            .plug(Guidance::new())
+            .plug(AutoDrive::new())
             .build()
             .unwrap();
         // Deliberately not claimed: no `start()`, no ticks to completion.
-        session
-            .get_mut::<Guidance>()
+        // The command is refused before it can be queued (no link, not active),
+        // which is itself the point: nothing reaches the bus.
+        let _ = session
+            .get_mut::<AutoDrive>()
             .unwrap()
-            .command_curvature(20.0);
+            .command(DriveCommand::steer(20.0));
         session.tick(Instant::from_millis(10));
 
         assert!(
@@ -899,7 +901,7 @@ mod tests {
     /// whole path through `Session` and asserts the machine-visible outcome.
     #[test]
     fn clear_stop_is_refused_through_the_session_while_the_receiver_is_stale() {
-        use super::plugins::{AutoDrive, Gnss, Guidance};
+        use super::plugins::{AutoDrive, Gnss};
         use crate::net::fast_packet::FastPacketProtocol;
         use crate::net::pgn_defs::PGN_GNSS_POSITION_DATA;
         use crate::nmea::NMEAConfig;
@@ -1002,43 +1004,6 @@ mod tests {
             "once the receiver reports again the operator can clear"
         );
 
-        // Guidance carries the identical guard and had no test at all.
-        let mut guided = Session::builder(test_name(43), 0x80)
-            .network_config(net_config())
-            .plug(Guidance::new())
-            .plug(gnss())
-            .build()
-            .unwrap();
-        guided.start().unwrap();
-        claim(&mut guided);
-
-        let mut now = Instant::from_millis(10_000);
-        for frame in healthy_fix() {
-            guided.feed(0, &frame, now);
-        }
-        while guided.poll_event().is_some() {}
-        for _ in 0..18 {
-            now = now.add_millis(100);
-            guided.tick(now);
-            while guided.poll_event().is_some() {}
-        }
-        assert_eq!(
-            guided
-                .get::<Guidance>()
-                .and_then(super::plugins::Guidance::stop_reason),
-            Some(SafeStopTrigger::PositionStale)
-        );
-        assert_eq!(
-            guided.get_mut::<Guidance>().unwrap().clear_stop(),
-            Err(AutodriveRefusal::StopConditionLive)
-        );
-        assert_eq!(
-            guided
-                .get::<Guidance>()
-                .and_then(super::plugins::Guidance::stop_reason),
-            Some(SafeStopTrigger::PositionStale),
-            "Guidance::clear_stop must be refused on the same terms"
-        );
     }
 
     /// B5 — round 5 filed the DD209 change as converting a previously-working
@@ -1210,10 +1175,35 @@ mod tests {
     /// chatter that makes autosteer engage and drop repeatedly.
     #[test]
     fn two_authors_of_one_command_pgn_cannot_be_assembled() {
-        use super::plugins::{AutoDrive, Guidance};
+        use super::plugin::{Plugin, PluginCtx};
+        use super::plugins::AutoDrive;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        /// A second author of 0xAD00. `Guidance` used to play this part; with it
+        /// deleted, `AutoDrive` is the only in-tree plugin that declares a
+        /// command PGN, so the rule needs a stand-in or it would go untested
+        /// and silently rot.
+        struct RivalSteerer;
+        impl Plugin for RivalSteerer {
+            fn name(&self) -> &'static str {
+                "RivalSteerer"
+            }
+            fn transmits(&self) -> &'static [Pgn] {
+                &[PGN_GUIDANCE_SYSTEM_CMD]
+            }
+            fn on_tick(&mut self, _ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+                None
+            }
+            fn as_any(&self) -> &dyn core::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+                self
+            }
+        }
 
         let outcome = Session::builder(test_name(25), 0x80)
-            .plug(Guidance::new())
+            .plug(RivalSteerer)
             .plug(AutoDrive::new())
             .build();
         let Err(err) = outcome else {
@@ -1228,13 +1218,13 @@ mod tests {
         // Either alone is fine.
         assert!(
             Session::builder(test_name(26), 0x80)
-                .plug(Guidance::new())
+                .plug(AutoDrive::new())
                 .build()
                 .is_ok()
         );
         assert!(
             Session::builder(test_name(27), 0x80)
-                .plug(AutoDrive::new())
+                .plug(RivalSteerer)
                 .build()
                 .is_ok()
         );
@@ -1245,18 +1235,21 @@ mod tests {
     /// power-up. It must arrive as soon as the claim allows.
     #[test]
     fn first_guidance_command_follows_the_claim_promptly() {
-        use super::plugins::Guidance;
+        use super::plugins::AutoDrive;
         use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
 
         let mut session = Session::builder(test_name(24), 0x80)
-            .plug(Guidance::new())
+            .plug(AutoDrive::new())
             .build()
             .unwrap();
         session.start().unwrap();
-        session
-            .get_mut::<Guidance>()
+        // Refused before the claim (no link, not active) — the point is that
+        // the plugin still transmits its safe setpoint as soon as the claim
+        // allows, rather than waiting out the 2000 ms idle cadence.
+        let _ = session
+            .get_mut::<AutoDrive>()
             .unwrap()
-            .command_curvature(5.0);
+            .command(DriveCommand::steer(5.0));
 
         let mut now = Instant::ZERO;
         let mut claimed_at: Option<Instant> = None;

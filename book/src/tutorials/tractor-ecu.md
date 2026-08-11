@@ -338,6 +338,6 @@ not provide.
 
 - [Implement ECU](implement-ecu.md) — the other side of every message here.
 - [Powertrain](powertrain.md) — the P-addendum speed-control surface in depth.
-- [Guidance](guidance.md) — the G-addendum steering surface.
+- [Guidance](autodrive.md) — the G-addendum steering surface.
 - [TIM and automation](tim.md) — implement-driven tractor automation.
 - [Address claim](address-claim.md) — the prerequisite every TECU runs first.

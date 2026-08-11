@@ -19,7 +19,7 @@ use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
 use crate::session::Session;
 use crate::session::plugins::{
     AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
-    GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
+    GroupFunction, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
 };
@@ -175,14 +175,9 @@ pub struct MachbusConfig {
     pub enable_vt_server: bool,
     /// Plug a [`Tim`] subsystem (tractor-implement management, no options).
     pub enable_tim: bool,
-    /// Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
-    pub enable_guidance: bool,
-    /// Plug an [`AutoDrive`] subsystem: steering and speed behind one engage
-    /// lifecycle, one stop latch and one set of preconditions.
-    ///
-    /// Mutually exclusive with `enable_guidance` — both author PGN 0xAD00 from
-    /// this address, and `machbus_session_new` refuses the combination rather
-    /// than let one silently overwrite the other's safe stop.
+    /// Plug an [`AutoDrive`] subsystem: ISO 11783-7 curvature steering and
+    /// speed behind one engage lifecycle, one stop latch and one set of
+    /// preconditions.
     pub enable_autodrive: bool,
 }
 
@@ -217,7 +212,6 @@ impl Default for MachbusConfig {
             enable_tc_server: false,
             enable_vt_server: false,
             enable_tim: false,
-            enable_guidance: false,
             enable_autodrive: false,
         }
     }
@@ -412,7 +406,6 @@ pub enum MachbusEventKind {
     /// Machine Info resumed after a link loss.
     GuidanceLinkRestored = 92,
     /// Operator ISB stop latched; the controller is in the safe state.
-    GuidanceStopRequested = 93,
     /// Combined autodrive controller changed automation state.
     AutodriveStateChanged = 94,
     /// Combined autodrive controller entered the safe state.
@@ -696,9 +689,6 @@ fn build_session_with_content(
     }
     if cfg.enable_tim {
         builder = builder.plug(Tim::new(TimAuthority::new(TimOptionSet::empty())));
-    }
-    if cfg.enable_guidance {
-        builder = builder.plug(Guidance::new());
     }
     if cfg.enable_autodrive {
         builder = builder.plug(AutoDrive::new());
@@ -1535,10 +1525,6 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.kind = MachbusEventKind::GuidanceLinkRestored;
                 out.source = source;
             }
-            GuidanceEvent::StopRequested { was_engaged } => {
-                out.kind = MachbusEventKind::GuidanceStopRequested;
-                out.fmi_or_sub = u8::from(was_engaged);
-            }
         },
         Event::Autodrive(a) => match a {
             crate::session::sys::AutodriveEvent::StateChanged { status } => {
@@ -1821,133 +1807,11 @@ pub extern "C" fn machbus_session_implement_command_aux_valve(
 
 // ─── Guidance (autosteer) ─────────────────────────────────────────────
 
-/// Command the steering system to follow a path **curvature** in 1/km
-/// (`0.0` = straight; sign follows the ISO 11783-7 wire convention). Broadcast
-/// on the next tick as a Guidance System Command (PGN 0xAD00). Requires the
-/// guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_curvature(
-    h: *mut MachbusSession,
-    curvature_per_km: f64,
-) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_curvature(curvature_per_km);
-    clear_last_error();
-    true
-}
 
-/// Command a turn of the given **radius in metres** (curvature = 1000 / radius;
-/// a zero or non-finite radius commands straight ahead). Requires the guidance
-/// subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_radius(
-    h: *mut MachbusSession,
-    radius_m: f64,
-) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_radius(radius_m);
-    clear_last_error();
-    true
-}
 
-/// Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
-/// forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
-/// positive). Sends both the steering curvature (`κ = ω / v`, PGN 0xAD00) and
-/// the target speed (PGN 0xFD43). Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_velocity(
-    h: *mut MachbusSession,
-    linear_mps: f64,
-    angular_rad_s: f64,
-) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_velocity(linear_mps, angular_rad_s);
-    clear_last_error();
-    true
-}
 
-/// Command straight-ahead (zero curvature). Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_straight(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_straight();
-    clear_last_error();
-    true
-}
 
-/// Request the steering ECU to engage and steer to the commanded curvature
-/// (sets the Curvature Command Status to *intended to steer* on PGN 0xAD00 and
-/// re-sends the last curvature). The ECU only steers if it reports itself ready.
-/// Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_engage(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    // A refusal is reported, not swallowed: a caller that cannot tell
-    // "engaged" from "declined" is exactly how a stale intent survives.
-    match g.engage() {
-        Ok(()) => {
-            clear_last_error();
-            true
-        }
-        Err(refusal) => {
-            set_last_error(alloc::format!("guidance engage refused: {}", refusal.as_str()));
-            false
-        }
-    }
-}
 
-/// Stop requesting steering: clears the engage request and commands straight
-/// (curvature `0.0`, status *not intended to steer*). Requires the guidance
-/// subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_disengage(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.disengage();
-    clear_last_error();
-    true
-}
 
 /// Move AutoDrive to *ready to enable*: the machine is answering and nothing
 /// is blocking, but no setpoint is being commanded yet. Returns `false` and
@@ -2097,107 +1961,11 @@ fn autodrive_action(
     }
 }
 
-/// The reason the guidance controller latched a safe stop, as a
-/// [`MachbusSafeStopTrigger`] code, or `0` when no stop is latched.
-///
-/// Without this a C caller could see the machine refuse to engage and have no
-/// way to learn why.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_stop_reason(
-    h: *const MachbusSession,
-) -> MachbusSafeStopTrigger {
-    MachbusSafeStopTrigger::from_trigger(
-        handle_ref(h)
-            .ok()
-            .and_then(|h| h.session.get::<Guidance>())
-            .and_then(Guidance::stop_reason),
-    )
-}
 
-/// Release a latched safe stop. Deliberately explicit: clearing the fault is
-/// not by itself consent to move, and [`machbus_session_guidance_engage`] still
-/// has to succeed afterwards.
-///
-/// Returns `false` when the guidance subsystem is not plugged, or when the
-/// clear is refused because the stop condition is still live; the reason is in
-/// the last-error string. Without this the latch was a trap door for C and
-/// Python callers — reachable, with no exit.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_clear_stop(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    match g.clear_stop() {
-        Ok(()) => {
-            clear_last_error();
-            true
-        }
-        Err(refusal) => {
-            set_last_error(format!("guidance clear_stop refused: {}", refusal.as_str()));
-            false
-        }
-    }
-}
 
-/// Whether a safe stop is latched on the guidance controller.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_is_stop_latched(h: *const MachbusSession) -> bool {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .is_some_and(Guidance::is_stop_latched)
-}
 
-/// Whether the controller is currently requesting steering (its own intent, not
-/// the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_is_engaged(h: *const MachbusSession) -> bool {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .map(|g| g.is_engaged())
-        .unwrap_or(false)
-}
 
-/// Write the steering system's last estimated curvature (1/km) into `out`.
-/// Returns `false` (without setting an error) when no machine info has arrived
-/// yet, or when the guidance subsystem is not plugged.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_estimated_curvature(
-    h: *const MachbusSession,
-    out: *mut f64,
-) -> bool {
-    let Some(curvature) = handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .and_then(|g| g.estimated_curvature().value())
-    else {
-        // A steering ECU declaring a sensor fault and one that is simply idle
-        // both return false here; use the Rust `Signal` API to tell them apart.
-        return false;
-    };
-    if !out.is_null() {
-        // SAFETY: caller-provided writable pointer.
-        unsafe { *out = curvature };
-    }
-    true
-}
 
-/// Whether the steering system last reported it is ready/engaged to steer.
-/// Returns `false` if no machine info has arrived or the subsystem is unplugged.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_is_steering_ready(h: *const MachbusSession) -> bool {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .map(|g| g.is_steering_ready())
-        .unwrap_or(false)
-}
 
 // ─── VT client ────────────────────────────────────────────────────────
 
@@ -2289,10 +2057,9 @@ mod tests {
             )
         }
 
-        for autodrive in [true, false] {
+        {
             let cfg = MachbusConfig {
-                enable_autodrive: autodrive,
-                enable_guidance: !autodrive,
+                enable_autodrive: true,
                 ..MachbusConfig::default()
             };
             let h = machbus_session_new(&raw const cfg);
@@ -2302,11 +2069,7 @@ mod tests {
                 assert!(machbus_session_tick(h, 100));
             }
 
-            let clear = if autodrive {
-                machbus_session_autodrive_clear_stop
-            } else {
-                machbus_session_guidance_clear_stop
-            };
+            let clear = machbus_session_autodrive_clear_stop;
 
             // Operator holds the stop.
             let (id, data) = isb_frame(0);

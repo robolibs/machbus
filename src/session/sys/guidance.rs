@@ -1,9 +1,13 @@
 //! Automatic-guidance (autosteer) events — ISO 11783-7 agricultural guidance.
 //!
-//! The high-level [`Guidance`](crate::session::plugins::Guidance) plugin commands
-//! a steering system by *curvature* (Guidance System Command, PGN 0xAD00) and
-//! decodes the steering ECU's Agricultural Guidance Machine Info (PGN 0xAC00)
-//! into the events below.
+//! [`AutoDrive`](crate::session::plugins::AutoDrive) commands a steering system
+//! by *curvature* (Guidance System Command, PGN 0xAD00) and decodes the steering
+//! ECU's Agricultural Guidance Machine Info (PGN 0xAC00) into the events below.
+//!
+//! These report the **machine's** view. This controller's own lifecycle —
+//! engaged, refused, safe-stopped — is
+//! [`AutodriveEvent`](crate::session::AutodriveEvent). A stop is reported there,
+//! with the specific trigger, rather than as a bare "something stopped".
 
 use crate::net::types::Address;
 
@@ -43,11 +47,4 @@ pub enum GuidanceEvent {
     },
     /// A Machine Info arrived after the link had been declared lost.
     LinkRestored { source: Address },
-    /// An operator pressed the Auxiliary Shortcut Button (stop all implement
-    /// operations). The controller has latched the stop and entered the safe
-    /// state; it will not steer again until the latch is explicitly cleared.
-    StopRequested {
-        /// `true` when this interrupted live steering.
-        was_engaged: bool,
-    },
 }

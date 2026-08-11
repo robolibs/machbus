@@ -17,7 +17,40 @@ through it.
 
 ### v4 → v5
 
-No signature or layout changed; the **error contract** of two functions did.
+The largest change is a **removal**: the `Guidance` subsystem is gone, superseded
+by `AutoDrive`.
+
+- **All twelve `machbus_session_guidance_*` functions are removed**, along with
+  `MachbusConfig::enable_guidance` and the `MACHBUS_EVENT_KIND_GUIDANCE_STOP_REQUESTED`
+  event kind. `Guidance` and `AutoDrive` were mutually exclusive authors of PGN
+  0xAD00 with ~80 % duplicated safety logic; every audit round had to fix both,
+  identically. Port to the `machbus_session_autodrive_*` family:
+
+  | removed | replacement |
+  | --- | --- |
+  | `guidance_engage` | `autodrive_arm` then `autodrive_engage` |
+  | `guidance_disengage` | `autodrive_disengage` |
+  | `guidance_command_curvature(k)` | `autodrive_command(NAN, k)` |
+  | `guidance_command_radius(r)` | `autodrive_command(NAN, 1000.0 / r)` |
+  | `guidance_command_velocity(v, ω)` | `autodrive_command(v, (ω / v) * 1000.0)` |
+  | `guidance_command_straight()` | `autodrive_command(NAN, 0.0)` |
+  | `guidance_is_engaged` | `autodrive_is_engaged` |
+  | `guidance_stop_reason` | `autodrive_stop_reason` |
+  | `guidance_clear_stop` | `autodrive_clear_stop` |
+  | `guidance_estimated_curvature` | poll the `GuidanceMachineInfo` event |
+
+  `MachbusConfig` is unchanged in size (48 bytes) and no surviving field moved,
+  so the layout assertions still hold — but a caller that set `enable_guidance`
+  will no longer compile.
+
+- **`MACHBUS_EVENT_KIND_GUIDANCE_MACHINE_INFO`, `_LINK_LOST` and `_LINK_RESTORED`
+  are unchanged and still fire** — `AutoDrive` now emits them, so an
+  event-driven C caller reading the steering ECU's feedback needs no change.
+  `_GUIDANCE_STOP_REQUESTED` is removed because
+  `MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP` supersedes it and reports *which*
+  trigger fired rather than only that something did.
+
+Beyond that removal, the **error contract** of two functions changed.
 
 - **`machbus_session_autodrive_clear_stop` and
   `machbus_session_guidance_clear_stop` can now return `false`.** Releasing a

@@ -89,9 +89,6 @@ typedef enum {
   MACHBUS_EVENT_KIND_GUIDANCE_LINK_RESTORED = 92,
   /**
    * Operator ISB stop latched; the controller is in the safe state.
-   */
-  MACHBUS_EVENT_KIND_GUIDANCE_STOP_REQUESTED = 93,
-  /**
    * Combined autodrive controller changed automation state.
    */
   MACHBUS_EVENT_KIND_AUTODRIVE_STATE_CHANGED = 94,
@@ -533,16 +530,9 @@ typedef struct {
    */
   bool enable_tim;
   /**
-   * Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
-   */
-  bool enable_guidance;
-  /**
-   * Plug an [`AutoDrive`] subsystem: steering and speed behind one engage
-   * lifecycle, one stop latch and one set of preconditions.
-   *
-   * Mutually exclusive with `enable_guidance` — both author PGN 0xAD00 from
-   * this address, and `machbus_session_new` refuses the combination rather
-   * than let one silently overwrite the other's safe stop.
+   * Plug an [`AutoDrive`] subsystem: ISO 11783-7 curvature steering and
+   * speed behind one engage lifecycle, one stop latch and one set of
+   * preconditions.
    */
   bool enable_autodrive;
 } MachbusConfig;
@@ -1293,51 +1283,6 @@ bool machbus_session_implement_command_aux_valve(MachbusSession *h,
                                                  uint16_t flow_rate);
 
 /**
- * Command the steering system to follow a path **curvature** in 1/km
- * (`0.0` = straight; sign follows the ISO 11783-7 wire convention). Broadcast
- * on the next tick as a Guidance System Command (PGN 0xAD00). Requires the
- * guidance subsystem.
- */
-bool machbus_session_guidance_command_curvature(MachbusSession *h, double curvature_per_km);
-
-/**
- * Command a turn of the given **radius in metres** (curvature = 1000 / radius;
- * a zero or non-finite radius commands straight ahead). Requires the guidance
- * subsystem.
- */
-bool machbus_session_guidance_command_radius(MachbusSession *h, double radius_m);
-
-/**
- * Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
- * forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
- * positive). Sends both the steering curvature (`κ = ω / v`, PGN 0xAD00) and
- * the target speed (PGN 0xFD43). Requires the guidance subsystem.
- */
-bool machbus_session_guidance_command_velocity(MachbusSession *h,
-                                               double linear_mps,
-                                               double angular_rad_s);
-
-/**
- * Command straight-ahead (zero curvature). Requires the guidance subsystem.
- */
-bool machbus_session_guidance_command_straight(MachbusSession *h);
-
-/**
- * Request the steering ECU to engage and steer to the commanded curvature
- * (sets the Curvature Command Status to *intended to steer* on PGN 0xAD00 and
- * re-sends the last curvature). The ECU only steers if it reports itself ready.
- * Requires the guidance subsystem.
- */
-bool machbus_session_guidance_engage(MachbusSession *h);
-
-/**
- * Stop requesting steering: clears the engage request and commands straight
- * (curvature `0.0`, status *not intended to steer*). Requires the guidance
- * subsystem.
- */
-bool machbus_session_guidance_disengage(MachbusSession *h);
-
-/**
  * Move AutoDrive to *ready to enable*: the machine is answering and nothing
  * is blocking, but no setpoint is being commanded yet. Returns `false` and
  * sets the last error to the first unmet precondition.
@@ -1386,51 +1331,6 @@ bool machbus_session_autodrive_is_engaged(const MachbusSession *h);
  * `0xFF` when the subsystem is not plugged.
  */
 uint8_t machbus_session_autodrive_status(const MachbusSession *h);
-
-/**
- * The reason the guidance controller latched a safe stop, as a
- * [`MachbusSafeStopTrigger`] code, or `0` when no stop is latched.
- *
- * Without this a C caller could see the machine refuse to engage and have no
- * way to learn why.
- */
-MachbusSafeStopTrigger machbus_session_guidance_stop_reason(const MachbusSession *h);
-
-/**
- * Release a latched safe stop. Deliberately explicit: clearing the fault is
- * not by itself consent to move, and [`machbus_session_guidance_engage`] still
- * has to succeed afterwards.
- *
- * Returns `false` when the guidance subsystem is not plugged, or when the
- * clear is refused because the stop condition is still live; the reason is in
- * the last-error string. Without this the latch was a trap door for C and
- * Python callers — reachable, with no exit.
- */
-bool machbus_session_guidance_clear_stop(MachbusSession *h);
-
-/**
- * Whether a safe stop is latched on the guidance controller.
- */
-bool machbus_session_guidance_is_stop_latched(const MachbusSession *h);
-
-/**
- * Whether the controller is currently requesting steering (its own intent, not
- * the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
- */
-bool machbus_session_guidance_is_engaged(const MachbusSession *h);
-
-/**
- * Write the steering system's last estimated curvature (1/km) into `out`.
- * Returns `false` (without setting an error) when no machine info has arrived
- * yet, or when the guidance subsystem is not plugged.
- */
-bool machbus_session_guidance_estimated_curvature(const MachbusSession *h, double *out);
-
-/**
- * Whether the steering system last reported it is ready/engaged to steer.
- * Returns `false` if no machine info has arrived or the subsystem is unplugged.
- */
-bool machbus_session_guidance_is_steering_ready(const MachbusSession *h);
 
 /**
  * Connect the VT client to a server address. Requires the VT client subsystem.

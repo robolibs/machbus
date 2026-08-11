@@ -306,7 +306,7 @@ not run a clock for you.
   and the vehicle-speed options let an implement coordinate steering and travel
   speed together — for example holding a guidance line while slowing for load.
   Each function is still negotiated and bounded independently; granting hitch
-  control says nothing about speed control. See [Guidance](guidance.md).
+  control says nothing about speed control. See [Guidance](autodrive.md).
 - **Who is liable.** Because the implement is borrowing authority over a machine
   it does not own, the boundaries matter legally as well as technically. The
   tractor's published limits and interlocks define what the implement is *able*
@@ -357,7 +357,7 @@ operator — none of which `machbus` provides.
 
 - [Sequence control](sequence-control.md) — ordered, conditional command
   sequences that often drive TIM functions.
-- [Guidance](guidance.md) — curvature and steering, frequently combined with TIM
+- [Guidance](autodrive.md) — curvature and steering, frequently combined with TIM
   speed control.
 - Shortcut button and safe state — the operator's always-available path to stop
   automation and return the machine to safe.

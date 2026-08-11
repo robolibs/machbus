@@ -10,12 +10,9 @@ angles, or velocities?* The answer is **none of those** — you send a desired p
 > Machine Info"; "autosteer" is the colloquial name for using them. There is no
 > separate autosteer facility, message or plugin.
 >
-> In machbus there are exactly **two plugins** that speak these messages, and
-> they are mutually exclusive:
->
-> - [`AutoDrive`](../tutorials/autodrive.md) — steering **and** speed behind one
->   engage lifecycle. Prefer this.
-> - [`Guidance`](../tutorials/guidance.md) — the older, simpler one.
+> In machbus one plugin speaks these messages:
+> [`AutoDrive`](../tutorials/autodrive.md), which carries steering **and** speed
+> behind a single engage lifecycle.
 >
 > Everything else you may see is supporting code, not another concept:
 > `isobus::implement::guidance` is the wire codecs, `geo::guidance` is pure
@@ -97,7 +94,7 @@ computes `κ = ω / v` and sends it as the Guidance System Command (PGN 0xAD00),
 **also** sends `v` as a Machine Selected Speed Command (PGN 0xFD43) — so the two
 separate authorities each receive the message they expect, from one call. A
 near-zero `v` cannot define a forward path curvature, so it commands straight. See
-the [Guidance tutorial](../tutorials/guidance.md).
+the [Guidance tutorial](../tutorials/autodrive.md).
 
 ## The two messages
 
@@ -245,24 +242,26 @@ hardware, and interoperability evidence this crate does not provide.
 
 ## From concept to code
 
-The high-level `session::plugins::Guidance` plugin is the whole surface: **engage**
-(assert intent to steer) and **disengage**, command a curvature / radius / straight,
-and read back the steering system's estimated curvature, readiness, and limit
-status. It is also exposed in the C and Python bindings (session-level `guidance_*`
-functions/methods, behind an `enable_guidance` flag).
+The `session::plugins::AutoDrive` plugin is the whole surface: **arm** and
+**engage** (assert intent to steer), **disengage**, command a curvature and
+optionally a speed, and read back the steering system's estimated curvature,
+readiness and limit status. It is also exposed in the C and Python bindings
+(session-level `autodrive_*` functions/methods, behind an `enable_autodrive`
+flag).
 
 | You read about… | Build it with… | See… |
 | --- | --- | --- |
-| Asking for / releasing the wheel (intent to steer) | `Guidance::engage` / `Guidance::disengage` (sets the Curvature Command Status on 0xAD00) | [Guidance tutorial](../tutorials/guidance.md) |
-| Commanding a path by curvature | `session::plugins::Guidance` (`command_curvature`, `command_radius`, `command_straight`) | [Guidance tutorial](../tutorials/guidance.md) |
-| Commanding in robotics (v, ω) terms | `Guidance::command_velocity` (sends curvature on 0xAD00 + speed on 0xFD43) | [Guidance tutorial](../tutorials/guidance.md) |
-| Reading the steering ECU's feedback | `Guidance::estimated_curvature`, `is_steering_ready`, `latest_machine_info`, `Event::Guidance` | [Guidance tutorial](../tutorials/guidance.md) |
+| Asking for / releasing the wheel (intent to steer) | `AutoDrive::arm` + `engage` / `disengage` (sets the Curvature Command Status on 0xAD00) | [AutoDrive tutorial](../tutorials/autodrive.md) |
+| Commanding a path by curvature | `AutoDrive::command(DriveCommand::steer(k))` | [AutoDrive tutorial](../tutorials/autodrive.md) |
+| Converting a radius or a (v, ω) twist to curvature | `geo::guidance::curvature_per_km_from_radius` / `curvature_per_km_from_twist` | [AutoDrive tutorial](../tutorials/autodrive.md) |
+| Commanding steering **and** speed together | `AutoDrive::command(DriveCommand { speed_mps, curvature_km_inv })` | [AutoDrive tutorial](../tutorials/autodrive.md) |
+| Reading the steering ECU's feedback | `AutoDrive::estimated_curvature`, `steering_readiness_state`, `machine_info`, `Event::Guidance` | [AutoDrive tutorial](../tutorials/autodrive.md) |
 | The tractor advertising it can steer | ISO 11783-9 facilities | [ISO 11783-9 — the tractor ECU](iso11783-tractor-ecu.md) |
 | Steering as a granted, revocable authority | `session::plugins::Tim` | [TIM (AEF)](tim.md) |
 
 ## See also
 
-- [Guidance tutorial](../tutorials/guidance.md) — the `Guidance` plugin, end to end.
+- [AutoDrive tutorial](../tutorials/autodrive.md) — the plugin, end to end.
 - [ISO 11783-9 — the tractor ECU](iso11783-tractor-ecu.md) — what the tractor advertises.
 - [TIM (AEF)](tim.md) — steering under granted authority.
 - [Positioning: NMEA and GNSS](positioning.md) — where the position and heading that

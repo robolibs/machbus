@@ -204,10 +204,7 @@ mod tests {
 
         // Everything the controllers trip themselves, derived from their source
         // rather than from a list somebody has to remember to update.
-        let producers = [
-            production_source(include_str!("../plugins/autodrive.rs")),
-            production_source(include_str!("../plugins/guidance.rs")),
-        ];
+        let producers = [production_source(include_str!("../plugins/autodrive.rs"))];
         // Anchored on the *call*, not the bare variant name: every one of these
         // triggers is also named in the `ctx.emit(...)` beside its trip, so
         // matching the name alone let a deleted trip site keep passing.

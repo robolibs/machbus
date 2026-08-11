@@ -38,7 +38,7 @@ use crate::session::plugins::gnss::GnssHazards;
 use crate::session::plugins::shortcut_button::IsbGuard;
 use crate::session::sys::{
     AutodriveEvent, AutodriveRefusal, AutomationStatus, BusEvent, DriveCommand, Event,
-    SafeStopTrigger, StopLatch,
+    GuidanceEvent, SafeStopTrigger, StopLatch,
 };
 use crate::time::Instant;
 use core::any::Any;
@@ -398,9 +398,30 @@ impl Plugin for AutoDrive {
         if msg.pgn == PGN_GUIDANCE_MACHINE_INFO
             && let Some(info) = GuidanceMachineInfo::decode(&msg.data)
         {
+            let was_alive = self.link_alive;
             self.latest = Some(info);
             self.last_info_at = Some(ctx.now());
             self.link_alive = true;
+
+            // The steering ECU's own view, published as an event so an
+            // event-driven application does not have to poll `machine_info`.
+            // These are pure feedback and do not overlap `AutodriveEvent`,
+            // which reports this controller's lifecycle rather than the
+            // machine's.
+            if !was_alive {
+                ctx.emit(Event::Guidance(GuidanceEvent::LinkRestored {
+                    source: msg.source,
+                }));
+            }
+            ctx.emit(Event::Guidance(GuidanceEvent::MachineInfo {
+                source: msg.source,
+                estimated_curvature: info.estimated_curvature,
+                steering_ready: matches!(
+                    info.steering_system_readiness_state,
+                    GenericSaeBs02SlotValue::EnabledOnActive
+                ),
+                limit_status: info.guidance_limit_status.as_u8(),
+            }));
 
             // Preconditions are a continuing contract, not an entry check: the
             // operator dropping the engage switch or asserting the mechanical
@@ -487,8 +508,15 @@ impl Plugin for AutoDrive {
             .last_info_at
             .is_some_and(|t| now.millis_since(t) < LINK_TIMEOUT_MS);
         if self.link_alive && !alive {
+            let was_engaged = self.status.is_active();
             self.stop.trip(SafeStopTrigger::GuidanceLinkTimeout);
             self.enter_safe_state();
+            ctx.emit(Event::Guidance(GuidanceEvent::LinkLost {
+                silent_for_ms: self
+                    .last_info_at
+                    .map_or(u32::MAX, |t| now.millis_since(t)),
+                was_engaged,
+            }));
             ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
                 trigger: SafeStopTrigger::GuidanceLinkTimeout,
             }));
@@ -1070,5 +1098,49 @@ mod tests {
                 "{good} is encodable and must be accepted"
             );
         }
+    }
+
+    /// Deleting the `Guidance` plugin left `GuidanceEvent` with no producer at
+    /// all, so an event-driven application on `AutoDrive` could not see the
+    /// steering ECU's report — only poll for it. These are pure feedback and do
+    /// not overlap `AutodriveEvent`, which reports this controller's own
+    /// lifecycle rather than the machine's.
+    #[test]
+    fn machine_info_reaches_an_event_driven_application() {
+        use crate::isobus::implement::guidance::GuidanceLimitStatus;
+
+        let mut s = node();
+        let now = Instant::from_millis(10_000);
+        feed_info(&mut s, GuidanceLimitStatus::LimitedHigh.as_u8(), now);
+
+        let mut saw_restored = false;
+        let mut seen: Option<(u8, Signal<f64>, bool, u8)> = None;
+        while let Some(event) = s.poll_event() {
+            match event {
+                Event::Guidance(GuidanceEvent::LinkRestored { .. }) => saw_restored = true,
+                Event::Guidance(GuidanceEvent::MachineInfo {
+                    source,
+                    estimated_curvature,
+                    steering_ready,
+                    limit_status,
+                }) => seen = Some((source, estimated_curvature, steering_ready, limit_status)),
+                _ => {}
+            }
+        }
+
+        assert!(saw_restored, "the first report is a link restoration");
+        let (source, curvature, ready, limit) = seen.expect("machine info is published");
+        assert_eq!(source, 0xF0);
+        assert!(curvature.value().is_some(), "the ECU reported a curvature");
+        // `MACHINE_INFO` is a real captured frame whose readiness slot is
+        // NotAvailable — the case the docs warn about, where an ECU streams
+        // valid machine info without ever asserting readiness. The event has to
+        // report that faithfully rather than inventing `true`.
+        assert!(!ready);
+        assert_eq!(
+            limit,
+            GuidanceLimitStatus::LimitedHigh.as_u8(),
+            "the limit status is the anti-windup signal an outer loop needs"
+        );
     }
 }

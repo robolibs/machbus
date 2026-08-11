@@ -10,7 +10,7 @@ use crate::net::{ClaimState, Frame, Identifier, Name, Pgn, Priority};
 use crate::nmea::{GNSSPosition, NMEAConfig};
 use crate::session::plugins::{
     AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
-    GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
+    GroupFunction, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
 };
@@ -291,11 +291,6 @@ fn event_to_dict<'py>(py: Python<'py>, ev: &Event) -> PyResult<Bound<'py, PyDict
                 d.set_item("sub", "link_restored")?;
                 d.set_item("source", *source)?;
             }
-            GuidanceEvent::StopRequested { was_engaged } => {
-                d.set_item("kind", "guidance")?;
-                d.set_item("sub", "stop_requested")?;
-                d.set_item("was_engaged", *was_engaged)?;
-            }
         },
         Event::Autodrive(ae) => {
             use crate::session::sys::AutodriveEvent;
@@ -355,12 +350,6 @@ impl PySession {
             .ok_or_else(|| err_runtime("implement subsystem not enabled"))
     }
 
-    #[allow(dead_code)]
-    fn guidance(&mut self) -> PyResult<&mut Guidance> {
-        self.session
-            .get_mut::<Guidance>()
-            .ok_or_else(|| err_runtime("guidance subsystem not enabled"))
-    }
 
     fn autodrive(&mut self) -> PyResult<&mut AutoDrive> {
         self.session
@@ -487,7 +476,6 @@ impl PySession {
         enable_diagnostics = false,
         diagnostics_interval_ms = 1000,
         enable_gnss = false,
-        enable_guidance = false,
         enable_autodrive = false,
         enable_implement = false,
         enable_vt_client = false,
@@ -524,7 +512,6 @@ impl PySession {
         enable_diagnostics: bool,
         diagnostics_interval_ms: u32,
         enable_gnss: bool,
-        enable_guidance: bool,
         enable_autodrive: bool,
         enable_implement: bool,
         enable_vt_client: bool,
@@ -590,9 +577,6 @@ impl PySession {
         }
         if enable_gnss {
             b = b.plug(Gnss::new(NMEAConfig::default().with_gnss_navigation(true)));
-        }
-        if enable_guidance {
-            b = b.plug(Guidance::new());
         }
         // Mutually exclusive with `enable_guidance`: both author PGN 0xAD00
         // from this address, and `build()` refuses the pair rather than let one
@@ -930,50 +914,12 @@ impl PySession {
         Ok(Some(d))
     }
 
-    // ─── Guidance (autosteer) ────────────────────────────────────
 
-    /// Command path curvature in 1/km (0 = straight). Autosteer is
-    /// curvature-based.
-    fn guidance_command_curvature(&mut self, curvature_per_km: f64) -> PyResult<()> {
-        self.guidance()?.command_curvature(curvature_per_km);
-        Ok(())
-    }
 
-    /// Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
-    /// forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
-    /// positive). Sends both the steering curvature (κ = ω / v, PGN 0xAD00) and
-    /// the target speed (PGN 0xFD43).
-    fn guidance_command_velocity(&mut self, linear_mps: f64, angular_rad_s: f64) -> PyResult<()> {
-        self.guidance()?.command_velocity(linear_mps, angular_rad_s);
-        Ok(())
-    }
 
-    /// Command a turn radius in metres (curvature = 1000 / radius).
-    fn guidance_command_radius(&mut self, radius_m: f64) -> PyResult<()> {
-        self.guidance()?.command_radius(radius_m);
-        Ok(())
-    }
 
-    /// Command straight-ahead steering (zero curvature).
-    fn guidance_command_straight(&mut self) -> PyResult<()> {
-        self.guidance()?.command_straight();
-        Ok(())
-    }
 
-    /// Request the steering ECU to engage (Curvature Command Status = intended to
-    /// steer on PGN 0xAD00); re-sends the last commanded curvature. The ECU only
-    /// steers while it reports itself ready.
-    fn guidance_engage(&mut self) -> PyResult<()> {
-        self.guidance()?
-            .engage()
-            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
-    }
 
-    /// Stop requesting steering: clears the engage request and commands straight.
-    fn guidance_disengage(&mut self) -> PyResult<()> {
-        self.guidance()?.disengage();
-        Ok(())
-    }
 
     /// Move AutoDrive to *ready to enable*.
     fn autodrive_arm(&mut self) -> PyResult<()> {
@@ -1034,48 +980,11 @@ impl PySession {
         Ok(self.autodrive()?.is_engaged())
     }
 
-    /// The reason a safe stop is latched (a short stable identifier such as
-    /// `"bus_off"`), or `None` when nothing is latched.
-    fn guidance_stop_reason(&mut self) -> PyResult<Option<String>> {
-        Ok(self
-            .guidance()?
-            .stop_reason()
-            .map(|trigger| trigger.as_str().to_owned()))
-    }
 
-    /// `True` while a safe stop is latched, so `guidance_engage` will refuse.
-    fn guidance_is_stop_latched(&mut self) -> PyResult<bool> {
-        Ok(self.guidance()?.is_stop_latched())
-    }
 
-    /// Release a latched safe stop. Deliberately explicit: clearing the fault is
-    /// not by itself consent to move, and `guidance_engage` still has to
-    /// succeed afterwards. Without this the latch had no exit from Python.
-    /// Raises when the stop condition that latched it is still live.
-    fn guidance_clear_stop(&mut self) -> PyResult<()> {
-        self.guidance()?
-            .clear_stop()
-            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
-    }
 
-    /// `True` if the controller is currently requesting steering (its own intent,
-    /// not the steering ECU's readiness).
-    fn guidance_is_engaged(&mut self) -> PyResult<bool> {
-        Ok(self.guidance()?.is_engaged())
-    }
 
-    /// The steering system's last reported estimated curvature (1/km).
-    ///
-    /// `None` covers both "the ECU declared a sensor fault" and "the ECU does
-    /// not report this"; the Rust `Signal` API keeps them apart.
-    fn guidance_estimated_curvature(&mut self) -> PyResult<Option<f64>> {
-        Ok(self.guidance()?.estimated_curvature().value())
-    }
 
-    /// `True` if the steering system reports it is ready to be steered.
-    fn guidance_is_steering_ready(&mut self) -> PyResult<bool> {
-        Ok(self.guidance()?.is_steering_ready())
-    }
 
     // ─── Implement messages ──────────────────────────────────────
 
@@ -1722,9 +1631,6 @@ impl PySession {
     }
     fn has_gnss(&self) -> bool {
         self.session.get::<Gnss>().is_some()
-    }
-    fn has_guidance(&self) -> bool {
-        self.session.get::<Guidance>().is_some()
     }
     fn has_implement(&self) -> bool {
         self.session.get::<Implement>().is_some()

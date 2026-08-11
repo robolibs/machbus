@@ -95,7 +95,6 @@
     - [Tractor ECU](tutorials/tractor-ecu.md)
     - [Implement ECU](tutorials/implement-ecu.md)
     - [Powertrain](tutorials/powertrain.md)
-    - [Guidance (legacy)](tutorials/guidance.md)
     - [AutoDrive (steering + speed)](tutorials/autodrive.md)
     - [Sequence Control](tutorials/sequence-control.md)
     - [TIM and automation](tutorials/tim.md)

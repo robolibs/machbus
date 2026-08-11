@@ -10,7 +10,9 @@
 
 use machbus::Instant;
 use machbus::net::{Address, Name, Result};
-use machbus::session::{Controls, Driver, EndpointTransport, Event, Plugin, Session};
+use machbus::session::{
+    Controls, DriveCommand, Driver, EndpointTransport, Event, Plugin, Session,
+};
 use wirebit::ShmLink;
 use wirebit::topology::{Built, Topology};
 
@@ -159,7 +161,7 @@ use machbus::isobus::vt::{
 use machbus::j1939::diagnostic::{Dtc, Fmi};
 use machbus::nmea::{GNSSPosition, NMEAConfig};
 use machbus::session::plugins::{
-    Diagnostics, Gnss, Guidance, Heartbeat, Implement, TcClient, TcServer, VtClient, VtServer,
+    AutoDrive, Diagnostics, Gnss, Heartbeat, Implement, TcClient, TcServer, VtClient, VtServer,
 };
 use machbus::session::{
     DiagEvent, GnssEvent, GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent, Pto, TcServerEvent,
@@ -653,7 +655,7 @@ fn guidance_machine_info_reaches_the_controller() {
     let mut bus = TwoNode::new(
         make_name(0x110, 0x80),
         0x80,
-        vec![boxed(Guidance::new())],
+        vec![boxed(AutoDrive::new())],
         make_name(0x210, 0x80),
         0x81,
         Vec::new(),
@@ -661,8 +663,12 @@ fn guidance_machine_info_reaches_the_controller() {
     .expect("build two-node bus");
     assert!(bus.run_until_claimed().expect("claim"));
 
-    // A commands the steering system to follow a curvature (PGN 0xAD00 goes out).
-    bus.a.with_mut::<Guidance, _>(|g| g.command_curvature(2.5));
+    // A commands the steering system to follow a curvature (PGN 0xAD00 goes
+    // out). The command is refused until a steering ECU is answering — that is
+    // the precondition this test then satisfies from node B.
+    let _ = bus
+        .a
+        .with_mut::<AutoDrive, _>(|d| d.command(DriveCommand::steer(2.5)));
 
     // B acts as the steering ECU and broadcasts machine info (PGN 0xAC00).
     let info = GuidanceMachineInfo {
@@ -693,7 +699,7 @@ fn guidance_machine_info_reaches_the_controller() {
     assert!(got, "controller should receive guidance machine info");
     assert!(
         bus.a
-            .with::<Guidance, _>(|g| g.estimated_curvature().value().is_some())
+            .with::<AutoDrive, _>(|d| d.estimated_curvature().value().is_some())
             .unwrap_or(false),
         "controller should cache the steering ECU's estimated curvature"
     );

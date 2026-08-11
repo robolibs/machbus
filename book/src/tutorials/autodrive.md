@@ -4,15 +4,14 @@
 one setpoint, one stop latch** across both axes a moving machine has — where it
 steers and how fast it goes.
 
-If you have read [Guidance](guidance.md) you already know most of the
-wire story, because both plugins speak the same two messages. This page is about
-what `AutoDrive` adds, when to pick it over `Guidance`, and the question that
-trips almost everyone up first: **do I need TIM for this?**
+It is the **only** guidance controller in machbus: an earlier `Guidance` plugin
+covered the same two messages with a weaker model and was removed. This page
+covers the lifecycle, the heartbeat contract, every way it stops, and the
+question that trips almost everyone up first: **do I need TIM for this?**
 
 ## Safety first
 
-Everything on the [Guidance safety note](guidance.md#safety-first) applies here
-without change, and more so, because this plugin also commands speed:
+Autonomy moves a machine with a person on it:
 
 - **Operator-supervised, not autonomous.** A human is in the seat.
 - **machbus is not a safety system and is not certified.** It moves setpoints on
@@ -70,19 +69,14 @@ Also worth knowing: machbus's `TimAuthority` currently guards **PTO, hitch and
 auxiliary valves only**. There is no plugin wiring TIM speed or TIM steering, so
 "use TIM instead" is not currently a thing you can do for these two axes.
 
-## `AutoDrive` vs `Guidance`
+## What the design gives you
 
-Both plugins send **the same two PGNs**. `Guidance` is not steering-only — its
-`command_velocity(v, ω)` sets a speed setpoint too. Both carry the shortcut-button
-guard, the GNSS hazard guard, a stop latch, a link watchdog and a stale-command
-watchdog. The trigger sets are nearly identical.
+Four properties are worth knowing about before you write a control loop, because
+each replaced something weaker.
 
-The differences are these four.
+### 1. An automation status, not a boolean
 
-### 1. Automation status, not a boolean
-
-`Guidance` has `engaged: bool`. `AutoDrive` has the ISO 11783-7 Table 45
-`AutomationStatus`:
+`AutoDrive` reports the ISO 11783-7 Table 45 `AutomationStatus`:
 
 ```
 NotReady ──arm()──► ReadyToEnable ──engage()──► ActiveNotLimited
@@ -91,61 +85,47 @@ NotReady ──arm()──► ReadyToEnable ──engage()──► ActiveNotLim
                                                  └─► Fault  (any safe stop)
 ```
 
-This is not cosmetic. `AutoDrive` **mirrors the machine's own limit status into
-its status**: when the steering ECU reports `LimitedHigh` / `LimitedLow`, the
-plugin moves to `ActiveLimitedHigh` / `ActiveLimitedLow` and you can read it back
-with `status()`. That is the anti-windup signal an outer control loop needs — a
+This is not cosmetic. The plugin **mirrors the machine's own limit status into
+its status**: when the steering ECU reports `LimitedHigh` / `LimitedLow`, it
+moves to `ActiveLimitedHigh` / `ActiveLimitedLow` and you can read it back with
+`status()`. That is the anti-windup signal an outer control loop needs — a
 tracker that does not know the steering ECU is saturated will wind up against a
-limit it cannot see. `Guidance` decodes the same field and discards it.
+limit it cannot see.
 
-There is also a real `arm()` step before `engage()`, so "preconditions are met"
-and "I am now asking for the wheel" are distinct states.
+`arm()` before `engage()` also keeps "preconditions are met" and "I am now asking
+for the wheel" as distinct states.
 
 ### 2. Commands are refused, not clamped
 
 ```rust,ignore
-// Guidance — infallible; out-of-range input is clamped by the codec
-g.command_curvature(1e9);      // → clamped to ±8031.75 km⁻¹, a 12 cm turn radius
-
-// AutoDrive — one call, both axes, checked before anything is encoded
 d.command(DriveCommand {
     speed_mps: Some(2.0),
     curvature_km_inv: Some(12.5),
 })?;
 ```
 
-`AutoDrive::command` returns `Result<(), AutodriveRefusal>` and has no infallible
-sibling, so the wire encoder is never the only range check on a steering command.
-It refuses with `CurvatureOutOfRange`, `SpeedNotFinite`, `SpeedBelowMinimum`,
-`StopLatched` or `StatusNotActive`.
+`command` returns `Result<(), AutodriveRefusal>` and has **no infallible
+sibling**, so the wire codec is never the only range check on a steering
+command. An out-of-range curvature would otherwise be clamped by the encoder to
+±8031.75 km⁻¹ — a 12 cm turn radius — and transmitted as a perfectly valid
+maximum-curvature command. It refuses instead, with `CurvatureOutOfRange`,
+`SpeedNotFinite`, `SpeedBelowMinimum`, `StopLatched` or `StatusNotActive`.
 
 `DriveCommand`'s two `Option` fields also let you express *steer only* (leave
-speed to whoever owns it) or *drive straight* cleanly. `Guidance` couples the two
-through the twist: it computes `κ = ω / v`.
+speed to whoever owns it) with `DriveCommand::steer(k)`, or drive straight,
+without coupling the two axes through a twist.
 
 ### 3. The stop latch is fed only from inside
 
-`Guidance::request_stop` is public — anything holding `&mut Guidance` can trip its
-latch. `AutoDrive`'s latch has no public trip; every producer is inside the
-plugin, and a source-scanning test enforces that each `SafeStopTrigger` variant
-has a real producer.
+There is no public way to trip the latch. Every producer is inside the plugin,
+and a source-scanning test enforces that each `SafeStopTrigger` variant has a
+real producer — so a trigger cannot be declared and then quietly never fire.
 
 ### 4. GNSS latches a stop
 
-Both use `GnssHazards` to block `engage()` and `clear_stop()`. `AutoDrive`
-additionally trips a **latching** stop on `PositionStale` / `FixDegraded`, so a
-receiver that stops reporting halts the machine rather than only preventing
-re-engagement.
-
-### Picking one
-
-Use **`AutoDrive`** for new work: it supersedes `Guidance`, and the status model
-and refusals are what an autonomy client actually needs. Use `Guidance` if you
-want steering under a simple boolean and are driving speed yourself.
-
-They are **mutually exclusive** — both author PGN 0xAD00 from this address, so a
-session that plugs both is refused at build rather than letting one silently
-overwrite the other's safe stop.
+`GnssHazards` blocks `engage()` and `clear_stop()`, and additionally trips a
+**latching** stop on `PositionStale` / `FixDegraded`, so a receiver that stops
+reporting halts the machine rather than only preventing re-engagement.
 
 ## The lifecycle
 
@@ -263,12 +243,9 @@ show "cleared" against a stop that is still asserted.
 | `ShortcutButton` | the ISO stop-all path |
 | `Diagnostics` | DTCs for the faults above |
 
-Not `Guidance` — see the mutual exclusion above.
-
 ## Path → curvature is still your job
 
-Unchanged from `Guidance`: the plugin moves a curvature value, it does not produce
-one. Your pure-pursuit or Stanley tracker turns the planned line, the GNSS pose
+The plugin moves a curvature value; it does not produce one. Your pure-pursuit or Stanley tracker turns the planned line, the GNSS pose
 and the cross-track error into the single curvature that steers back onto the
 line, and it lives in your code. See [Serial GNSS](serial-gnss.md) and
 [NMEA 2000](nmea-2000.md) for pose, and [TC geo](tc-geo-prescription.md) for
@@ -314,7 +291,6 @@ system and is not certified.
 
 - [`machbus drive` safety model](drive-tool.md) — the operator-input layer:
   dead-man, arm latch, and what happens when the controller is lost.
-- [Guidance](guidance.md) — the older, simpler boolean-engage plugin.
 - [Automatic guidance](../standards/automatic-guidance.md) — the curvature
   model and the two PGNs.
 - [TIM and automation](tim.md) — the authority-gated path, for PTO/hitch/aux.

@@ -6,7 +6,7 @@ use super::definitions::{
     HumiditySource, LAT_LON_RESOLUTION, LocalTimeOffsetData, MagneticVariationSource,
     NavigationData, OutsideEnvironmentalData, POSITION_DELTA_RESOLUTION,
     POSITION_DELTA_TIME_RESOLUTION, PRESSURE_RESOLUTION, PositionDeltaHighPrecisionRapidUpdateData,
-    PressureData, PressureSource, ROT_RESOLUTION, RPM_RESOLUTION, ReferenceStationType, RudderData,
+    PressureData, PressureSource, ROT_RESOLUTION, RPM_RESOLUTION, RudderData,
     RudderDirection, SPEED_RESOLUTION, SatelliteInfo, SpeedWaterData, SpeedWaterRefType,
     SystemTimeData, TEMPERATURE_RESOLUTION, TemperatureData, TemperatureSource, TimeSource,
     VOLTAGE_RESOLUTION, WIND_DIR_RESOLUTION, WIND_SPEED_RESOLUTION, WaterDepthData, WindData,
@@ -404,6 +404,14 @@ impl NMEAConfig {
 pub struct NMEAInterface {
     config: NMEAConfig,
     latest_position: Option<GNSSPosition>,
+    /// Bumped every time a *decoded* fix quality lands (PGN 129029 only).
+    ///
+    /// A plugin watchdog on fix quality cannot key off PGN arrival: this
+    /// handler has eight early-return paths, so a run of malformed 129029
+    /// frames would keep feeding the watchdog while the quality it guards never
+    /// changed. PGN 129025 then re-emits the frozen quality at 10 Hz and
+    /// autosteer keeps running on a value nothing is re-confirming.
+    quality_generation: u64,
 
     pub on_position: Event<GNSSPosition>,
     pub on_cog: Event<f64>,
@@ -438,6 +446,7 @@ impl NMEAInterface {
         Self {
             config,
             latest_position: None,
+            quality_generation: 0,
             on_position: Event::new(),
             on_cog: Event::new(),
             on_sog: Event::new(),
@@ -465,8 +474,13 @@ impl NMEAInterface {
         }
     }
 
+    /// Counts fix qualities that actually decoded, for staleness watchdogs.
     #[inline]
     #[must_use]
+    pub const fn quality_generation(&self) -> u64 {
+        self.quality_generation
+    }
+
     pub fn latest_position(&self) -> Option<GNSSPosition> {
         self.latest_position
     }
@@ -1544,7 +1558,15 @@ impl NMEAInterface {
             return;
         }
         if signed_i64_data_is_available(alt_raw) {
-            pos.altitude_m = Some(alt_raw as f64 * 1e-6);
+            // Both fields, from one read. `wgs.altitude` was left at the
+            // literal 0.0 above, and `GNSSPosition::to_enu`/`to_ned`/`to_ecf`
+            // all read `self.wgs` and never `self.altitude_m` — so an NMEA 2000
+            // receiver lost its vertical axis entirely while the C ABI and
+            // Python constructors, which set both, kept it. The vertical
+            // channel silently worked or did not depending on the input path.
+            let altitude = alt_raw as f64 * 1e-6;
+            pos.altitude_m = Some(altitude);
+            pos.wgs.altitude = altitude;
         }
         // G4: one unrecognised sub-signal must not discard the whole PG. A
         // receiver reporting a constellation or method this crate predates used
@@ -1617,6 +1639,7 @@ impl NMEAInterface {
             pos.cog_rad = prev.cog_rad;
         }
         self.latest_position = Some(pos);
+        self.quality_generation = self.quality_generation.wrapping_add(1);
         self.on_position.emit(&pos);
     }
 }
@@ -1649,10 +1672,12 @@ fn gnss_position_detail_payload_len_is_canonical(data: &[u8]) -> bool {
 
     for station_index in 0..reference_station_count {
         let type_offset = BASE_LEN + station_index * REFERENCE_STATION_LEN;
-        let station_type = data[type_offset] & 0x0F;
-        if !gnss_reference_station_type_is_defined(station_type) {
-            return false;
-        }
+        // G4 — an unrecognised 4-bit station type is one sub-signal, not a
+        // reason to discard the fix. This ran inside the *length* gate, so a
+        // nibble outside {0,1,14,15} returned before latitude or longitude were
+        // read at all: an RTK rover lost its entire detailed fix from the
+        // moment its base came online. The same function applies G4 correctly
+        // to the GNSS-system nibble ninety lines up.
         let age_offset = type_offset + 2;
         let correction_age_raw = u16::from_le_bytes([data[age_offset], data[age_offset + 1]]);
         if matches!(correction_age_raw, 0xFFFD | 0xFFFE) {
@@ -1661,11 +1686,6 @@ fn gnss_position_detail_payload_len_is_canonical(data: &[u8]) -> bool {
     }
 
     true
-}
-
-#[inline]
-const fn gnss_reference_station_type_is_defined(station_type: u8) -> bool {
-    ReferenceStationType::try_from_u8(station_type).is_some()
 }
 
 #[inline]

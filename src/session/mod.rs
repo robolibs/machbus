@@ -1766,4 +1766,72 @@ mod tests {
             "the violation must become an active DTC so it reaches the next DM1"
         );
     }
+
+    /// B4 — arming the fix-quality watchdog on PGN arrival, not on a decoded
+    /// quality. `handle_position_detail` has eight early returns; a receiver
+    /// emitting 129029 that never decodes kept the watchdog fed while 129025
+    /// re-emitted the frozen quality at 10 Hz.
+    #[test]
+    fn a_stream_of_undecodable_129029_still_lets_the_quality_watchdog_fire() {
+        use super::plugins::Gnss;
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::{PGN_GNSS_POSITION_DATA, PGN_GNSS_POSITION_RAPID};
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+        use crate::geo::Wgs;
+
+        fn undecodable_detail() -> Vec<Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&(i64::MAX - 1).to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        fn rapid_frame() -> Frame {
+            let pos = GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            };
+            Frame::new(
+                Identifier::encode(
+                    Priority::Default,
+                    PGN_GNSS_POSITION_RAPID,
+                    0x1C,
+                    BROADCAST_ADDRESS,
+                ),
+                NMEAInterface::build_position(&pos),
+                8,
+            )
+        }
+
+        let mut session = Session::builder(test_name(43), 0x80)
+            .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for step in 0..40 {
+            now = now.add_millis(100);
+            if step % 2 == 0 {
+                for frame in undecodable_detail() {
+                    session.feed(0, &frame, now);
+                }
+            }
+            session.feed(0, &rapid_frame(), now);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(super::plugins::Gnss::is_fix_quality_stale),
+            "a receiver whose 129029 never decodes has no fresh fix quality"
+        );
+    }
 }

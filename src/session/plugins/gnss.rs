@@ -210,18 +210,26 @@ impl Plugin for Gnss {
     }
 
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
-        // Only 129029 carries fix quality; 129025 is coordinates alone. Note
-        // which one arrived *before* decoding, because the merged
-        // `GNSSPosition` no longer says where its quality came from.
-        let carries_quality = msg.pgn == PGN_GNSS_POSITION_DATA;
+        // Only 129029 carries fix quality; 129025 is coordinates alone, and the
+        // merged `GNSSPosition` no longer says where its quality came from. Feed
+        // the watchdog from the interface's decode counter rather than from the
+        // PGN on the wire: the detail handler has eight early returns, so a run
+        // of malformed 129029 frames arrives without ever producing a quality.
+        // Arming on arrival would keep the watchdog fed off frames that decoded
+        // nothing while 129025 re-emits the frozen quality at 10 Hz.
+        let before = self.iface.quality_generation();
         self.iface.handle_message(msg);
-        if carries_quality {
+        if self.iface.quality_generation() != before {
             self.last_quality_at = Some(ctx.now());
             self.quality_stale = false;
         }
         let drained: Vec<GnssEvent> = self.collected.borrow_mut().drain(..).collect();
         for event in drained {
             if let GnssEvent::Position(pos) = &event {
+                // A receiver producing positions but never a decodable quality
+                // would otherwise leave the window unarmed forever, and an
+                // unarmed watchdog reads as fresh.
+                self.last_quality_at.get_or_insert_with(|| ctx.now());
                 self.last_position_at = Some(ctx.now());
                 self.position_stale = false;
                 let usable = !self.quality_stale && fix_is_steerable(pos.fix_type, pos.integrity);

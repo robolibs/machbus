@@ -953,7 +953,7 @@ fn nmea2000_position_detail_rejects_reserved_reference_station_count_before_cach
 }
 
 #[test]
-fn nmea2000_position_detail_rejects_reserved_reference_station_type_before_cache_update() {
+fn nmea2000_position_detail_keeps_the_fix_when_the_reference_station_type_is_undefined() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<_>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -986,19 +986,21 @@ fn nmea2000_position_detail_rejects_reserved_reference_station_type_before_cache
     assert!((cached.wgs.latitude - 52.0).abs() < 1e-12);
     assert!((cached.wgs.longitude - 5.0).abs() < 1e-12);
 
-    let mut reserved_type = valid;
-    reserved_type[43] = 0x02;
-    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, reserved_type, 0x44));
+    // G4 — the station type is one 4-bit sub-signal inside a PG whose payload
+    // is the fix itself. An unrecognised value says nothing about latitude or
+    // longitude, and rejecting the frame cost an RTK rover its entire detailed
+    // fix from the moment its base came online.
+    let mut undefined_type = valid;
+    undefined_type[43] = 0x02;
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, undefined_type, 0x44));
     assert_eq!(
         positions.borrow().len(),
-        4,
-        "reserved reference-station type must not emit another position event"
+        5,
+        "an undefined reference-station type must not suppress the position"
     );
-    assert_eq!(
-        iface.latest_position().unwrap(),
-        cached,
-        "reserved reference-station type must not replace the cached GNSS position"
-    );
+    let after = iface.latest_position().unwrap();
+    assert!((after.wgs.latitude - cached.wgs.latitude).abs() < 1e-12);
+    assert!((after.wgs.longitude - cached.wgs.longitude).abs() < 1e-12);
 }
 
 #[test]
@@ -1272,6 +1274,11 @@ fn nmea2000_position_detail_rejects_signed_special_values_before_event_or_cache_
     assert_eq!(positions.borrow().len(), 1);
     let cached = iface.latest_position().unwrap();
     assert!(cached.altitude_m.is_some());
+    // The decoded altitude has to reach `wgs` too: `to_enu`, `to_ned` and
+    // `to_ecf` all read `wgs.altitude` and never `altitude_m`, so leaving it at
+    // the literal 0.0 cost an NMEA 2000 receiver its whole vertical axis while
+    // the C ABI and Python constructors, which set both, kept it.
+    assert!((cached.wgs.altitude - 12.5).abs() < 1e-6);
     assert_eq!(cached.hdop, Some(1.0));
     assert_eq!(cached.pdop, Some(1.5));
 }

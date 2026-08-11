@@ -208,6 +208,35 @@ impl TractorFacilities {
         data
     }
 
+    /// Encode for `PGN_REQUIRED_TRACTOR_FACILITIES` (0xFE0A), where every
+    /// reserved position is `0` rather than `1`.
+    ///
+    /// In this direction a set bit is a *request*, not a description: ISO
+    /// 11783-9:2012 §4.4.2 — "A facility is not required if its corresponding
+    /// bits are set to 0 in the implement CF required tractor facilities
+    /// message." Transmitting reserved bits as `1` therefore asks the TECU to
+    /// keep broadcasting every facility that has not been defined yet, which
+    /// both defeats the bandwidth reduction this message exists for and means
+    /// a future revision silently enrols this node in whatever those bits
+    /// become.
+    ///
+    /// This is the exception ISO 11783-7:2022 §5.4 carves out of its own
+    /// "undefined and reserved bits shall be transmitted with a value of 1"
+    /// rule: "Unique to this document are several messages with single-bit
+    /// parameters such as availability of individual features… The value of
+    /// these reserved parameters may differ from the rules defined above. In
+    /// some cases, the default value is zero ('0') for forward compatibility.
+    /// The value of zero indicates 'not supported' in these messages."
+    #[must_use]
+    pub fn encode_required(&self) -> [u8; 8] {
+        let mut data = self.encode();
+        data[4] &= 0x3F;
+        data[5] = 0;
+        data[6] = 0;
+        data[7] = 0;
+        data
+    }
+
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
         // ISO 11783-7:2022 §5.4: "All undefined bits should be received as

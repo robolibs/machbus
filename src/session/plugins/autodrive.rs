@@ -72,9 +72,17 @@ const TRANSMITS: &[Pgn] = &[
 /// boots after this node, or that was power-cycled mid-session.
 pub const REQUIRED_FACILITIES_INTERVAL_MS: u32 = 1000;
 
-/// Three missed 100 ms Machine Info broadcasts (AEF 023 loss of communication).
+/// Three missed 100 ms Machine Info broadcasts.
 pub const LINK_TIMEOUT_MS: u32 = 300;
-/// ISO 11783-7 §5.2.7.2 minimum update period for the guidance group.
+/// MINUPDATEPERIOD for the guidance group.
+///
+/// ISO 11783-7:2022 §5.2.7.2 defines the *form* this cadence takes — "Every
+/// MAXUPDATEPERIOD and on CHANGECRITERA, but no faster than every
+/// MINUPDATEPERIOD" — which is what [`MIN_TX_INTERVAL_MS`] and
+/// [`MAX_TX_INTERVAL_MS`] implement. It does **not** state the numbers: §5.2.7.1
+/// puts every actual repetition rate in "the ISO 11783 electronic database"
+/// (isobus.net), which this repository does not vendor. Treat 100/2000 as the
+/// widely-used values for this group rather than as quoted from the text.
 pub const MIN_TX_INTERVAL_MS: u32 = 100;
 /// The command is a heartbeat, so it keeps going out even when unchanged.
 pub const MAX_TX_INTERVAL_MS: u32 = 2000;
@@ -656,7 +664,7 @@ impl Plugin for AutoDrive {
         {
             ctx.send(
                 PGN_REQUIRED_TRACTOR_FACILITIES,
-                Self::required_facilities().encode().to_vec(),
+                Self::required_facilities().encode_required().to_vec(),
                 BROADCAST_ADDRESS,
                 Priority::Normal,
             );
@@ -805,6 +813,27 @@ mod tests {
         let asked = asked.expect("required tractor facilities is transmitted");
         assert!(asked.guidance, "the steering facility must be requested");
         assert!(asked.machine_selected_speed_command);
+    }
+
+    /// A set bit here is a *request*, so the reserved positions must be `0`:
+    /// ISO 11783-9 §4.4.2 — "A facility is not required if its corresponding
+    /// bits are set to 0". Transmitting the §5.4 default of `1` would ask the
+    /// TECU to keep broadcasting every facility not yet defined.
+    #[test]
+    fn the_facility_request_does_not_require_the_reserved_bits() {
+        let mut s = node();
+        s.tick(Instant::ZERO.add_millis(4_100));
+
+        let mut payload = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_REQUIRED_TRACTOR_FACILITIES {
+                payload = Some(frame.data);
+            }
+        }
+
+        let payload = payload.expect("required tractor facilities is transmitted");
+        assert_eq!(payload[4] & 0xC0, 0, "byte 4 bits 6-7 are reserved");
+        assert_eq!(&payload[5..8], &[0, 0, 0], "bytes 5-7 are reserved");
     }
 
     /// §4.4.2.7 — only a class "xG" tractor "shall support the external control

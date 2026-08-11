@@ -64,13 +64,16 @@ fn file_server_rejects_initialize_volume_while_files_are_open_without_mutation()
 }
 
 #[test]
-fn file_server_initialize_volume_accepts_counted_volume_request_and_rejects_reserved_flags() {
+fn file_server_initialize_volume_accepts_counted_volume_request_and_ignores_reserved_flags() {
     let mut server = FileServer::new(FileServerConfig::default());
     server.add_file("old.txt", b"old".to_vec(), 0).unwrap();
     server.add_directory("old").unwrap();
 
+    // ISO 11783-13 §4.9 scopes Error Code 47 to a message "shorter than
+    // expected" — that, and not a set reserved bit, is what makes a request
+    // malformed, and a rejected one must leave the volume alone.
     let invalid = server.handle_client_message(&fs_request(
-        initialize_volume_request(0x96, 1024, 0x80, "FIELD"),
+        vec![FSFunction::InitializeVolume.as_u8(), 0x96, 0x00],
         0x42,
     ));
     assert_response(
@@ -114,8 +117,12 @@ fn file_server_initialize_volume_accepts_counted_volume_request_and_rejects_rese
     );
     assert_eq!(server.volume_name(), "ISOBUS");
 
+    // B.29 bits 7-2 are "Reserved, send as 000000" — a rule that binds the
+    // sender. The server must mask them, not refuse the request, so that an FS
+    // revision defining one is not turned away (ISO 11783-7 §5.4, undefined
+    // bits "received as 'don't care'").
     let initialized = server.handle_client_message(&fs_request(
-        initialize_volume_request(0x9A, 4096, 0x01, "FIELD"),
+        initialize_volume_request(0x9A, 4096, 0x01 | 0x80, "FIELD"),
         0x42,
     ));
     assert_response(
@@ -748,13 +755,19 @@ fn file_server_volume_status_requests_drive_removal_state_without_ccm() {
         "VolumeStatus responses carry a counted volume name"
     );
 
-    let invalid_mode =
+    // B.30 bits 7-2 are "Reserved, send as 000000", which binds the sender.
+    // Masking them on receive is what lets a later FS revision define bit 2
+    // without this server refusing the request outright (ISO 11783-7 §5.4,
+    // undefined bits "received as 'don't care'"); §4.9 scopes Error Code 47 to
+    // a message "shorter than expected". Mode 0x04 is therefore mode 0x00.
+    let reserved_mode =
         server.handle_client_message(&fs_request(volume_status_request(0xD6, 0x04, ""), 0x42));
-    assert_eq!(invalid_mode[0].dest, Some(0x42));
-    assert_eq!(invalid_mode[0].data[0], FSFunction::VolumeStatus.as_u8());
+    assert_eq!(reserved_mode[0].dest, Some(0x42));
+    assert_eq!(reserved_mode[0].data[0], FSFunction::VolumeStatus.as_u8());
     assert_eq!(
-        invalid_mode[0].data[2], 0xFF,
-        "reserved VolumeStatus request bits are rejected without changing state"
+        reserved_mode[0].data[2],
+        VolumeState::Present.as_u8(),
+        "a reserved VolumeStatus bit is ignored, not treated as an error"
     );
     assert_eq!(server.get_volume_state(), VolumeState::Present);
 

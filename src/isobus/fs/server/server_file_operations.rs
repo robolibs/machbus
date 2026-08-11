@@ -1539,12 +1539,19 @@ impl FileServer {
         if request.len() < 5 {
             return error();
         }
-        let mode = request[2];
-        if mode & VOLUME_MODE_RESERVED_MASK != 0
-            || mode == (VOLUME_MODE_MAINTAIN | VOLUME_MODE_PREPARE_REMOVAL)
-        {
-            return error();
-        }
+        // B.30 makes bits 7-2 "Reserved, send as 000000", which binds the
+        // sender. Rejecting a request because a reserved bit is set binds the
+        // receiver too, and nothing in ISO 11783-13 says that: §4.9 scopes
+        // Error Code 47 to a message "which is shorter than expected". Masking
+        // is what keeps a later FS revision that defines bit 2 from being
+        // refused outright here — ISO 11783-7 §5.4, "All undefined bits should
+        // be received as 'don't care' (either masked out or ignored). This
+        // permits them to be defined and used in the future without causing
+        // any incompatibilities."
+        //
+        // The contradictory combination (maintain *and* prepare-for-removal)
+        // still falls through to the catch-all arm below.
+        let mode = request[2] & !VOLUME_MODE_RESERVED_MASK;
         let path_len = u16::from_le_bytes([request[3], request[4]]) as usize;
         let used = 5 + path_len;
         if !fs_payload_len_is_canonical(request, used) {

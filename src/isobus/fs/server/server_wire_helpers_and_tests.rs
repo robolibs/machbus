@@ -182,10 +182,12 @@ fn parse_initialize_volume_request(request: &[u8]) -> core::result::Result<Optio
     if request.len() < 9 {
         return Err(());
     }
-    let flags = request[6];
-    if flags & INITIALIZE_VOLUME_FLAGS_RESERVED_MASK != 0 {
-        return Err(());
-    }
+    // B.29 bits 7-2 are "Reserved, send as 000000" — a rule for the sender.
+    // The client-side builder still refuses to transmit them set; refusing to
+    // *parse* them is the over-strict half, and it would reject a later FS
+    // revision that defines one (ISO 11783-7 §5.4 "received as 'don't care'").
+    // §4.9 scopes Error Code 47 to a message "shorter than expected".
+    let _ = INITIALIZE_VOLUME_FLAGS_RESERVED_MASK;
     let name_len = u16::from_le_bytes([request[7], request[8]]) as usize;
     let used = 9usize.checked_add(name_len).ok_or(())?;
     if !fs_payload_len_is_canonical(request, used) {
@@ -1295,6 +1297,67 @@ mod tests {
         // Second tick crosses threshold.
         let out = s.update(60);
         assert!(out.iter().any(|f| f.dest.is_none()));
+    }
+
+    /// ISO 11783-13 B.30 makes Volume Mode bits 7-2 "Reserved, send as 000000",
+    /// which binds the *sender*. §4.9 scopes Error Code 47 to a message "shorter
+    /// than expected", so nothing licenses refusing a request over a reserved
+    /// bit — and refusing one means a later FS revision that defines bit 2 gets
+    /// turned away instead of ignored (ISO 11783-7 §5.4 "received as 'don't
+    /// care'").
+    #[test]
+    fn a_volume_mode_request_ignores_its_reserved_bits() {
+        // An empty volume name matches the served volume, so the clean request
+        // genuinely succeeds rather than erroring for an unrelated reason.
+        let request = |mode: u8| {
+            let mut r = vec![FSFunction::VolumeStatus.as_u8(), 0x30, mode];
+            r.extend_from_slice(&0u16.to_le_bytes());
+            r
+        };
+
+        let mut clean = FileServer::new(FileServerConfig::default());
+        let expected = clean.handle_client_message(&req_msg(request(0x01), 0x42))[0]
+            .data
+            .clone();
+        let error = FileServer::new(FileServerConfig::default())
+            .encode_volume_status_error_response(0x30);
+        assert_ne!(expected, error, "the clean request must actually succeed");
+
+        // Same request with every reserved bit set must land in the same place.
+        let mut noisy = FileServer::new(FileServerConfig::default());
+        let out = noisy.handle_client_message(&req_msg(request(0xFD), 0x42));
+        assert_eq!(
+            out[0].data, expected,
+            "reserved bits must be masked, not refused"
+        );
+    }
+
+    /// B.29 gives Volume Flags the same "Reserved, send as 000000" rule, with
+    /// the same asymmetry: the client builder refuses to transmit them set, the
+    /// server must not refuse to parse them.
+    #[test]
+    fn an_initialize_volume_request_ignores_its_reserved_flag_bits() {
+        let name = b"vol";
+        let request = |flags: u8| {
+            let mut r = vec![FSFunction::InitializeVolume.as_u8(), 0x31];
+            r.extend_from_slice(&1024u32.to_le_bytes());
+            r.push(flags);
+            r.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            r.extend_from_slice(name);
+            r
+        };
+
+        let mut clean = FileServer::new(FileServerConfig::default());
+        let expected = clean.handle_client_message(&req_msg(request(0x01), 0x42))[0]
+            .data
+            .clone();
+
+        let mut noisy = FileServer::new(FileServerConfig::default());
+        let out = noisy.handle_client_message(&req_msg(request(0xFD), 0x42));
+        assert_eq!(
+            out[0].data, expected,
+            "reserved flag bits must be masked, not refused"
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, se
 
     draw_title(f, state, cols[0]);
     draw_keyboard(f, state, kb, cols[1]);
-    draw_telemetry(f, state, session, cols[2]);
+    draw_telemetry(f, state, session, cols[2], "SPACE");
     draw_status(f, state, cols[3]);
 }
 
@@ -258,7 +258,7 @@ pub fn render_joystick(f: &mut Frame, state: &DriveState, pad: &PadState, sessio
 
     draw_title(f, state, cols[0]);
     draw_gamepad(f, state, pad, cols[1]);
-    draw_telemetry(f, state, session, cols[2]);
+    draw_telemetry(f, state, session, cols[2], "R2");
     draw_status(f, state, cols[3]);
 }
 
@@ -342,8 +342,8 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
         "counter rate",
     );
     y += step;
-    // SPACE — toggle autosteer engage.
-    key_wide(f, cx, y, "SPACE", 14, state.engaged, "engage");
+    // SPACE — the dead-man. Held, not toggled: lit while the hold is live.
+    key_wide(f, cx, y, "SPACE", 14, kb.kspace.lit(), "HOLD to drive");
     key(f, cx + 14, y, 'C', kb.kc.lit(), "clear stop");
 }
 
@@ -478,7 +478,15 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
 
 // ─── telemetry (6 compact lines) ─────────────────────────────────────────
 
-fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Rect) {
+/// `deadman` names the control the operator holds, so the arm prompt reads
+/// correctly in both input modes rather than always saying "R2".
+fn draw_telemetry(
+    f: &mut Frame,
+    state: &DriveState,
+    session: &Session,
+    area: Rect,
+    deadman: &str,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
@@ -554,16 +562,16 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             // fill bar; once armed, show whether we're commanding steer.
             if !state.armed {
                 if state.arm_block {
-                    // Disarmed while R2 still held — must release before re-arming.
+                    // Disarmed while still held — release before re-arming.
                     spans.push(Span::styled(
-                        "  ⚠ RELEASE R2 TO RE-ARM",
+                        format!("  ⚠ RELEASE {deadman} TO RE-ARM"),
                         Style::default().fg(RED).add_modifier(Modifier::BOLD),
                     ));
                 } else {
                     let filled = (state.arm_progress * 6.0).round() as usize;
                     let bar: String = (0..6).map(|i| if i < filled { '█' } else { '░' }).collect();
                     spans.push(Span::styled(
-                        format!("  ⚠ HOLD R2 TO ARM [{bar}]"),
+                        format!("  ⚠ HOLD {deadman} TO ARM [{bar}]"),
                         Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
                     ));
                 }

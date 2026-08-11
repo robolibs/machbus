@@ -16,22 +16,45 @@ use super::{restore_terminal, setup_session, setup_terminal, shared_tick};
 // Key decay: intensity reaches 0 over this many seconds after last press.
 const KEY_DECAY: f64 = 1.0;
 
+/// How long SPACE may go unseen before the dead-man reads as released.
+///
+/// A terminal reports key *repeats*, not holds, and X11 defaults to roughly a
+/// 660 ms delay before the first repeat. The window therefore has to outlast
+/// that initial gap or holding SPACE would drop out immediately after the first
+/// press. That makes the keyboard dead-man coarser than the joystick's analog
+/// trigger — up to this long between letting go and disengaging — which is why
+/// the joystick is the one to use on a real machine.
+pub const DEADMAN_WINDOW_S: f64 = 0.9;
+
 pub struct Key {
     pub intensity: f64,
+    /// Seconds since the last press, for holds that need their own window
+    /// rather than the shared decay curve.
+    pub since_press: f64,
 }
 
 impl Key {
     pub fn new() -> Self {
-        Self { intensity: 0.0 }
+        Self {
+            intensity: 0.0,
+            since_press: f64::MAX,
+        }
     }
     fn press(&mut self) {
         self.intensity = 1.0;
+        self.since_press = 0.0;
     }
     fn tick(&mut self, dt: f64) {
         self.intensity = (self.intensity - dt / KEY_DECAY).max(0.0);
+        self.since_press = (self.since_press + dt).min(f64::MAX);
     }
     pub fn lit(&self) -> bool {
         self.intensity > 0.05
+    }
+    /// `true` while the key has been pressed within `window` seconds — a held
+    /// key, as opposed to one that merely decayed recently.
+    pub fn held_within(&self, window: f64) -> bool {
+        self.since_press <= window
     }
 }
 
@@ -48,6 +71,7 @@ pub struct KeyboardState {
     pub ko: Key,
     pub kx: Key,
     pub kc: Key,
+    pub kspace: Key,
     pub kenter: Key,
 }
 
@@ -66,6 +90,7 @@ impl KeyboardState {
             ko: Key::new(),
             kx: Key::new(),
             kc: Key::new(),
+            kspace: Key::new(),
             kenter: Key::new(),
         }
     }
@@ -83,7 +108,27 @@ impl KeyboardState {
         self.ko.tick(dt);
         self.kx.tick(dt);
         self.kc.tick(dt);
+        self.kspace.tick(dt);
         self.kenter.tick(dt);
+    }
+
+    /// Zero the throttle/steer keys so a released dead-man cannot keep feeding
+    /// motion into the physics from a still-decaying keypress.
+    fn release_motion_keys(&mut self) {
+        self.kw.intensity = 0.0;
+        self.ks.intensity = 0.0;
+        self.ka.intensity = 0.0;
+        self.kd.intensity = 0.0;
+    }
+
+    #[cfg(test)]
+    pub fn press_space_for_test(&mut self) {
+        self.kspace.press();
+    }
+
+    #[cfg(test)]
+    pub fn tick_for_test(&mut self, dt: f64) {
+        self.tick(dt);
     }
 
     fn apply_physics(&self, drive: &mut super::DriveState, dt: f64) {
@@ -175,11 +220,17 @@ impl KeyboardState {
                 self.kenter.press();
                 drive.speed = 0.0;
                 drive.steer = 0.0;
-                drive.engaged = false; // stop also drops autosteer to manual
+                // Stop is a disarm, matching the joystick's A/Cross: it drops
+                // the arm latch and blocks re-arming until SPACE is seen
+                // released, so leaning on the key cannot silently resume.
+                drive.disarm();
             }
             ' ' => {
-                // Toggle engage (commands "intend to steer" on 0xAD00).
-                drive.engaged = !drive.engaged;
+                // SPACE is the dead-man, not a toggle: it must be *held*, and
+                // the terminal's auto-repeat is what keeps it alive. Engage is
+                // decided in the run loop from `held_within`, so all a press
+                // does here is refresh the window.
+                self.kspace.press();
             }
             'c' => {
                 self.kc.press();
@@ -200,9 +251,6 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
     }
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
-    // Keyboard engage is a deliberate SPACE toggle (no held dead-man), so there
-    // is nothing to arm — treat it as armed; SPACE still gates actual steering.
-    drive.armed = true;
     let mut kb = KeyboardState::new();
     let mut terminal = setup_terminal()?;
     let start = Instant::now();
@@ -234,8 +282,23 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
             }
         }
 
-        shared_tick(&mut session, &bus, &mut drive, start);
         kb.tick(dt);
+
+        // SPACE is the dead-man: held (auto-repeating) within the window, and
+        // held for ARM_HOLD_SECS to arm — the same latch the joystick uses on
+        // R2. Releasing it disengages; a stop disarms and blocks re-arming
+        // until SPACE is seen released.
+        let deadman = kb.kspace.held_within(DEADMAN_WINDOW_S);
+        let active = drive.update_arm(deadman, dt);
+        drive.engaged = active;
+        if !active {
+            // Not armed, or the dead-man is released: no new motion input.
+            // Physics still runs so the setpoint decays to a stop rather than
+            // freezing at whatever it was.
+            kb.release_motion_keys();
+        }
+
+        shared_tick(&mut session, &bus, &mut drive, start);
         kb.apply_physics(&mut drive, dt);
         drive.flush(&mut session);
         drive.update_status();
@@ -256,8 +319,6 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
 fn run_daemon(args: DriveArgs) -> Result<(), String> {
     signal::install_cancel_handler();
     let (mut session, bus, mut drive) = setup_session(&args)?;
-    // Keyboard has no held dead-man to arm; SPACE gates steering deliberately.
-    drive.armed = true;
     let mut kb = KeyboardState::new();
     let start = Instant::now();
     let mut last = start;
@@ -292,8 +353,23 @@ fn run_daemon(args: DriveArgs) -> Result<(), String> {
             }
         }
 
-        shared_tick(&mut session, &bus, &mut drive, start);
         kb.tick(dt);
+
+        // SPACE is the dead-man: held (auto-repeating) within the window, and
+        // held for ARM_HOLD_SECS to arm — the same latch the joystick uses on
+        // R2. Releasing it disengages; a stop disarms and blocks re-arming
+        // until SPACE is seen released.
+        let deadman = kb.kspace.held_within(DEADMAN_WINDOW_S);
+        let active = drive.update_arm(deadman, dt);
+        drive.engaged = active;
+        if !active {
+            // Not armed, or the dead-man is released: no new motion input.
+            // Physics still runs so the setpoint decays to a stop rather than
+            // freezing at whatever it was.
+            kb.release_motion_keys();
+        }
+
+        shared_tick(&mut session, &bus, &mut drive, start);
         kb.apply_physics(&mut drive, dt);
         drive.flush(&mut session);
 

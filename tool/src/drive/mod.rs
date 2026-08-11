@@ -406,4 +406,34 @@ mod tests {
         assert!(!d.update_arm(true, 1.0));
         assert!(d.update_arm(true, 1.0), "deliberate re-hold re-arms");
     }
+
+    /// The keyboard dead-man is SPACE *held*: the terminal's auto-repeat keeps
+    /// the window alive, and letting go disengages. It used to be a toggle with
+    /// `armed` forced true at startup, so one press engaged and it stayed
+    /// engaged with nothing held at all.
+    #[test]
+    fn the_keyboard_deadman_must_be_held() {
+        use crate::drive::keyboard::{DEADMAN_WINDOW_S, KeyboardState};
+
+        let mut kb = KeyboardState::new();
+        // Nothing pressed: the dead-man reads released.
+        assert!(!kb.kspace.held_within(DEADMAN_WINDOW_S));
+
+        kb.press_space_for_test();
+        assert!(kb.kspace.held_within(DEADMAN_WINDOW_S), "a press holds it");
+
+        // Auto-repeat inside the window keeps it alive.
+        kb.tick_for_test(DEADMAN_WINDOW_S * 0.5);
+        assert!(kb.kspace.held_within(DEADMAN_WINDOW_S));
+        kb.press_space_for_test();
+        kb.tick_for_test(DEADMAN_WINDOW_S * 0.5);
+        assert!(kb.kspace.held_within(DEADMAN_WINDOW_S));
+
+        // Stop repeating and it goes released — this is the whole point.
+        kb.tick_for_test(DEADMAN_WINDOW_S * 1.5);
+        assert!(
+            !kb.kspace.held_within(DEADMAN_WINDOW_S),
+            "releasing SPACE must read as a released dead-man"
+        );
+    }
 }

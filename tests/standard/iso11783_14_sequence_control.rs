@@ -1,5 +1,6 @@
 use machbus::isobus::sc::{
-    SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SCClient, SCClientConfig,
+    SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_MIN_SPACING_MS,
+    SCClient, SCClientConfig,
     SCClientFuncError, SCClientState, SCMaster, SCMasterConfig, SCMasterState, SCSequenceState,
     SCState, SequenceStep,
 };
@@ -84,6 +85,19 @@ fn client_playback(step_id: u8) -> [u8; 8] {
         SCClientState::Enabled.as_u8(),
         step_id,
         SCSequenceState::PlayBack.as_u8(),
+        0,
+        0xFF,
+        0xFF,
+        0xFF,
+    ]
+}
+
+fn client_abort(step_id: u8) -> [u8; 8] {
+    [
+        SC_MSG_CODE_CLIENT,
+        SCClientState::Enabled.as_u8(),
+        step_id,
+        SCSequenceState::Abort.as_u8(),
         0,
         0xFF,
         0xFF,
@@ -460,6 +474,59 @@ fn sequence_control_master_halts_when_an_acknowledged_client_goes_silent() {
         .expect("a silent client must produce an abort status");
     assert!(master.is(SCState::Error));
     assert_eq!(halted[3], SCSequenceState::Abort.as_u8());
+}
+
+/// G3 — ISO 11783-14 §4.4.7.3: the master returns to Ready once every enabled
+/// SCC has confirmed the abort. `SCState::Error` was a terminal sink, so an
+/// aborted master could never run another sequence.
+#[test]
+fn sequence_control_master_returns_to_ready_after_every_client_confirms_the_abort() {
+    let mut master = SCMaster::new(SCMasterConfig::default().with_required_client_count(2));
+    master.add_step(sc_step(7)).unwrap();
+    master.add_step(sc_step(8)).unwrap();
+    master.start().unwrap();
+
+    for addr in [0x20, 0x21] {
+        master
+            .try_handle_client_status(&client_status(addr, client_ready()))
+            .unwrap();
+    }
+    assert!(master.is(SCState::Active));
+
+    master.abort().unwrap();
+    assert!(master.is(SCState::Error));
+
+    // One confirmation is not enough while a second client is enabled.
+    master
+        .try_handle_client_status(&client_status(0x20, client_abort(7)))
+        .unwrap();
+    assert!(master.is(SCState::Error));
+
+    // A client that falls back out of Abort withdraws its confirmation, so the
+    // set has to be simultaneous, not cumulative.
+    master
+        .try_handle_client_status(&client_status(0x20, client_ready()))
+        .unwrap();
+    master
+        .try_handle_client_status(&client_status(0x21, client_abort(7)))
+        .unwrap();
+    assert!(master.is(SCState::Error));
+
+    master
+        .try_handle_client_status(&client_status(0x20, client_abort(7)))
+        .unwrap();
+    assert!(
+        master.is(SCState::Ready),
+        "§4.4.7.3 — a fully confirmed abort returns the master to Ready"
+    );
+
+    // The aborted run is discarded, not resumed.
+    assert_eq!(master.current_step().map(|s| s.step_id), Some(7));
+    let status = master
+        .update(SC_STATUS_MIN_SPACING_MS)
+        .expect("the return to Ready is protocol-visible");
+    assert_eq!(status[1], SCMasterState::Active.as_u8());
+    assert_eq!(status[3], SCSequenceState::Ready.as_u8());
 }
 
 /// G2 — ISO 11783-14 F.2: "A timeout of 600 ms for the SCMasterStatus message

@@ -59,6 +59,13 @@ pub struct SCMaster {
     client_seen: BTreeMap<u8, u32>,
     ready_clients: HashSet<u8>,
     active_ack_clients: HashSet<u8>,
+    /// Clients that have reported the Abort sequence state while the master is
+    /// in Abort.
+    ///
+    /// G3 — §4.4.7.3 has the master return to Ready once every enabled SCC has
+    /// confirmed the abort. `SCState::Error` used to be a terminal sink, so the
+    /// only way to run another sequence was to build a new `SCMaster`.
+    abort_confirmed: HashSet<u8>,
     busy_nv_memory: bool,
     busy_parsing_scd: bool,
 
@@ -92,6 +99,7 @@ impl SCMaster {
             client_seen: BTreeMap::new(),
             ready_clients: HashSet::new(),
             active_ack_clients: HashSet::new(),
+            abort_confirmed: HashSet::new(),
             busy_nv_memory: false,
             busy_parsing_scd: false,
             on_state_change: Event::new(),
@@ -421,6 +429,22 @@ impl SCMaster {
             return Ok(());
         }
 
+        // G3 — collect the abort confirmations §4.4.7.3 asks for. A client that
+        // falls back out of Abort withdraws its confirmation, so the master only
+        // leaves the fault state on a complete, simultaneous set. A client that
+        // goes silent simply keeps the master in Abort, which is the safe end.
+        if self.state_machine.is(SCState::Error) {
+            if mapped_state == SCState::Error {
+                self.abort_confirmed.insert(client_addr);
+            } else {
+                self.abort_confirmed.remove(&client_addr);
+            }
+            if self.abort_confirmed.len() >= self.config.required_client_count() {
+                self.rearm_after_abort();
+            }
+            return Ok(());
+        }
+
         if self.state_machine.is(SCState::Ready) && mapped_state != SCState::Ready {
             self.ready_clients.remove(&client_addr);
         }
@@ -470,8 +494,30 @@ impl SCMaster {
         if old == new_state {
             return;
         }
+        if matches!(new_state, SCState::Error) {
+            self.abort_confirmed.clear();
+        }
         self.state_machine.transition(new_state);
         self.on_state_change.emit(&(old, new_state));
+    }
+
+    /// Leave Abort for Ready once every enabled SCC has confirmed (§4.4.7.3).
+    /// The aborted run is discarded, not resumed: the sequence restarts from
+    /// the first step, so a later `step_completed` cannot credit a step the
+    /// abort already invalidated.
+    fn rearm_after_abort(&mut self) {
+        self.abort_confirmed.clear();
+        self.ready_clients.clear();
+        self.active_ack_clients.clear();
+        self.client_ack_received = false;
+        self.current_step_index = 0;
+        for step in &mut self.steps {
+            step.completed = false;
+        }
+        self.ready_timer_ms = 0;
+        self.active_timer_ms = 0;
+        self.transition(SCState::Ready);
+        self.status_timer_ms = self.config.status_interval_ms;
     }
 
     fn iso_master_state(&self) -> SCMasterState {

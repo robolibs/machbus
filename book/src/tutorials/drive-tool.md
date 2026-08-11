@@ -122,7 +122,10 @@ aut  ACTIVE:LIM-HI   ■ STOP:position_stale   refused:stop_condition_live
 - **STOP** — the latched trigger. Latching: it stays until explicitly cleared.
 - **refused** — why the last arm/engage/command was rejected, e.g.
   `link_down`, `mechanical_lockout`, `operator_not_engaged`,
-  `stop_condition_live`, `curvature_out_of_range`.
+  `stop_condition_live`, `curvature_out_of_range`,
+  `facility_not_advertised` (the TECU answered and does not have the class "G"
+  guidance or class "P" speed facility being commanded — see
+  [AutoDrive → the tractor has to advertise the facility](autodrive.md#the-tractor-has-to-advertise-the-facility-first)).
 
 An operator pressing engage and seeing nothing happen is the failure mode this
 line exists to prevent.

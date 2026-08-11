@@ -43,27 +43,85 @@ different messages on different PGNs with different rules.
 never waits for an assignment, and never sends a TIM message. It claims an
 address and broadcasts.
 
-> **A note on two unused refusals.** `AutodriveRefusal` declares `NoAuthority`
-> and `FacilityNotAdvertised`, which sound like TIM. Nothing in the crate ever
-> constructs them. They are placeholders for a TIM-gated path that does not
-> exist yet — do not read them as evidence that one does.
+> **`NoAuthority` is still unused.** `AutodriveRefusal::NoAuthority` sounds like
+> TIM, and nothing in the crate constructs it. It is a placeholder for a
+> TIM-gated path that does not exist yet — do not read it as evidence that one
+> does. (`FacilityNotAdvertised` *is* now produced; see below.)
+
+### The tractor has to advertise the facility first
+
+This is the part that decides whether any of it works, and it is not TIM.
+
+ISO 11783-9:2012 §4.4.2 splits tractor capability into **classes with letter
+addenda**, and steering, speed and starting to move are three separate ones:
+
+| Addendum | Clause | What it means |
+| --- | --- | --- |
+| **G** | §4.4.2.7 | The tractor "shall support the external control of the guidance system" — curvature command, estimated curvature, command status, request reset status, steering input position status, steering system readiness, mechanical lockout. |
+| **P** | §4.4.2.8 | The tractor is "capable of accepting speed and/or drive strategy commands from an implement controller". |
+| **M** | §4.4.2.9 | The tractor accepts "commands to initiate motion of the vehicle (forward or reverse)". |
+
+So a class **2G** tractor steers on command but need not accept a speed command
+at all, and even a class **2GP** tractor need not *start moving* on one — §4.4.2.8
+says outright that bringing the tractor to a stop (speed `0.0`) is **optional**
+and "can be determined by an implement via the tractor facilities response
+message".
+
+That message is the discovery mechanism, and it runs both ways:
+
+- **PGN 0xFE09 Tractor Facilities Response** — what the TECU has installed. The
+  TECU sends it at power-up and on request.
+- **PGN 0xFE0A Required Tractor Facilities** — what *you* need. §4.4.2 is blunt
+  about why this matters: "A facility is not required if its corresponding bits
+  are set to 0 in the implement CF required tractor facilities message. **The
+  Tractor ECU can then stop the transmission of this implement message to reduce
+  bandwidth.**"
+
+In other words, a conforming TECU may simply not broadcast Guidance Machine Info
+to a node that never asked for it — and `AutoDrive` refuses to engage without
+Machine Info, so the symptom is a permanent `link_down` with a tractor that is
+working perfectly.
+
+`AutoDrive` therefore broadcasts Required Tractor Facilities every
+`REQUIRED_FACILITIES_INTERVAL_MS` (1 s) once its address is claimed, asking for
+guidance + machine selected speed + speed command, and decodes the response:
+
+- Response says **no guidance** → `arm()` and `engage()` refuse with
+  `facility_not_advertised`, and a tractor that revokes it mid-drive trips a safe
+  stop.
+- Response says **no speed command** → a `DriveCommand` carrying a speed is
+  refused; a steer-only command still goes through.
+- **No response at all** → nothing is refused. Silence is not a denial, and a
+  bench, a replay or a retrofit box may never send one.
 
 ### So which do you actually need?
 
-That depends on the tractor, and the honest answer is that **machbus cannot tell
-you**:
-
 - A retrofit guidance system, a test bench, or a machine that implements the
   11783-7 messages directly will act on `AutoDrive`'s broadcasts.
-- An **AEF-certified TIM tractor** will very likely ignore a bare 0xFD43 from an
+- A tractor that advertises **G** steers on 0xAD00 without any TIM involvement.
+  That is the plain reading of §4.4.2.7 and it is why TIM is not required for
+  steering.
+- An **AEF-certified TIM tractor** may still ignore a bare 0xFD43 from an
   unauthenticated implement. Speed is the function OEMs guard hardest, and TIM
   exists precisely so that handing over speed authority is explicit and
   revocable.
 
-This book does not vendor the ISO 11783-7 or AEF 023 text, so it does not assert
-what a conformant TECU is *obliged* to do with an unauthenticated speed command.
-Treat it as an empirical question about your target machine. What is documented
-here is what machbus sends.
+### TIM is where these messages are heading
+
+ISO 11783-7:2022 **Clause 11** says so directly, naming both PGNs `AutoDrive`
+uses:
+
+> "In future editions of the ISO 11783 series, the command messages concept will
+> be moved to a new concept termed 'Tractor-Implement Management' (TIM). The new
+> concept is expected to eventually supersede or, at least, render redundant,
+> some of the tractor control related messages… The messaging most likely to be
+> impacted, and potentially deprecated, are: … Guidance system command
+> (PGN 44288) … Machine selected speed command (PGN 64835) … Drive strategy
+> command (PGN 64718)."
+
+So: TIM is **not required today** for a tractor that advertises G (and P), but
+the native command messages are explicitly flagged as the path being superseded.
+Plan for TIM on new work; do not assume you need it to steer a current machine.
 
 Also worth knowing: machbus's `TimAuthority` currently guards **PTO, hitch and
 auxiliary valves only**. There is no plugin wiring TIM speed or TIM steering, so

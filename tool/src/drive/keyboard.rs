@@ -47,6 +47,7 @@ pub struct KeyboardState {
     pub kp: Key,
     pub ko: Key,
     pub kx: Key,
+    pub kc: Key,
     pub kenter: Key,
 }
 
@@ -64,6 +65,7 @@ impl KeyboardState {
             kp: Key::new(),
             ko: Key::new(),
             kx: Key::new(),
+            kc: Key::new(),
             kenter: Key::new(),
         }
     }
@@ -80,6 +82,7 @@ impl KeyboardState {
         self.kp.tick(dt);
         self.ko.tick(dt);
         self.kx.tick(dt);
+        self.kc.tick(dt);
         self.kenter.tick(dt);
     }
 
@@ -175,8 +178,14 @@ impl KeyboardState {
                 drive.engaged = false; // stop also drops autosteer to manual
             }
             ' ' => {
-                // Toggle autosteer engage (command "intend to steer" on 0xAD00).
+                // Toggle engage (commands "intend to steer" on 0xAD00).
                 drive.engaged = !drive.engaged;
+            }
+            'c' => {
+                self.kc.press();
+                // Release a latched safe stop. AutoDrive latches, so without
+                // this the first stop would end the session's ability to drive.
+                drive.clear_requested = true;
             }
             _ => {}
         }

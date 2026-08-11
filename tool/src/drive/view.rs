@@ -8,7 +8,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use machbus::isobus::implement::guidance::GenericSaeBs02SlotValue;
 use machbus::session::Session;
-use machbus::session::plugins::{Gnss, Guidance};
+use machbus::session::plugins::{AutoDrive, Gnss};
+use machbus::session::AutomationStatus;
 
 use super::DriveState;
 use super::joystick::PadState;
@@ -28,7 +29,7 @@ pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, se
         .constraints([
             Constraint::Length(2), // title
             Constraint::Min(0),    // keyboard (takes the bulk)
-            Constraint::Length(8), // telemetry (6 content + 2 border)
+            Constraint::Length(9), // telemetry (7 content + 2 border)
             Constraint::Length(1), // status
         ])
         .split(area);
@@ -250,7 +251,7 @@ pub fn render_joystick(f: &mut Frame, state: &DriveState, pad: &PadState, sessio
         .constraints([
             Constraint::Length(2),
             Constraint::Min(0),
-            Constraint::Length(8),
+            Constraint::Length(9), // telemetry (7 content + 2 border)
             Constraint::Length(1),
         ])
         .split(area);
@@ -271,7 +272,7 @@ fn draw_title(f: &mut Frame, state: &DriveState, area: Rect) {
             .bg(CYAN)
             .add_modifier(Modifier::BOLD),
     );
-    let sub = Span::styled(" ISOBUS guidance ", Style::default().fg(GRAY));
+    let sub = Span::styled(" ISOBUS AutoDrive ", Style::default().fg(GRAY));
     let claim_dot = if state.claimed { "●" } else { "○" };
     let claim_col = if state.claimed { GREEN } else { RED };
     let claim = Span::styled(
@@ -342,7 +343,8 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     );
     y += step;
     // SPACE — toggle autosteer engage.
-    key_wide(f, cx, y, "SPACE", 14, state.engaged, "autosteer");
+    key_wide(f, cx, y, "SPACE", 14, state.engaged, "engage");
+    key(f, cx + 14, y, 'C', kb.kc.lit(), "clear stop");
 }
 
 fn key(f: &mut Frame, cx: u16, y: u16, ch: char, held: bool, hint: &str) {
@@ -488,7 +490,7 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // 6 lines max. Values + bars on the SAME line.
+    // 7 lines max. Values + bars on the SAME line.
     let lines: Vec<Line> = vec![
         // 1: Speed + bar
         line_bar(
@@ -516,7 +518,7 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
         // 4: Steering link + raw readiness + est curvature
         {
             let mut spans = vec![Span::styled("str ", Style::default().fg(GRAY))];
-            if let Some(g) = session.get::<Guidance>() {
+            if let Some(g) = session.get::<AutoDrive>() {
                 // Link liveness: are we actually receiving Machine Info (0xAC00)?
                 // This is the honest "guidance data flowing" signal — some ECUs
                 // stream valid info while never asserting readiness=on.
@@ -539,9 +541,9 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
                     format!("  rdy:{rdy}"),
                     Style::default().fg(GRAY),
                 ));
-                if let Some(est) = g.estimated_curvature() {
+                if let Some(est) = g.estimated_curvature().value() {
                     spans.push(Span::styled(
-                        format!("  est={:.1}", est),
+                        format!("  est={est:.1}"),
                         Style::default().fg(WHITE),
                     ));
                 }
@@ -622,12 +624,55 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             }
             Line::from(spans)
         },
+        // 7: AutoDrive automation status, latched stop and last refusal. The
+        // plugin refuses rather than silently ignoring, so a rejected arm or
+        // command has to be visible or it reads as "nothing happened".
+        {
+            let mut spans = vec![Span::styled("aut ", Style::default().fg(GRAY))];
+            let (label, colour) = automation_label(state.automation);
+            spans.push(Span::styled(
+                label,
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ));
+            if let Some(trigger) = state.stop_reason {
+                spans.push(Span::styled(
+                    format!("  ■ STOP:{}", trigger.as_str()),
+                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if let Some(refusal) = state.refusal {
+                spans.push(Span::styled(
+                    format!("  refused:{}", refusal.as_str()),
+                    Style::default().fg(GOLD),
+                ));
+            }
+            Line::from(spans)
+        },
     ];
 
     f.render_widget(
         Paragraph::new(lines).style(Style::default().fg(WHITE)),
         inner,
     );
+}
+
+/// ISO 11783-7 Table 45 automation status as a short label plus a colour.
+/// `ActiveLimitedHigh`/`Low` are the steering ECU reporting saturation, which is
+/// the anti-windup signal an outer loop needs — worth showing distinctly rather
+/// than lumping in with "active".
+fn automation_label(status: AutomationStatus) -> (&'static str, Color) {
+    match status {
+        AutomationStatus::ActiveNotLimited => ("ACTIVE", GREEN),
+        AutomationStatus::ActiveLimitedHigh => ("ACTIVE:LIM-HI", GOLD),
+        AutomationStatus::ActiveLimitedLow => ("ACTIVE:LIM-LO", GOLD),
+        AutomationStatus::ReadyToEnable => ("READY", CYAN),
+        AutomationStatus::Enabled => ("ENABLED", CYAN),
+        AutomationStatus::Pending => ("PENDING", CYAN),
+        AutomationStatus::NotReady => ("not-ready", GRAY),
+        AutomationStatus::Fault => ("FAULT", RED),
+        AutomationStatus::Error => ("ERROR", RED),
+        AutomationStatus::Unavailable | AutomationStatus::NotAvailable => ("n/a", GRAY),
+    }
 }
 
 /// A label + value + bar on ONE line. Bar fills left-to-right for 0..1.

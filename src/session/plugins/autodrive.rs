@@ -190,6 +190,27 @@ impl AutoDrive {
         Some((info, age))
     }
 
+    /// The steering system's last estimated curvature (1/km), if known.
+    ///
+    /// This is what the wheels are actually producing, which is not necessarily
+    /// what was commanded — always read it back rather than assuming.
+    #[must_use]
+    pub fn estimated_curvature(&self) -> Signal<f64> {
+        self.latest
+            .map_or(Signal::NotAvailable, |m| m.estimated_curvature)
+    }
+
+    /// The steering system's last self-reported readiness slot, if any Machine
+    /// Info has arrived — for displaying the raw state verbatim.
+    ///
+    /// Some machines never populate this and stream valid Machine Info while
+    /// leaving it `NotAvailable`, so prefer [`is_link_alive`](Self::is_link_alive)
+    /// to decide whether guidance data is flowing.
+    #[must_use]
+    pub fn steering_readiness_state(&self) -> Option<GenericSaeBs02SlotValue> {
+        self.latest.map(|m| m.steering_system_readiness_state)
+    }
+
     /// Move to *ready to enable*: the machine is answering and nothing is
     /// blocking, but no setpoint is being commanded yet.
     ///

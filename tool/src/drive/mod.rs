@@ -1,4 +1,4 @@
-//! `machbus drive` — ISOBUS guidance + telemetry TUI.
+//! `machbus drive` — ISOBUS AutoDrive (steering + speed) + telemetry TUI.
 //!
 //! Input uses a **continuous intensity** model instead of binary on/off.
 //! Each press sets intensity to 1.0; it decays smoothly toward 0 over
@@ -19,7 +19,8 @@ use std::time::Instant;
 
 use machbus::net::Name;
 use machbus::session::Session;
-use machbus::session::plugins::{Gnss, Guidance, Implement};
+use machbus::session::plugins::{AutoDrive, Gnss, Implement, ShortcutButton};
+use machbus::session::{AutodriveRefusal, AutomationStatus, DriveCommand, SafeStopTrigger};
 use machbus::time::Instant as MbInstant;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -57,6 +58,23 @@ pub struct DriveState {
     /// After a disarm, block re-arming until the dead-man is fully released, so
     /// hitting stop while still holding R2 cannot silently re-arm.
     pub arm_block: bool,
+    /// The last refusal from `arm`/`engage`/`command`, so a rejected request is
+    /// visible instead of looking like nothing happened.
+    pub refusal: Option<AutodriveRefusal>,
+    /// Why AutoDrive latched a safe stop, if it did. Latching: it stays until
+    /// the operator clears it.
+    pub stop_reason: Option<SafeStopTrigger>,
+    /// The ISO 11783-7 Table 45 automation status the plugin is reporting,
+    /// including the limit states the steering ECU feeds back.
+    pub automation: AutomationStatus,
+    /// Operator asked to release a latched safe stop. Routed as a request
+    /// because the input handlers have no session; `flush` performs it.
+    ///
+    /// Deliberately its own key rather than folded into engage: clearing a
+    /// fault is not by itself consent to move, and `AutoDrive::clear_stop`
+    /// refuses anyway while the shortcut button is held or a GNSS hazard is
+    /// live.
+    pub clear_requested: bool,
 }
 
 impl DriveState {
@@ -75,6 +93,10 @@ impl DriveState {
             armed: false,
             arm_progress: 0.0,
             arm_block: false,
+            refusal: None,
+            stop_reason: None,
+            automation: AutomationStatus::NotReady,
+            clear_requested: false,
         }
     }
 
@@ -105,6 +127,14 @@ impl DriveState {
                 self.arm_progress = (self.arm_progress + dt / ARM_HOLD_SECS).min(1.0);
                 if self.arm_progress >= 1.0 {
                     self.armed = true;
+                    // Completing the hold is the joystick's explicit clear
+                    // gesture: the operator released the dead-man and held it
+                    // again for ARM_HOLD_SECS. Without this a single safe stop
+                    // would end the session, because AutoDrive latches and the
+                    // pad has no spare button. `clear_stop` still refuses while
+                    // the shortcut button is held or a GNSS hazard is live, so
+                    // this cannot re-arm against a live condition.
+                    self.clear_requested = true;
                 }
             } else {
                 self.arm_progress = 0.0;
@@ -181,18 +211,49 @@ impl DriveState {
         if !self.claimed {
             return;
         }
-        if let Some(g) = session.get_mut::<Guidance>() {
-            // Match the plugin's engage state to our desired (dead-man) state so
-            // commands carry "intend to steer" only while engaged. Transition
-            // only on change to avoid re-queueing an extra command every tick.
-            if self.engaged && !g.is_engaged() {
-                g.engage();
-            } else if !self.engaged && g.is_engaged() {
-                g.disengage();
-            }
-            let v = self.speed;
-            g.command_velocity(v, v * self.curvature() / 1000.0);
+        let Some(d) = session.get_mut::<AutoDrive>() else {
+            return;
+        };
+
+        if core::mem::take(&mut self.clear_requested) {
+            self.refusal = d.clear_stop().err();
         }
+
+        // Match the plugin's engage state to our desired (dead-man) state so
+        // commands carry "intend to steer" only while engaged. Transition only
+        // on change to avoid re-queueing an extra command every tick.
+        //
+        // `arm()` is AutoDrive's "preconditions met, not yet asking for the
+        // wheel" step; it has to succeed before `engage()` will. Both report
+        // the first unmet precondition, which is what we surface to the
+        // operator instead of failing silently.
+        if self.engaged && !d.is_engaged() {
+            self.refusal = d.arm().and_then(|()| d.engage()).err();
+        } else if !self.engaged && d.is_engaged() {
+            d.disengage(SafeStopTrigger::OperatorOverride);
+            self.refusal = None;
+        }
+
+        // The command is a heartbeat: AutoDrive stops on `CommandStale` if the
+        // setpoint is not refreshed within 300 ms, so this runs every tick even
+        // when nothing changed. Curvature is already in km⁻¹ here, so it goes
+        // straight through — no twist round-trip.
+        let cmd = DriveCommand {
+            speed_mps: Some(self.speed),
+            curvature_km_inv: Some(self.curvature()),
+        };
+        if let Err(refusal) = d.command(cmd) {
+            // A refused command while engaged is worth showing; while
+            // disengaged `StatusNotActive` is the normal resting state.
+            if self.engaged {
+                self.refusal = Some(refusal);
+            }
+        } else if self.engaged {
+            self.refusal = None;
+        }
+
+        self.stop_reason = d.stop_reason();
+        self.automation = d.status();
     }
 
     pub fn update_status(&mut self) {
@@ -216,7 +277,8 @@ pub fn setup_session(args: &DriveArgs) -> Result<(Session, Bus, DriveState), Str
         .with_function_code(0x80)
         .with_identity_number(0x0042);
     let mut session = Session::builder(name, addr)
-        .plug(Guidance::new())
+        .plug(AutoDrive::new())
+        .plug(ShortcutButton::new())
         .plug(Implement::new())
         .plug(Gnss::new(
             machbus::nmea::NMEAConfig::default().with_all(true),
@@ -268,4 +330,42 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
 pub fn parse_addr(spec: &str) -> Result<u8, String> {
     u8::from_str_radix(spec.trim_start_matches("0x"), 16)
         .map_err(|_| format!("--addr '{spec}': expected hex byte"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The session builder refuses two authors of one command PGN, and
+    /// `AutoDrive` and `Guidance` both transmit 0xAD00 — so leaving `Guidance`
+    /// plugged alongside the switch would fail at runtime, not compile time.
+    /// Build the real plugin set and assert it assembles.
+    #[test]
+    fn the_drive_plugin_set_is_a_legal_session() {
+        let args = DriveArgs {
+            iface: "vcan0".into(),
+            addr: "80".into(),
+            default_speed: 0.0,
+            speed_step: 0.1,
+            max_curvature: 40.0,
+            daemon: false,
+        };
+        let name = Name::default()
+            .with_self_configurable(true)
+            .with_function_code(0x80)
+            .with_identity_number(0x0042);
+        let session = Session::builder(parse_addr(&args.addr).map(|a| (name, a)).unwrap().0, 0x80)
+            .plug(AutoDrive::new())
+            .plug(ShortcutButton::new())
+            .plug(Implement::new())
+            .plug(Gnss::new(
+                machbus::nmea::NMEAConfig::default().with_all(true),
+            ))
+            .build();
+        assert!(
+            session.is_ok(),
+            "drive's plugin set must assemble: {:?}",
+            session.err()
+        );
+    }
 }

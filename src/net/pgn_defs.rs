@@ -91,7 +91,7 @@ pub const PGN_MACHINE_SPEED: Pgn = 0xF022;
 
 // ─── Guidance (ISO 11783-7) ──────────────────────────────────────────────
 
-// ─── Auxiliary Functions (ISO 11783-11) ──────────────────────────────────
+// ─── Auxiliary Functions (ISO 11783-6 Annex J) ───────────────────────────
 pub const PGN_AUX_ASSIGNMENT: Pgn = 0xFD20;
 pub const PGN_AUX_INPUT_STATUS: Pgn = 0xFD21;
 pub const PGN_AUX_INPUT_TYPE2: Pgn = 0xFD22;

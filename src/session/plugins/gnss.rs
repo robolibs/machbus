@@ -45,6 +45,18 @@ const FAST_PACKET: &[Pgn] = &[PGN_GNSS_POSITION_DATA];
 /// must not read as failed between two healthy reports.
 pub const DEFAULT_POSITION_STALE_MS: u32 = 1500;
 
+/// How long the plugin trusts the last fix *quality* before treating it as
+/// unknown.
+///
+/// Only PGN 129029 carries a fix method, an integrity flag and a satellite
+/// count, and it broadcasts at 1 Hz as a 43-byte fast packet. PGN 129025 is a
+/// single frame at 10 Hz with latitude and longitude and nothing else, and the
+/// decoder carries the previous quality forward across it — so when 129029
+/// stopped, the plugin re-asserted a stale `RTKFixed` ten times a second and
+/// kept its own position watchdog fed with it. Quality needs a watchdog of its
+/// own, on the message that actually carries quality.
+pub const DEFAULT_FIX_QUALITY_STALE_MS: u32 = 3000;
+
 /// GNSS / NMEA 2000 plugin.
 /// The GNSS hazards that must survive a `clear_stop()`.
 ///
@@ -92,6 +104,10 @@ pub struct Gnss {
     stale_ms: u32,
     position_stale: bool,
     fix_degraded: bool,
+    /// When a quality-bearing fix (PGN 129029) last arrived.
+    last_quality_at: Option<Instant>,
+    quality_stale_ms: u32,
+    quality_stale: bool,
 }
 
 impl Gnss {
@@ -107,6 +123,9 @@ impl Gnss {
             pending: Vec::new(),
             last_position_at: None,
             stale_ms: DEFAULT_POSITION_STALE_MS,
+            last_quality_at: None,
+            quality_stale_ms: DEFAULT_FIX_QUALITY_STALE_MS,
+            quality_stale: false,
             position_stale: false,
             fix_degraded: false,
         }
@@ -115,6 +134,17 @@ impl Gnss {
     /// Override the position staleness window. Zero disables the watchdog,
     /// which is only appropriate when nothing safety-relevant consumes GNSS.
     #[must_use]
+    pub const fn with_fix_quality_stale_ms(mut self, ms: u32) -> Self {
+        self.quality_stale_ms = ms;
+        self
+    }
+
+    /// Whether the last fix quality is older than the quality watchdog allows.
+    #[must_use]
+    pub const fn is_fix_quality_stale(&self) -> bool {
+        self.quality_stale
+    }
+
     pub const fn with_position_stale_ms(mut self, ms: u32) -> Self {
         self.stale_ms = ms;
         self
@@ -180,13 +210,21 @@ impl Plugin for Gnss {
     }
 
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
+        // Only 129029 carries fix quality; 129025 is coordinates alone. Note
+        // which one arrived *before* decoding, because the merged
+        // `GNSSPosition` no longer says where its quality came from.
+        let carries_quality = msg.pgn == PGN_GNSS_POSITION_DATA;
         self.iface.handle_message(msg);
+        if carries_quality {
+            self.last_quality_at = Some(ctx.now());
+            self.quality_stale = false;
+        }
         let drained: Vec<GnssEvent> = self.collected.borrow_mut().drain(..).collect();
         for event in drained {
             if let GnssEvent::Position(pos) = &event {
                 self.last_position_at = Some(ctx.now());
                 self.position_stale = false;
-                let usable = fix_is_steerable(pos.fix_type);
+                let usable = !self.quality_stale && fix_is_steerable(pos.fix_type, pos.integrity);
                 if !usable && !self.fix_degraded {
                     self.fix_degraded = true;
                     ctx.emit(Event::Gnss(GnssEvent::FixDegraded {
@@ -220,6 +258,24 @@ impl Plugin for Gnss {
                 ctx.emit(Event::Gnss(GnssEvent::PositionStale { silent_for_ms }));
             }
         }
+
+        // A fix method nobody has re-confirmed is not a fix method. Degrade
+        // rather than keep steering on the last thing 129029 happened to say.
+        if self.quality_stale_ms > 0
+            && !self.quality_stale
+            && let Some(seen) = self.last_quality_at
+            && ctx.now().millis_since(seen) >= self.quality_stale_ms
+        {
+            self.quality_stale = true;
+            if !self.fix_degraded {
+                self.fix_degraded = true;
+                let fix_type = self
+                    .iface
+                    .latest_position()
+                    .map_or(crate::nmea::GNSSFixType::Unavailable, |p| p.fix_type);
+                ctx.emit(Event::Gnss(GnssEvent::FixDegraded { fix_type }));
+            }
+        }
         None
     }
 
@@ -232,11 +288,21 @@ impl Plugin for Gnss {
     }
 }
 
-/// Whether a reported fix method is one an autonomy path may steer on.
+/// Whether a reported fix is one an autonomy path may steer on.
+///
 /// Dead reckoning is deliberately excluded: it is a position estimate with no
 /// satellite input, which is exactly the case that must stop the machine.
-fn fix_is_steerable(fix: crate::nmea::GNSSFixType) -> bool {
+///
+/// DD209 integrity is part of the answer, not decoration. A receiver can report
+/// RTK Fixed *and* Caution — the signature of an ephemeris fault or an
+/// unresolved integer ambiguity — and that combination used to be
+/// indistinguishable from a healthy fix because the field was decoded, range-
+/// checked and then dropped.
+fn fix_is_steerable(fix: crate::nmea::GNSSFixType, integrity: crate::nmea::GNSSIntegrity) -> bool {
     use crate::nmea::GNSSFixType as F;
+    if integrity.is_degraded() {
+        return false;
+    }
     matches!(
         fix,
         F::GNSSFix | F::DGNSSFix | F::PreciseGNSS | F::RTKFixed | F::RTKFloat | F::SimulateMode

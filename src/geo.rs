@@ -285,11 +285,61 @@ pub fn to_ned(origin: Geo, wgs: Wgs) -> frame::Ned {
     concord::to_ned(origin.into(), wgs.into()).into()
 }
 
+/// `cos(x)` for `x` in radians over `[-pi/2, pi/2]`, without libm.
+///
+/// Latitude never leaves that interval, so no range reduction is needed and a
+/// truncated Taylor series is enough: the first dropped term is
+/// `x^16 / 16!`, under `2e-11` at the poles — nanometres once scaled by
+/// metres-per-degree.
+#[must_use]
+fn cos_unit_interval(x: f64) -> f64 {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    let x6 = x4 * x2;
+    let x8 = x4 * x4;
+    let x10 = x8 * x2;
+    let x12 = x8 * x4;
+    let x14 = x8 * x6;
+    1.0 - x2 / 2.0 + x4 / 24.0 - x6 / 720.0 + x8 / 40_320.0 - x10 / 3_628_800.0
+        + x12 / 479_001_600.0
+        - x14 / 87_178_291_200.0
+}
+
+/// Metres per degree of latitude and of longitude at `latitude_deg`, from the
+/// usual WGS-84 series.
+///
+/// Public because it is the scale factor any caller needs to turn a
+/// latitude/longitude delta into metres, and because the embedded ENU/NED path
+/// is built on it.
+///
+/// This used to be a flat `111_320.0` on both axes, with no `cos(latitude)` on
+/// the east axis at all: at 52 °N that is a **62 % east-axis error**, silently,
+/// on a value that feeds autosteer. `embedded` is a supported profile with
+/// examples, so gating the surface off would have removed working code; the
+/// series below is libm-free, so it runs everywhere.
+///
+/// Every harmonic is expanded from `cos(latitude)` with the double- and
+/// triple-angle identities, so [`cos_unit_interval`] is the only transcendental
+/// call and the whole thing stays polynomial.
+#[must_use]
+pub fn metres_per_degree_at(latitude_deg: f64) -> (f64, f64) {
+    let phi = latitude_deg * core::f64::consts::PI / 180.0;
+    let c1 = cos_unit_interval(phi);
+    let c2 = 2.0 * c1 * c1 - 1.0;
+    let c3 = 4.0 * c1 * c1 * c1 - 3.0 * c1;
+    let c4 = 2.0 * c2 * c2 - 1.0;
+    let c5 = 16.0 * c1 * c1 * c1 * c1 * c1 - 20.0 * c1 * c1 * c1 + 5.0 * c1;
+    let c6 = 2.0 * c3 * c3 - 1.0;
+
+    let per_lat = 111_132.92 - 559.82 * c2 + 1.175 * c4 - 0.0023 * c6;
+    let per_lon = 111_412.84 * c1 - 93.5 * c3 + 0.118 * c5;
+    (per_lat, per_lon)
+}
+
 #[must_use]
 #[cfg(feature = "embedded")]
-fn metres_per_degree(_origin: Geo) -> (f64, f64) {
-    // Dependency-free approximation for `no_std` builds without libm.
-    (111_320.0, 111_320.0)
+fn metres_per_degree(origin: Geo) -> (f64, f64) {
+    metres_per_degree_at(origin.latitude)
 }
 
 #[must_use]
@@ -504,6 +554,7 @@ pub mod guidance {
 #[cfg(test)]
 mod guidance_tests {
     use super::guidance::*;
+    use super::{cos_unit_interval, metres_per_degree_at};
 
     #[test]
     fn pure_pursuit_matches_the_geometric_circle() {
@@ -589,5 +640,54 @@ mod guidance_tests {
 
         // On the line is zero regardless of how far along.
         assert!(cross_track_error((0.0, 99.0), (0.0, 0.0), (0.0, 1.0)).abs() < 1e-12);
+    }
+
+    /// The embedded ENU scale factors. This ran with a flat 111 320 m per
+    /// degree on both axes and no `cos(latitude)` at all, so the east axis was
+    /// out by 62 % at 52 °N — the value that feeds autosteer.
+    #[test]
+    fn metres_per_degree_tracks_latitude_on_both_axes() {
+        // Reference values from the WGS-84 series.
+        for (latitude, want_lat, want_lon) in [
+            (0.0, 110_574.3, 111_319.5),
+            (45.0, 111_132.0, 78_847.0),
+            (52.0, 111_267.3, 68_677.8),
+            (60.0, 111_412.3, 55_800.0),
+        ] {
+            let (per_lat, per_lon) = metres_per_degree_at(latitude);
+            assert!(
+                (per_lat - want_lat).abs() < 5.0,
+                "{latitude}: latitude scale {per_lat} vs {want_lat}"
+            );
+            assert!(
+                (per_lon - want_lon).abs() < 5.0,
+                "{latitude}: longitude scale {per_lon} vs {want_lon}"
+            );
+        }
+
+        // The old constant is what the east axis used to return everywhere.
+        let (_, per_lon_52) = metres_per_degree_at(52.0);
+        assert!(
+            (111_320.0 - per_lon_52) / per_lon_52 > 0.6,
+            "the flat constant really was over 60 % high at 52 degrees"
+        );
+
+        // Symmetric about the equator, and the poles converge to zero east.
+        let (north, north_lon) = metres_per_degree_at(37.5);
+        let (south, south_lon) = metres_per_degree_at(-37.5);
+        assert!((north - south).abs() < 1e-6);
+        assert!((north_lon - south_lon).abs() < 1e-6);
+        assert!(metres_per_degree_at(90.0).1.abs() < 1.0);
+    }
+
+    #[test]
+    fn cos_approximation_is_accurate_over_the_latitude_range() {
+        let mut degrees = -90.0_f64;
+        while degrees <= 90.0 {
+            let radians = degrees.to_radians();
+            let error = (cos_unit_interval(radians) - radians.cos()).abs();
+            assert!(error < 1e-9, "cos({degrees}) error {error}");
+            degrees += 0.5;
+        }
     }
 }

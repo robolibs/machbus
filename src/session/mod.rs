@@ -745,6 +745,152 @@ mod tests {
         assert!(session.get::<Gnss>().is_some_and(Gnss::is_position_stale));
     }
 
+    /// J2/J3 — the fix *quality* signal only exists in PGN 129029, which
+    /// broadcasts at 1 Hz. PGN 129025 arrives at 10 Hz with coordinates and
+    /// nothing else, and the decoder carries the previous quality forward, so
+    /// a stale `RTKFixed` was re-asserted ten times a second and kept feeding
+    /// the position watchdog. DD209 integrity was decoded and then dropped
+    /// entirely, so RTK Fixed + Caution looked exactly like a healthy fix.
+    #[test]
+    fn stale_or_flagged_gnss_quality_stops_the_autonomy_path() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::geo::Wgs;
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::{PGN_GNSS_POSITION_DATA, PGN_GNSS_POSITION_RAPID};
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+
+        // 129029 is a 43-byte fast packet, so it reaches the plugin as a
+        // reassembled message built from a run of single frames.
+        fn detail_frames(integrity_byte: u8) -> Vec<Frame> {
+            let mut fp = FastPacketProtocol::new();
+            fp.send(PGN_GNSS_POSITION_DATA, &detail_frame(integrity_byte), 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        fn detail_frame(integrity_byte: u8) -> Vec<u8> {
+            let mut detail = vec![0xFFu8; 43];
+            let lat_raw = (52.0_f64 * 1e16) as i64;
+            let lon_raw = (5.0_f64 * 1e16) as i64;
+            detail[7..15].copy_from_slice(&lat_raw.to_le_bytes());
+            detail[15..23].copy_from_slice(&lon_raw.to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = integrity_byte;
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            detail
+        }
+
+        fn rapid_frame() -> Frame {
+            let pos = GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            };
+            Frame::new(
+                Identifier::encode(
+                    Priority::Default,
+                    PGN_GNSS_POSITION_RAPID,
+                    0x1C,
+                    BROADCAST_ADDRESS,
+                ),
+                NMEAInterface::build_position(&pos),
+                8,
+            )
+        }
+
+        let build = || {
+            // 129029 only reaches a plugin once fast-packet reassembly is on.
+            let mut session = Session::builder(test_name(41), 0x80)
+                .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+                .plug(AutoDrive::new())
+                .plug(
+                    Gnss::new(NMEAConfig::default().with_all(true)).with_fix_quality_stale_ms(3000),
+                )
+                .build()
+                .unwrap();
+            session.start().unwrap();
+            session
+        };
+
+        // A healthy RTK Fixed with integrity Safe is steerable.
+        let mut session = build();
+        claim(&mut session);
+        let mut now = Instant::from_millis(10_000);
+        for frame in detail_frames(0xFD) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        let healthy = session
+            .get::<Gnss>()
+            .and_then(super::plugins::Gnss::latest_position)
+            .expect("the detailed fix reaches the plugin");
+        assert_eq!(healthy.fix_type, crate::nmea::GNSSFixType::RTKFixed);
+        assert_eq!(healthy.integrity, crate::nmea::GNSSIntegrity::Safe);
+        assert!(
+            session.get::<Gnss>().is_some_and(|g| !g.is_fix_degraded()),
+            "RTK Fixed reported Safe must be steerable"
+        );
+
+        // The same fix reported Caution must not be.
+        let mut flagged = build();
+        claim(&mut flagged);
+        for frame in detail_frames(0xFE) {
+            flagged.feed(0, &frame, now);
+        }
+        while flagged.poll_event().is_some() {}
+        let cautioned = flagged
+            .get::<Gnss>()
+            .and_then(super::plugins::Gnss::latest_position)
+            .expect("the detailed fix reaches the plugin");
+        assert_eq!(cautioned.integrity, crate::nmea::GNSSIntegrity::Caution);
+        assert!(
+            flagged.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "DD209 Caution must degrade the fix even at RTK Fixed"
+        );
+        assert_eq!(
+            flagged
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+        );
+
+        // Back to the healthy session: 129029 stops, 129025 keeps arriving.
+        // The position watchdog stays fed, so only a quality watchdog catches
+        // this — the whole point of the finding.
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.feed(0, &rapid_frame(), now);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(|g| !g.is_position_stale()),
+            "129025 at 10 Hz keeps the position watchdog fed"
+        );
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(Gnss::is_fix_quality_stale),
+            "a fix method nobody has re-confirmed for 4 s is stale"
+        );
+        assert!(
+            session.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "stale quality must degrade the fix"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "stale fix quality must reach the autonomy path"
+        );
+    }
+
     /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
     /// caller plugging both controllers. Both author PGN 0xAD00 from the same
     /// source address, so a safe stop commanded by one is overwritten by the

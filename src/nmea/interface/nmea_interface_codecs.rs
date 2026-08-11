@@ -1,7 +1,7 @@
 use super::definitions::{
     BatteryStatusData, COG_RESOLUTION, CURRENT_RESOLUTION, DEPTH_RESOLUTION, DOP_RESOLUTION,
     DistanceCalculationType, EngineData, FLUID_CAPACITY_RESOLUTION, FLUID_LEVEL_RESOLUTION,
-    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSSystem,
+    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSIntegrity, GNSSSystem,
     GnssSatsInViewData, HEADING_RESOLUTION, HUMIDITY_RESOLUTION, HeadingReference, HumidityData,
     HumiditySource, LAT_LON_RESOLUTION, LocalTimeOffsetData, MagneticVariationSource,
     NavigationData, OutsideEnvironmentalData, POSITION_DELTA_RESOLUTION,
@@ -1565,11 +1565,17 @@ impl NMEAInterface {
         if !gnss_position_detail_integrity_byte_is_canonical(msg.data[32]) {
             return;
         }
+        // DD209 sits in the low two bits of byte 33 (field 9). It used to be
+        // validated and then discarded, so a Caution/Unsafe RTK Fixed reached
+        // the steer gate looking exactly like a Safe one.
+        let integrity = GNSSIntegrity::try_from_u8(msg.data[32] & 0x03)
+            .expect("two-bit field covers every DD209 value");
         if !nmea_u8_count_raw_is_canonical(msg.data[33]) {
             return;
         }
         pos.gnss_system = gnss_system;
         pos.fix_type = fix_type;
+        pos.integrity = integrity;
         pos.satellites_used = if msg.data[33] == 0xFF {
             0
         } else {

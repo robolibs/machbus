@@ -42,6 +42,39 @@ repr_u8_enum!(GNSSFixType {
     Unavailable = 15,
 }, default = NoFix);
 
+// NMEA 2000 DD209 GNSS Integrity, PGN 129029 field 9 (2 bits).
+//
+// The field was validated and then thrown away: a receiver signalling Caution
+// or Unsafe — the signature of an ephemeris fault or an unresolved integer
+// ambiguity — while still reporting RTK Fixed was indistinguishable from a Safe
+// fix, so autosteer kept steering on it. `NoChecking` stays distinct from
+// `Safe`: a receiver that does not run RAIM is not one that ran it and passed.
+repr_u8_enum!(GNSSIntegrity {
+    NoChecking = 0,
+    Safe = 1,
+    Caution = 2,
+    Unsafe = 3,
+}, default = NoChecking);
+
+impl GNSSIntegrity {
+    #[must_use]
+    pub const fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::NoChecking),
+            1 => Some(Self::Safe),
+            2 => Some(Self::Caution),
+            3 => Some(Self::Unsafe),
+            _ => None,
+        }
+    }
+
+    /// Whether the receiver is actively reporting a problem with the fix.
+    #[must_use]
+    pub const fn is_degraded(self) -> bool {
+        matches!(self, Self::Caution | Self::Unsafe)
+    }
+}
+
 impl GNSSFixType {
     #[must_use]
     pub const fn from_u8(v: u8) -> Self {

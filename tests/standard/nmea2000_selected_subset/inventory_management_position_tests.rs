@@ -16,7 +16,7 @@ use machbus::nmea::{
     AISDTE, AISMode, AISNavStatus, AISRepeat, AISTransceiverInfo, AISUnit, BatteryChemistry,
     BatteryEqSupport, BatteryNominalVoltage, BatteryStatusData, BatteryType, ChargeState,
     ChargerMode, ConverterMode, DCType, DataMode, DelaySource, DistanceCalculationType, EngineData,
-    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSSystem,
+    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSIntegrity, GNSSSystem,
     HEADING_RESOLUTION, HUMIDITY_RESOLUTION, HeadingReference, HumidityData, HumiditySource,
     MOBBatteryStatus, MOBPositionSource, MOBStatus, N2K_REQUEST_TIMEOUT_MS, N2KConfigInfo,
     N2KHeartbeat, N2KManagement, N2KManagementConfig, N2KProductInfo, NMEA2000_INTERFACE_PGNS,
@@ -34,6 +34,9 @@ use std::rc::Rc;
 
 fn standard_position_detail_frame() -> Vec<u8> {
     let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
     let lat_raw = (52.0_f64 * 1e16) as i64;
     let lon_raw = (5.0_f64 * 1e16) as i64;
     let alt_raw = (12.5_f64 * 1e6) as i64;
@@ -46,6 +49,43 @@ fn standard_position_detail_frame() -> Vec<u8> {
     detail[36..38].copy_from_slice(&150u16.to_le_bytes());
     detail[42] = 0;
     detail
+}
+
+/// NMEA 2000 DD209 (PGN 129029 field 9). The field was decoded, range-checked
+/// and then discarded, so a receiver reporting RTK Fixed *and* Caution — an
+/// ephemeris fault or an unresolved integer ambiguity — was indistinguishable
+/// from a Safe fix.
+#[test]
+fn gnss_position_detail_carries_dd209_integrity() {
+    for (raw, want) in [
+        (0xFC, GNSSIntegrity::NoChecking),
+        (0xFD, GNSSIntegrity::Safe),
+        (0xFE, GNSSIntegrity::Caution),
+        (0xFF, GNSSIntegrity::Unsafe),
+    ] {
+        let mut iface = NMEAInterface::new(NMEAConfig::default());
+        let mut detail = standard_position_detail_frame();
+        detail[32] = raw;
+        iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, detail, 0x1C));
+        let pos = iface.latest_position().expect("a detailed fix decodes");
+        assert_eq!(pos.integrity, want, "byte 33 raw 0x{raw:02X}");
+        // The fix method is reported independently of integrity.
+        assert_eq!(pos.fix_type, GNSSFixType::GNSSFix);
+    }
+
+    // Only Caution and Unsafe are the receiver reporting a problem;
+    // NoChecking is "I did not look", which is not the same as "it is fine".
+    assert!(!GNSSIntegrity::NoChecking.is_degraded());
+    assert!(!GNSSIntegrity::Safe.is_degraded());
+    assert!(GNSSIntegrity::Caution.is_degraded());
+    assert!(GNSSIntegrity::Unsafe.is_degraded());
+
+    // The reserved bits are still required to be sent as ones.
+    let mut iface = NMEAInterface::new(NMEAConfig::default());
+    let mut bad = standard_position_detail_frame();
+    bad[32] = 0x01;
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, bad, 0x1C));
+    assert!(iface.latest_position().is_none());
 }
 
 fn nmea0183_with_checksum(body: &str) -> String {

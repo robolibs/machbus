@@ -968,7 +968,7 @@ pub struct PyGnssPosition {
 
 impl PyGnssPosition {
     fn to_rust(&self) -> GNSSPosition {
-        use crate::nmea::definitions::{GNSSFixType, GNSSSystem};
+        use crate::nmea::definitions::{GNSSFixType, GNSSIntegrity, GNSSSystem};
         GNSSPosition {
             wgs: Wgs::new(
                 self.latitude,
@@ -983,6 +983,7 @@ impl PyGnssPosition {
             pdop: self.pdop,
             vdop: self.vdop,
             satellites_used: self.satellites_used,
+            integrity: GNSSIntegrity::NoChecking,
             fix_type: GNSSFixType::from_u8(self.fix_type),
             gnss_system: GNSSSystem::try_from_u8(self.gnss_system).unwrap_or(GNSSSystem::GPS),
             geoidal_separation_m: self.geoidal_separation_m,

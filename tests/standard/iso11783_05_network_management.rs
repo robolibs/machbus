@@ -2,10 +2,10 @@ use machbus::j1939::pgn_request;
 use machbus::net::pgn_defs::{PGN_ADDRESS_CLAIMED, PGN_REQUEST};
 use machbus::net::pgn_defs::{PGN_COMMANDED_ADDRESS, PGN_NAME_MANAGEMENT};
 use machbus::net::{
-    ADDRESS_CLAIM_RTXD_MAX_MS, ADDRESS_CLAIM_TIMEOUT_MS, AddressClaimer, BROADCAST_ADDRESS, CfState, ClaimState, Frame,
-    Identifier, InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS, Name, NameFilter,
-    NameFilterField, NameManagementMsg, NameManager, NameMgmtMode, NameNackReason, NetworkConfig,
-    Priority,
+    ADDRESS_CLAIM_RTXD_MAX_MS, ADDRESS_CLAIM_TIMEOUT_MS, AddressClaimer, BROADCAST_ADDRESS,
+    CfState, ClaimState, Frame, Identifier, InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS,
+    Name, NameFilter, NameFilterField, NameManagementMsg, NameManager, NameMgmtMode,
+    NameNackReason, NetworkConfig, Priority,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -120,7 +120,10 @@ fn network_management_request_address_claim_response_follows_claim_state() {
     assert_eq!(cf.cf().state, CfState::Offline);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let contest_window_reply = claimer.handle_request_for_claim(&mut cf);
     assert_eq!(contest_window_reply.len(), 1);
     assert_eq!(contest_window_reply[0].pgn(), PGN_ADDRESS_CLAIMED);
@@ -162,7 +165,10 @@ fn network_management_address_claim_contest_is_name_ordered_and_state_safe() {
         .subscribe(move |_| *lost_log.borrow_mut() += 1);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let unrelated = claimer.handle_claim(&mut cf, 0x42, name_with_identity(0x001, true));
     assert!(
         unrelated.is_empty(),
@@ -202,7 +208,10 @@ fn network_management_address_claim_loser_reclaims_after_delay_without_going_onl
     let request = claimer.start(&mut cf);
     assert_eq!(request.len(), 1);
     assert_eq!(request[0].pgn(), PGN_REQUEST);
-    let claim = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let claim = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     assert_eq!(claim.len(), 1);
     assert_eq!(claim[0].pgn(), PGN_ADDRESS_CLAIMED);
     assert_eq!(cf.claim_state(), ClaimState::WaitForContest);
@@ -242,7 +251,10 @@ fn network_management_delayed_reclaim_does_not_answer_with_yielded_address() {
     let mut claimer = AddressClaimer::new(25);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let winner = name_with_identity(0x100, true);
     assert!(
         claimer.handle_claim(&mut cf, 0x80, winner).is_empty(),
@@ -284,7 +296,10 @@ fn network_management_reclaim_random_delay_is_clamped_to_standard_window() {
     let mut claimer = AddressClaimer::new(ADDRESS_CLAIM_RTXD_MAX_MS + 500);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let better_name = name_with_identity(0x001, true);
     assert!(
         claimer.handle_claim(&mut cf, 0x80, better_name).is_empty(),
@@ -317,7 +332,10 @@ fn network_management_pending_reclaim_rechecks_newly_occupied_address_before_tra
     let mut claimer = AddressClaimer::new(10);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     assert!(
         claimer
             .handle_claim(&mut cf, 0x80, name_with_identity(0x001, true))
@@ -352,7 +370,10 @@ fn network_management_pending_reclaim_fails_if_all_later_addresses_become_occupi
     let mut claimer = AddressClaimer::new(10);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let _ = claimer.handle_claim(&mut cf, 0x80, name_with_identity(0x001, true));
 
     for address in 0..=MAX_ADDRESS {
@@ -377,7 +398,10 @@ fn network_management_cannot_claim_paths_use_null_source_and_do_not_retry() {
     let mut fixed = InternalCf::new(name_with_identity(0x999, false), 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
     let _ = claimer.start(&mut fixed);
-    let _ = claimer.update(&mut fixed, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut fixed,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
 
     let cannot_claim = claimer.handle_claim(&mut fixed, 0x80, name_with_identity(0x100, false));
     assert_eq!(cannot_claim.len(), 1);
@@ -403,7 +427,10 @@ fn network_management_cannot_claim_paths_use_null_source_and_do_not_retry() {
     let mut duplicate = InternalCf::new(duplicate_name, 0, 0x90);
     let mut duplicate_claimer = AddressClaimer::new(25);
     let _ = duplicate_claimer.start(&mut duplicate);
-    let _ = duplicate_claimer.update(&mut duplicate, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = duplicate_claimer.update(
+        &mut duplicate,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let cannot_resolve = duplicate_claimer.handle_duplicate_name(&mut duplicate);
     assert_eq!(cannot_resolve.len(), 1);
     assert_eq!(cannot_resolve[0].source(), NULL_ADDRESS);
@@ -423,7 +450,10 @@ fn network_management_duplicate_name_cancels_pending_reclaim_without_retry() {
     let mut claimer = AddressClaimer::new(25);
 
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     assert!(
         claimer
             .handle_claim(&mut cf, 0x80, name_with_identity(0x100, true))
@@ -496,7 +526,10 @@ fn network_management_saturated_self_configurable_loser_does_not_reuse_observed_
     let mut cf = InternalCf::new(name_with_identity(0xFFFF, true), 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
     let _ = claimer.start(&mut cf);
-    let _ = claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
 
     for addr in 0..=MAX_ADDRESS {
         if addr != 0x80 {
@@ -559,9 +592,14 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
 
     local.start_address_claiming().unwrap();
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 120, 10, |_, b| {
-            b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "local CF did not claim its preferred address"
     );
     assert_eq!(local.internal_cf(local_cf).unwrap().address(), 0x80);
@@ -598,9 +636,14 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
     );
 
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 120, 10, |_, b| {
-            b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "reclaimed address did not settle after the contest window"
     );
     let claimed = local.internal_cf(local_cf).unwrap();
@@ -1272,9 +1315,14 @@ fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
     let stranded_cf = stranded.create_internal(stranded_name, 0, 0x80).unwrap();
     stranded.start_address_claiming().unwrap();
     assert!(
-        pump_net_pair_until(&mut commander, &mut stranded, &mut topology, 120, 10, |_, b| {
-            b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "the CF did not claim its preferred address"
     );
 
@@ -1285,9 +1333,14 @@ fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
         )
         .unwrap();
     assert!(
-        pump_net_pair_until(&mut commander, &mut stranded, &mut topology, 120, 10, |_, b| {
-            b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Failed
-        }),
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Failed }
+        ),
         "a non-self-configurable CF that loses arbitration must end in cannot-claim"
     );
     assert_eq!(
@@ -1301,9 +1354,14 @@ fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
         .unwrap();
     commander.start_address_claiming().unwrap();
     assert!(
-        pump_net_pair_until(&mut commander, &mut stranded, &mut topology, 120, 10, |a, _| {
-            a.internal_cf(commander_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |a, _| { a.internal_cf(commander_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "the commander did not claim"
     );
 
@@ -1319,9 +1377,14 @@ fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
         )
         .unwrap();
     assert!(
-        pump_net_pair_until(&mut commander, &mut stranded, &mut topology, 200, 10, |_, b| {
-            b.internal_cf(stranded_cf).unwrap().address() == 0x8A
-        }),
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            200,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().address() == 0x8A }
+        ),
         "a cannot-claim CF must act on a commanded address"
     );
 

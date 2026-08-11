@@ -4,7 +4,7 @@
 //! the position type. Hosted builds with `geo-concord` use the richer `concord`
 //! conversions; embedded/no-concord builds keep lightweight in-crate geodesy.
 
-use super::definitions::{GNSSFixType, GNSSSystem};
+use super::definitions::{GNSSFixType, GNSSIntegrity, GNSSSystem};
 use crate::geo::{
     Ecf, Geo, Wgs, batch_to_ecf, batch_to_enu, batch_to_ned, batch_to_wgs, batch_to_wgs_from_enu,
     batch_to_wgs_from_ned, frame::Enu, frame::Ned, to_ecf,
@@ -34,6 +34,10 @@ pub struct GNSSPosition {
     pub vdop: Option<f64>,
     pub satellites_used: u8,
     pub fix_type: GNSSFixType,
+    /// DD209 integrity from PGN 129029 field 9. Carried separately from
+    /// [`Self::fix_type`]: a receiver can report RTK Fixed *and* Caution, and
+    /// that combination used to be indistinguishable from a healthy fix.
+    pub integrity: GNSSIntegrity,
     pub gnss_system: GNSSSystem,
     pub geoidal_separation_m: Option<f64>,
     pub rate_of_turn_rps: Option<f64>,
@@ -55,6 +59,7 @@ impl Default for GNSSPosition {
             vdop: None,
             satellites_used: 0,
             fix_type: GNSSFixType::NoFix,
+            integrity: GNSSIntegrity::NoChecking,
             gnss_system: GNSSSystem::GPS,
             geoidal_separation_m: None,
             rate_of_turn_rps: None,

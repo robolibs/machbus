@@ -76,6 +76,12 @@ mod tests {
             .subscribe(move |_| *seen.borrow_mut() += 1);
 
         let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
         detail[7..15].copy_from_slice(&i64::MAX.to_le_bytes());
         detail[15..23].copy_from_slice(&i64::MAX.to_le_bytes());
         detail[23..31].copy_from_slice(&i64::MAX.to_le_bytes());
@@ -100,6 +106,12 @@ mod tests {
         // A detailed fix (129029) establishes RTK quality, the satellite count
         // and an altitude — none of which 129025 can carry.
         let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
         detail[0] = 0x00;
         detail[7..15].copy_from_slice(&(52_000_000_000_000_000i64).to_le_bytes());
         detail[15..23].copy_from_slice(&(5_000_000_000_000_000i64).to_le_bytes());
@@ -250,6 +262,12 @@ mod tests {
             .subscribe(move |pos| seen.borrow_mut().push(*pos));
 
         let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
         let lat_raw = (52.0_f64 * 1e16) as i64;
         let lon_raw = (5.0_f64 * 1e16) as i64;
         detail[7..15].copy_from_slice(&lat_raw.to_le_bytes());

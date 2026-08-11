@@ -17,7 +17,11 @@
 //! State mapping to the ISO wire: see private helpers
 //! `iso_master_state` / `iso_sequence_state`.
 
-use alloc::{collections::BTreeSet as HashSet, format, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet as HashSet},
+    format,
+    vec::Vec,
+};
 
 use super::types::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER,
@@ -45,6 +49,14 @@ pub struct SCMaster {
     ready_timer_ms: u32,
     active_timer_ms: u32,
     client_ack_received: bool,
+    /// Milliseconds since each client's last accepted SCClientStatus.
+    ///
+    /// G1 — ISO 11783-14 F.3 applies a 600 ms timeout in Play Back. The master
+    /// only ran a timer *until* `client_ack_received` latched, so once the
+    /// required clients had acknowledged a step it stopped watching them
+    /// entirely: a client that then lost power, dropped off the bus, or hung
+    /// never halted the sequence.
+    client_seen: BTreeMap<u8, u32>,
     ready_clients: HashSet<u8>,
     active_ack_clients: HashSet<u8>,
     busy_nv_memory: bool,
@@ -77,6 +89,7 @@ impl SCMaster {
             ready_timer_ms: 0,
             active_timer_ms: 0,
             client_ack_received: false,
+            client_seen: BTreeMap::new(),
             ready_clients: HashSet::new(),
             active_ack_clients: HashSet::new(),
             busy_nv_memory: false,
@@ -246,6 +259,30 @@ impl SCMaster {
             }
             _ => {}
         }
+
+        // G1 — F.3: "A timeout of 600 ms for the SCClientStatus message shall be
+        // applied in the 'Recording', 'Play Back' or 'Abort' state. A timeout of
+        // 3 s shall be applied in the 'Ready' state." This runs for the whole
+        // time a client is enrolled, not only until it first acknowledges.
+        if matches!(s, SCState::Ready | SCState::Active | SCState::Paused) {
+            let limit = if matches!(s, SCState::Ready) {
+                self.config.ready_timeout_ms
+            } else {
+                self.config.active_timeout_ms
+            };
+            let mut expired = false;
+            for age in self.client_seen.values_mut() {
+                *age = age.saturating_add(elapsed_ms);
+                expired |= *age >= limit;
+            }
+            if expired && !matches!(self.state_machine.state(), SCState::Error) {
+                self.client_seen.retain(|_, age| *age < limit);
+                self.transition(SCState::Error);
+                self.on_timeout.emit(&"client status timeout");
+                self.status_timer_ms = 0;
+                to_send = Some(self.encode_master_status());
+            }
+        }
         to_send
     }
 
@@ -358,6 +395,8 @@ impl SCMaster {
             ));
         }
         let client_addr = msg.source;
+        // Any well-formed status is evidence the client is still there.
+        self.client_seen.insert(client_addr, 0);
 
         let mapped_state = match client_state {
             super::types::SCClientState::Enabled => match seq_state {
@@ -911,11 +950,21 @@ mod tests {
         complete.handle_client_status(&client_status(0x41, SCSequenceState::PlayBack, 7));
         complete.handle_client_status(&client_status(0x42, SCSequenceState::PlayBack, 7));
         assert!(complete.is(SCState::Active));
+
+        // G1 — F.3 applies the 600 ms client-status timeout for the whole of
+        // Play Back, not only until the first acknowledgement. This used to
+        // assert the timeout was "disarmed" once every required client had
+        // acked, so a client that then lost power never halted the sequence.
         assert!(
-            complete.update(1_000).is_none(),
-            "all required clients acked the current step, so active timeout is disarmed"
+            complete.update(50).is_none(),
+            "no timeout before the limit"
         );
         assert!(complete.is(SCState::Active));
+        let halted = complete
+            .update(1_000)
+            .expect("silent clients must halt the sequence");
+        assert!(complete.is(SCState::Error));
+        assert_eq!(halted[3], SCSequenceState::Abort.as_u8());
     }
 
     #[test]
@@ -1031,8 +1080,24 @@ mod tests {
             0xFF,
             0xFF,
         ];
-        m.handle_client_status(&Message::new(PGN_SC_CLIENT_STATUS, current_sequence, 0x42));
-        m.update(150);
+        m.handle_client_status(&Message::new(
+            PGN_SC_CLIENT_STATUS,
+            current_sequence.clone(),
+            0x42,
+        ));
+
+        // The acknowledgement disarms the *ack* timeout. The F.3 client-status
+        // timeout is separate and keeps running, so the client has to go on
+        // reporting — here it does, at half the 100 ms limit.
+        for _ in 0..4 {
+            m.update(50);
+            assert!(m.is(SCState::Active));
+            m.handle_client_status(&Message::new(
+                PGN_SC_CLIENT_STATUS,
+                current_sequence.clone(),
+                0x42,
+            ));
+        }
         assert!(m.is(SCState::Active));
     }
 

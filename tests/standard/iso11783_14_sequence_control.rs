@@ -415,6 +415,79 @@ fn sequence_control_client_busy_spacing_and_timeout_are_protocol_visible() {
 /// The client used to emit only on change, so a conformant SCM applying its
 /// 600 ms F.3 timeout declared the client dead as soon as nothing changed —
 /// which is most of a play back. `SCMaster` has always run this cadence.
+/// G1 — ISO 11783-14 F.3: "A timeout of 600 ms for the SCClientStatus message
+/// shall be applied in the 'Recording', 'Play Back' or 'Abort' state."
+///
+/// The master ran that timer only until `client_ack_received` latched, so once
+/// the required clients had acknowledged a step it stopped watching them: a
+/// client that then lost power, dropped off the bus, or hung left the system in
+/// Play Back with its function still commanded (§4.5.2, §3.10).
+#[test]
+fn sequence_control_master_halts_when_an_acknowledged_client_goes_silent() {
+    let mut master = SCMaster::new(SCMasterConfig::default());
+    master.add_step(sc_step(7)).unwrap();
+    master.start().unwrap();
+
+    master
+        .try_handle_client_status(&client_status(0x20, client_ready()))
+        .unwrap();
+    master
+        .try_handle_client_status(&client_status(0x20, client_playback(7)))
+        .unwrap();
+    assert!(master.is(SCState::Active), "the step is acknowledged");
+
+    // While the client keeps reporting, Play Back continues.
+    for _ in 0..5 {
+        master.update(500);
+        master
+            .try_handle_client_status(&client_status(0x20, client_playback(7)))
+            .unwrap();
+        assert!(master.is(SCState::Active));
+    }
+
+    // The moment it stops, the sequence halts.
+    let halted = master
+        .update(600)
+        .expect("a silent client must produce an abort status");
+    assert!(master.is(SCState::Error));
+    assert_eq!(halted[3], SCSequenceState::Abort.as_u8());
+}
+
+/// G2 — ISO 11783-14 F.2: "A timeout of 600 ms for the SCMasterStatus message
+/// shall be applied in the 'Recording', 'Recording Completion', 'Play Back' or
+/// 'Abort' state. A timeout of 3 s shall be applied in the 'Ready' state."
+///
+/// The client had no inbound timer at all — `time_since_last_status_ms`
+/// measures its own transmit spacing — so a master that stopped transmitting
+/// left it Active with `current_step_id` set, still commanding its function.
+#[test]
+fn sequence_control_client_halts_when_the_master_goes_silent() {
+    let mut client = SCClient::new(SCClientConfig::default());
+    client
+        .try_handle_master_status(&master_status(0x10, master_ready()))
+        .unwrap();
+    client
+        .try_handle_master_status(&master_status(0x10, master_playback(7)))
+        .unwrap();
+    assert!(client.is(SCState::Active));
+
+    // A live master keeps it there.
+    for _ in 0..5 {
+        client.update(500);
+        client
+            .try_handle_master_status(&master_status(0x10, master_playback(7)))
+            .unwrap();
+        assert!(client.is(SCState::Active));
+    }
+
+    // Silence past the F.2 window drops it out of Play Back.
+    client.update(600);
+    assert!(
+        client.is(SCState::Error),
+        "a silent SCM must not leave the client driving the last commanded step"
+    );
+}
+
 #[test]
 fn sequence_control_client_emits_the_periodic_status_cadence() {
     let mut client = SCClient::new(SCClientConfig::default());
@@ -442,16 +515,34 @@ fn sequence_control_client_emits_the_periodic_status_cadence() {
     assert!(client.is(SCState::Active));
     // Drain whatever the transitions themselves queued.
     while client.update(100).is_some() {}
+    // Re-arm the F.2 reception watchdog: the drain above advanced time too.
+    client
+        .try_handle_master_status(&master_status(0x10, master_playback(7)))
+        .unwrap();
 
+    // F.3 gives 5 messages per second in Play Back, i.e. one per 200 ms. Tick
+    // inside the 600 ms F.2 master-status window so the G2 reception watchdog
+    // is not what ends the run.
     let mut emitted = 0;
-    for _ in 0..10 {
+    for _ in 0..5 {
         if client.update(100).is_some() {
             emitted += 1;
         }
     }
-    assert_eq!(
-        emitted, 5,
-        "Play Back requires 5 messages per second, not one per state change"
+    // Two or three depending on where the drain above left the cadence phase;
+    // what matters is that it keeps transmitting without any state change.
+    assert!(
+        (2..=3).contains(&emitted),
+        "Play Back is paced at 200 ms, not one message per state change: {emitted}"
+    );
+    assert!(client.is(SCState::Active));
+
+    // G2 — and once the master stops talking, the client leaves Play Back
+    // rather than continuing to drive the last commanded step (F.2, §3.10).
+    client.update(600);
+    assert!(
+        client.is(SCState::Error),
+        "a silent SCM must not leave the client commanding its function"
     );
 }
 
@@ -1032,9 +1123,13 @@ fn sequence_control_master_disabled_client_status_reopens_active_ack_timeout() {
     master
         .try_handle_client_status(&client_status(0x20, client_playback(7)))
         .unwrap();
+    // G1 — the acknowledgement disarms the *missing-ack* timeout, but F.3's
+    // 600 ms client-status timeout runs for the whole of Play Back. This used
+    // to advance a full second and assert the master stayed Active, which is
+    // the defect: a client that goes silent after acking never halts it.
     assert!(
-        master.update(1_000).is_none(),
-        "an active acknowledgement suppresses the missing-ack timeout while it remains valid"
+        master.update(100).is_none(),
+        "an active acknowledgement suppresses the missing-ack timeout"
     );
     assert!(master.is(SCState::Active));
 

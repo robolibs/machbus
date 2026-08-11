@@ -39,6 +39,16 @@ pub struct SCClient {
 
     time_since_last_status_ms: u32,
     status_pending: bool,
+    /// Milliseconds since the last accepted `SCMasterStatus`.
+    ///
+    /// G2 — ISO 11783-14 F.2 applies a 600 ms timeout in Recording / Recording
+    /// Completion / Play Back / Abort, and 3 s in Ready.
+    /// `time_since_last_status_ms` measures this client's own *transmit*
+    /// spacing, so there was no inbound timer at all: if the active SCM stopped
+    /// transmitting — power cycle, bus-off, address-claim loss — the client
+    /// stayed Active with `current_step_id` set and kept commanding its
+    /// function, which is the opposite of §3.10's safe state.
+    master_status_age_ms: u32,
 
     current_step_id: u16,
 
@@ -60,6 +70,7 @@ impl SCClient {
             busy_timer_ms: 0,
             time_since_last_status_ms: u32::MAX, // first send not throttled
             status_pending: false,
+            master_status_age_ms: 0,
             current_step_id: 0,
             on_state_change: Event::new(),
             on_sequence_start: Event::new(),
@@ -111,6 +122,28 @@ impl SCClient {
     /// the busy-pause timeout.
     pub fn update(&mut self, elapsed_ms: u32) -> Option<[u8; 8]> {
         self.time_since_last_status_ms = self.time_since_last_status_ms.saturating_add(elapsed_ms);
+
+        // G2 — F.2: "A timeout of 600 ms for the SCMasterStatus message shall be
+        // applied in the 'Recording', 'Recording Completion', 'Play Back' or
+        // 'Abort' state. A timeout of 3 s shall be applied in the 'Ready'
+        // state." Losing the master is a communication error (§4.5.2), and
+        // §3.10 requires the client to reach its safe state rather than keep
+        // driving the last commanded step.
+        if !self.state_machine.is(SCState::Idle) {
+            self.master_status_age_ms = self.master_status_age_ms.saturating_add(elapsed_ms);
+            let limit = if self.state_machine.is(SCState::Ready) {
+                self.config.master_timeout_ready_ms
+            } else {
+                self.config.master_timeout_active_ms
+            };
+            if self.master_status_age_ms >= limit && !self.state_machine.is(SCState::Error) {
+                self.transition(SCState::Error);
+                self.on_abort.emit(&());
+                self.clear_sequence_session();
+                self.status_pending = false;
+                return Some(self.encode_client_status_now());
+            }
+        }
 
         if self.busy
             && (self.state_machine.is(SCState::Active) || self.state_machine.is(SCState::Paused))
@@ -259,6 +292,9 @@ impl SCClient {
                 "SC master status has invalid sequence number",
             ));
         }
+
+        // Every accepted status re-arms the F.2 reception watchdog.
+        self.master_status_age_ms = 0;
 
         let master_state = if matches!(master_ms, SCMasterState::Active) {
             match seq_state {

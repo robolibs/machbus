@@ -387,6 +387,11 @@ pub struct SCClientConfig {
     pub active_status_interval_ms: u32,
     /// Cadence while Ready or disabled (F.3: "once per second").
     pub idle_status_interval_ms: u32,
+    /// F.2 reception timeout on `SCMasterStatus` while Recording / Recording
+    /// Completion / Play Back / Abort.
+    pub master_timeout_active_ms: u32,
+    /// F.2 reception timeout on `SCMasterStatus` while Ready.
+    pub master_timeout_ready_ms: u32,
 }
 
 impl Default for SCClientConfig {
@@ -396,6 +401,8 @@ impl Default for SCClientConfig {
             busy_pause_timeout_ms: SC_STATUS_TIMEOUT_ACTIVE_MS,
             active_status_interval_ms: SC_STATUS_ACTIVE_RATE_MS,
             idle_status_interval_ms: SC_STATUS_IDLE_RATE_MS,
+            master_timeout_active_ms: SC_STATUS_TIMEOUT_ACTIVE_MS,
+            master_timeout_ready_ms: SC_STATUS_TIMEOUT_READY_MS,
         }
     }
 }

@@ -1088,7 +1088,9 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         0x10,
     ));
 
-    let seek_req = client.seek_file(1, 0).expect("handle 1 opened");
+    let seek_req = client
+        .seek_file(1, machbus::isobus::fs::SeekMode::Start, 0)
+        .expect("handle 1 opened");
     let expected_seek_request =
         expected_fs_frame_with_tan("seek_request_handle1_zero", seek_req.data[1]);
     assert_eq!(seek_req.data.as_slice(), expected_seek_request.as_slice());

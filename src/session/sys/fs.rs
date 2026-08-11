@@ -52,10 +52,10 @@ pub enum FsEvent {
         tan: TAN,
         result: CoreResult<u16, FSError>,
     },
-    /// `seek_file` response.
+    /// `seek_file` response — `Ok(new_position)` per ISO 11783-13 C.3.3.3.
     SeekResponse {
         tan: TAN,
-        result: CoreResult<(), FSError>,
+        result: CoreResult<u32, FSError>,
     },
     /// `get_current_directory` response.
     CurrentDirectoryResponse {

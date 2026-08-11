@@ -984,14 +984,14 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::SeekFile, tan) {
             return response;
         }
-        if request.len() < 7 {
-            return encode_error_response(
-                FSFunction::SeekFile.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
-        if !fs_payload_len_is_canonical(request, 7) {
+        // C.3.3.2: byte 3 Handle, byte 4 Position Mode (B.17), bytes 5-8 a
+        // *signed* 32-bit Offset. The handler used to read a 7-byte request
+        // with an unsigned offset starting at byte 3, so it swallowed the mode
+        // byte as the offset's low byte: "seek 0 from the current position"
+        // (mode 1, offset 0) became an absolute seek to byte 1, and a rewind
+        // became a ~4 GB position. Nothing was range-checked and the new
+        // position was never returned, so bytes 5-8 read back as 0xFFFFFFFF.
+        if !fs_payload_len_is_canonical(request, SEEK_FILE_REQUEST_LEN) {
             return encode_error_response(
                 FSFunction::SeekFile.as_u8(),
                 tan,
@@ -999,27 +999,67 @@ impl FileServer {
             );
         }
         let handle = request[2];
-        let position = u32::from_le_bytes(request[3..7].try_into().unwrap());
-        if let Some(f) = self
+        let mode = request[3];
+        let offset = i64::from(i32::from_le_bytes(
+            request[4..8].try_into().expect("validated 4-byte offset"),
+        ));
+
+        let Some(file) = self
             .open_files
-            .iter_mut()
+            .iter()
             .find(|f| f.handle == handle && f.owner == client)
-        {
-            if f.is_directory {
+        else {
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle);
+        };
+        if file.is_directory {
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle);
+        }
+        let position = i64::from(file.position);
+        let end = i64::from(self.files.get(&file.path).map_or(0, |d| {
+            u32::try_from(d.len()).unwrap_or(u32::MAX)
+        }));
+
+        let base = match mode {
+            SEEK_MODE_FROM_START => 0,
+            SEEK_MODE_FROM_CURRENT => position,
+            SEEK_MODE_FROM_END => end,
+            // B.17 leaves 3-255 reserved.
+            _ => {
                 return encode_error_response(
                     FSFunction::SeekFile.as_u8(),
                     tan,
-                    FSError::InvalidHandle,
+                    FSError::InvalidAccess,
                 );
             }
-            f.position = position;
-            let mut response = vec![0xFFu8; 8];
-            response[0] = FSFunction::SeekFile.as_u8();
-            response[1] = tan;
-            response[2] = FSError::Success.as_u8();
-            return response;
+        };
+        let target = base + offset;
+
+        // C.3.3.1: past the end (unless already there) or before the start is
+        // an invalid request length, and the pointer stays put on any error.
+        if target < 0 || target > end {
+            let error = if position == end && target > end {
+                FSError::EndOfFile
+            } else {
+                FSError::InvalidLength
+            };
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, error);
         }
-        encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle)
+        let target = u32::try_from(target).expect("target is within 0..=end");
+
+        let file = self
+            .open_files
+            .iter_mut()
+            .find(|f| f.handle == handle && f.owner == client)
+            .expect("handle was just resolved");
+        file.position = target;
+
+        // C.3.3.3: byte 4 reserved, bytes 5-8 the resulting Position.
+        let mut response = vec![0xFFu8; 8];
+        response[0] = FSFunction::SeekFile.as_u8();
+        response[1] = tan;
+        response[2] = FSError::Success.as_u8();
+        response[4..8].copy_from_slice(&target.to_le_bytes());
+        response
     }
 
     fn handle_get_properties(&self, tan: TAN, request: &[u8]) -> Vec<u8> {

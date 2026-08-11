@@ -15,7 +15,7 @@ pub mod types;
 
 pub use client::{
     ClientState, FSClientOutbound, FileClient, FileClientConfig, FileDateTime,
-    FileDateTimeResponse, OpenFileInfo, PendingRequest,
+    FileDateTimeResponse, OpenFileInfo, PendingRequest, SeekMode,
 };
 pub use connection::{
     ClientConnection, ConnectionManager, FS_CLIENT_TIMEOUT_MS, FS_MAX_STATUS_BURST_PER_SEC,

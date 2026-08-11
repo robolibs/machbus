@@ -1248,7 +1248,7 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
             FsEvent::SeekResponse { tan, result } => {
                 out.kind = MachbusEventKind::FsSeekResponse;
                 out.fmi_or_sub = tan;
-                classify_fs_result(result, out, |()| 0);
+                classify_fs_result(result, out, |position| position);
             }
             FsEvent::CurrentDirectoryResponse { tan, result } => {
                 out.kind = MachbusEventKind::FsCurrentDirectoryResponse;

@@ -511,7 +511,7 @@ mod tests {
         assert!(read_err.message.contains("unknown FS file handle 99"));
         let close_err = c.try_close_file(99).unwrap_err();
         assert_eq!(close_err.code, ErrorCode::InvalidData);
-        let seek_err = c.try_seek_file(99, 0).unwrap_err();
+        let seek_err = c.try_seek_file(99, super::SeekMode::Start, 0).unwrap_err();
         assert_eq!(seek_err.code, ErrorCode::InvalidData);
         let write_unknown = c.try_write_file(99, b"abc").unwrap_err();
         assert_eq!(write_unknown.code, ErrorCode::InvalidData);

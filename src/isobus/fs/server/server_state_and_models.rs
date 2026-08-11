@@ -30,6 +30,11 @@ use crate::net::types::{Address, Pgn};
 /// A.2.3.1 allows any number of components, each up to 255 bytes.
 const FS_WIRE_STRING_MAX_LEN: usize = u16::MAX as usize;
 const READ_FILE_REQUEST_LEN: usize = 8;
+const SEEK_FILE_REQUEST_LEN: usize = 8;
+/// B.17 Position Mode.
+const SEEK_MODE_FROM_START: u8 = 0;
+const SEEK_MODE_FROM_CURRENT: u8 = 1;
+const SEEK_MODE_FROM_END: u8 = 2;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;

@@ -766,7 +766,7 @@ fn file_server_operation_cycle_preserves_tan_and_owner_scoped_handles() {
     assert_eq!(fs_count(&write[0].data), 2);
 
     let seek = server.handle_client_message(&fs_request(
-        vec![FSFunction::SeekFile.as_u8(), 0x13, handle, 0, 0, 0, 0],
+        vec![FSFunction::SeekFile.as_u8(), 0x13, handle, 0, 0, 0, 0, 0],
         0x42,
     ));
     assert_response(&seek[0].data, FSFunction::SeekFile, 0x13, FSError::Success);
@@ -833,6 +833,7 @@ fn file_server_rejects_reserved_handles_for_file_operations_without_state_mutati
                 0,
                 0,
                 0,
+                0,
             ],
             0x42,
         ));
@@ -874,7 +875,7 @@ fn file_server_rejects_reserved_handles_for_file_operations_without_state_mutati
     assert_eq!(server.open_files()[0].handle, valid_handle);
 
     let rewind = server.handle_client_message(&fs_request(
-        vec![FSFunction::SeekFile.as_u8(), 0x26, valid_handle, 0, 0, 0, 0],
+        vec![FSFunction::SeekFile.as_u8(), 0x26, valid_handle, 0, 0, 0, 0, 0],
         0x42,
     ));
     assert_response(
@@ -1300,7 +1301,7 @@ fn file_server_applies_append_and_exclusive_open_semantics() {
     );
 
     let seek = server.handle_client_message(&fs_request(
-        vec![FSFunction::SeekFile.as_u8(), 0x54, handle, 0, 0, 0, 0],
+        vec![FSFunction::SeekFile.as_u8(), 0x54, handle, 0, 0, 0, 0, 0],
         0x42,
     ));
     assert_response(&seek[0].data, FSFunction::SeekFile, 0x54, FSError::Success);

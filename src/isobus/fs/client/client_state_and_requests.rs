@@ -24,6 +24,7 @@ use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT}
 use crate::net::types::{Address, Pgn};
 
 const READ_FILE_REQUEST_LEN: usize = 8;
+const SEEK_FILE_RESPONSE_LEN: usize = 8;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;
@@ -39,6 +40,35 @@ const FILE_ATTRIBUTES_SET_ALLOWED_MASK: u8 = FileAttributes::ReadOnly as u8
     | FileAttributes::System as u8
     | FileAttributes::Archive as u8;
 const INITIALIZE_VOLUME_FLAGS_RESERVED_MASK: u8 = !0x03;
+
+/// Seek origin (ISO 11783-13:2022 B.17 Position Mode). Values 3-255 are
+/// reserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
+pub enum SeekMode {
+    #[default]
+    Start = 0,
+    Current = 1,
+    End = 2,
+}
+
+impl SeekMode {
+    #[inline]
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    #[must_use]
+    pub const fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Start),
+            1 => Some(Self::Current),
+            2 => Some(Self::End),
+            _ => None,
+        }
+    }
+}
 
 /// FS Client connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -213,7 +243,8 @@ pub struct FileClient {
     pub on_read_response: Event<(TAN, Result<Vec<u8>, FSError>)>,
     /// `(tan, Ok(bytes_written))` count.
     pub on_write_response: Event<(TAN, Result<u16, FSError>)>,
-    pub on_seek_response: Event<(TAN, Result<(), FSError>)>,
+    /// `(tan, Ok(new_position))` — C.3.3.3 reports where the pointer landed.
+    pub on_seek_response: Event<(TAN, Result<u32, FSError>)>,
     pub on_current_directory_response: Event<(TAN, Result<String, FSError>)>,
     pub on_change_directory_response: Event<(TAN, Result<String, FSError>)>,
     pub on_move_response: Event<(TAN, FileOperationResponse)>,
@@ -541,15 +572,26 @@ impl FileClient {
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
-    pub fn seek_file(&mut self, handle: FileHandle, position: u32) -> Option<FSClientOutbound> {
-        self.try_seek_file(handle, position).ok()
+    pub fn seek_file(
+        &mut self,
+        handle: FileHandle,
+        mode: SeekMode,
+        offset: i32,
+    ) -> Option<FSClientOutbound> {
+        self.try_seek_file(handle, mode, offset).ok()
     }
 
-    /// Build a `SeekFile` request for a known open handle.
+    /// Move the file pointer of `handle` by `offset` relative to `mode`
+    /// (C.3.3.2). The offset is signed, so a rewind is expressed as a negative
+    /// value from [`SeekMode::Current`] or [`SeekMode::End`].
+    ///
+    /// The request used to carry no mode at all and an unsigned absolute
+    /// position, which a conformant server read one byte out of alignment.
     pub fn try_seek_file(
         &mut self,
         handle: FileHandle,
-        position: u32,
+        mode: SeekMode,
+        offset: i32,
     ) -> NetResult<FSClientOutbound> {
         if !self.open_files.contains_key(&handle) {
             return Err(Error::invalid_data(format!(
@@ -561,7 +603,8 @@ impl FileClient {
         let tan = self.allocate_tan();
         data[1] = tan;
         data[2] = handle;
-        data[3..7].copy_from_slice(&position.to_le_bytes());
+        data[3] = mode.as_u8();
+        data[4..8].copy_from_slice(&offset.to_le_bytes());
         self.track_request(tan, FSFunction::SeekFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -1285,16 +1328,14 @@ impl FileClient {
         self.on_write_response.emit(&(tan, Ok(written)));
     }
 
+    /// C.3.3.3: byte 3 error code, byte 4 reserved, bytes 5-8 the resulting
+    /// Position. The new pointer is reported by the server, not inferred from
+    /// the request — a relative seek cannot be predicted client-side.
     fn handle_seek_response(&mut self, tan: TAN, request: &[u8], response: &[u8]) {
         let handle = if request.len() >= 3 {
             request[2]
         } else {
             INVALID_FILE_HANDLE
-        };
-        let position = if request.len() >= 7 {
-            u32::from_le_bytes(request[3..7].try_into().unwrap())
-        } else {
-            0
         };
         if response.len() < 3 {
             self.on_seek_response
@@ -1313,15 +1354,16 @@ impl FileClient {
             self.on_seek_response.emit(&(tan, Err(error)));
             return;
         }
-        if !fs_payload_len_is_canonical(response, 3) {
+        if !fs_payload_len_is_canonical(response, SEEK_FILE_RESPONSE_LEN) {
             self.on_seek_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
+        let position = u32::from_le_bytes([response[4], response[5], response[6], response[7]]);
         if let Some(info) = self.open_files.get_mut(&handle) {
             info.position = position;
         }
-        self.on_seek_response.emit(&(tan, Ok(())));
+        self.on_seek_response.emit(&(tan, Ok(position)));
     }
 
     /// C.2.2.3: error code, Total Space, Free Space, Path Name Length, path.

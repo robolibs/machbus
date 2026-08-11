@@ -738,7 +738,9 @@ fn file_client_rejects_malformed_close_and_seek_successes_before_state_mutation(
     ));
     assert_eq!(client.open_files().get(&7).unwrap().position, 0);
 
-    let seek = client.seek_file(7, 123).unwrap();
+    // A success response that is too short to carry C.3.3.3's Position field
+    // must not move the cached pointer.
+    let seek = client.seek_file(7, machbus::isobus::fs::SeekMode::Start, 123).unwrap();
     let seek_tan = seek.data[1];
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
@@ -753,25 +755,21 @@ fn file_client_rejects_malformed_close_and_seek_successes_before_state_mutation(
     assert_eq!(
         client.open_files().get(&7).unwrap().position,
         0,
-        "malformed SeekFile success must not apply the requested position"
+        "a truncated SeekFile success must not apply a position"
     );
 
-    let seek = client.seek_file(7, 123).unwrap();
+    // The pointer comes from the response, not from the request: a relative
+    // seek cannot be predicted client-side.
+    let seek = client.seek_file(7, machbus::isobus::fs::SeekMode::Current, -4).unwrap();
     let seek_tan = seek.data[1];
-    client.handle_server_response(&Message::new(
-        PGN_FILE_SERVER_TO_CLIENT,
-        vec![
-            FSFunction::SeekFile.as_u8(),
-            seek_tan,
-            FSError::Success.as_u8(),
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-        ],
-        0x80,
-    ));
+    let mut seek_ok = vec![
+        FSFunction::SeekFile.as_u8(),
+        seek_tan,
+        FSError::Success.as_u8(),
+        0xFF,
+    ];
+    seek_ok.extend_from_slice(&123u32.to_le_bytes());
+    client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, seek_ok, 0x80));
     assert_eq!(client.open_files().get(&7).unwrap().position, 123);
 
     let close = client.close_file(7).unwrap();
@@ -1322,7 +1320,7 @@ fn file_server_rejects_seek_on_directory_handles_without_position_mutation() {
     );
 
     let denied = server.handle_client_message(&fs_request(
-        vec![FSFunction::SeekFile.as_u8(), 0x51, handle, 5, 0, 0, 0],
+        vec![FSFunction::SeekFile.as_u8(), 0x51, handle, 0, 5, 0, 0, 0],
         0x42,
     ));
     assert_response(

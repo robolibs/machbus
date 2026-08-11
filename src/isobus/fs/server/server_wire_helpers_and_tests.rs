@@ -832,10 +832,12 @@ mod tests {
         let out = s.handle_client_message(&req_msg(wreq, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert_eq!(response_count(&out[0].data), 3);
-        // Seek to 0.
-        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x03, handle];
-        seek.extend_from_slice(&0u32.to_le_bytes());
-        s.handle_client_message(&req_msg(seek, 0x42));
+        // Seek back to the start (C.3.3.2 mode 0, offset 0).
+        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x03, handle, 0];
+        seek.extend_from_slice(&0i32.to_le_bytes());
+        let out = s.handle_client_message(&req_msg(seek, 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &0u32.to_le_bytes());
         // Read 3 bytes.
         let rreq = read_req(0x04, handle, 3);
         let out = s.handle_client_message(&req_msg(rreq, 0x42));
@@ -859,10 +861,18 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
     }
 
+    /// C.3.3.1: "If the Seek command tries to set the file pointer beyond the
+    /// end of file ... or before the start of the file, the response shall
+    /// contain an 'Invalid Request Length' error code ... The File pointer
+    /// position shall be changed only if the error code 'Success' is
+    /// contained in the response message."
+    ///
+    /// The old handler range-checked nothing, so a seek to `u32::MAX` on an
+    /// empty file "succeeded" and parked the pointer past the end.
     #[test]
-    fn write_rejects_position_overflow_without_growing_file() {
+    fn seek_out_of_range_is_refused_and_leaves_the_pointer_alone() {
         let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("rw.bin", Vec::new(), 0).unwrap();
+        s.add_file("rw.bin", b"abcd".to_vec(), 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
         open.push(OpenFlags::ReadWrite.bit());
@@ -870,16 +880,41 @@ mod tests {
         open.extend_from_slice(b"rw.bin");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
 
-        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x02, handle];
-        seek.extend_from_slice(&u32::MAX.to_le_bytes());
-        let out = s.handle_client_message(&req_msg(seek, 0x42));
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        let seek = |tan: u8, mode: u8, offset: i32| {
+            let mut req = vec![FSFunction::SeekFile.as_u8(), tan, handle, mode];
+            req.extend_from_slice(&offset.to_le_bytes());
+            req
+        };
 
-        let write = write_req(0x03, handle, &[0xAA]);
-        let out = s.handle_client_message(&req_msg(write, 0x42));
-        assert_eq!(out[0].data[2], FSError::NoSpace.as_u8());
-        assert_eq!(s.files.get("\\rw.bin").unwrap().len(), 0);
-        assert_eq!(s.open_files()[0].position, u32::MAX);
+        for (tan, mode, offset) in [(0x02, 0u8, i32::MAX), (0x03, 0, -1), (0x04, 2, 1)] {
+            let out = s.handle_client_message(&req_msg(seek(tan, mode, offset), 0x42));
+            assert_eq!(out[0].data[2], FSError::InvalidLength.as_u8());
+            assert_eq!(s.open_files()[0].position, 0);
+        }
+
+        // B.17 leaves 3-255 reserved.
+        let out = s.handle_client_message(&req_msg(seek(0x05, 3, 0), 0x42));
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
+        assert_eq!(s.open_files()[0].position, 0);
+
+        // Relative and end-anchored seeks inside the file land where asked and
+        // report the resulting position.
+        let out = s.handle_client_message(&req_msg(seek(0x06, 2, -1), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &3u32.to_le_bytes());
+        assert_eq!(s.open_files()[0].position, 3);
+
+        let out = s.handle_client_message(&req_msg(seek(0x07, 1, -2), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &1u32.to_le_bytes());
+        assert_eq!(s.open_files()[0].position, 1);
+
+        // Once the pointer is already at the end, moving further reports 45.
+        let out = s.handle_client_message(&req_msg(seek(0x08, 2, 0), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        let out = s.handle_client_message(&req_msg(seek(0x09, 1, 1), 0x42));
+        assert_eq!(out[0].data[2], FSError::EndOfFile.as_u8());
+        assert_eq!(s.open_files()[0].position, 4);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use crate::isobus::fs::{
     FSClientOutbound, FileClient, FileClientConfig, FileHandle, FileServerProperties,
-    FileServerStatus, TAN,
+    FileServerStatus, SeekMode, TAN,
 };
 use crate::net::pgn_defs::PGN_FILE_SERVER_TO_CLIENT;
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
@@ -113,13 +113,15 @@ impl FsClient {
         Ok(self.issue(out))
     }
 
-    /// Seek to absolute `position`; returns the TAN.
+    /// Move the file pointer by a signed `offset` relative to `mode`
+    /// (ISO 11783-13 C.3.3.2); returns the TAN. The resulting position comes
+    /// back on [`FsEvent::SeekResponse`].
     ///
     /// # Errors
     /// Not connected, or encode error.
-    pub fn seek(&mut self, handle: FileHandle, position: u32) -> Result<TAN> {
+    pub fn seek(&mut self, handle: FileHandle, mode: SeekMode, offset: i32) -> Result<TAN> {
         self.ensure_connected()?;
-        let out = self.client.try_seek_file(handle, position)?;
+        let out = self.client.try_seek_file(handle, mode, offset)?;
         Ok(self.issue(out))
     }
 

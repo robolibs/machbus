@@ -1693,9 +1693,11 @@ impl PySession {
     fn fs_client_write(&mut self, handle: u8, data: Vec<u8>) -> PyResult<u8> {
         self.fs_client()?.write(handle, &data).map_err(err_runtime)
     }
-    fn fs_client_seek(&mut self, handle: u8, position: u32) -> PyResult<u8> {
+    fn fs_client_seek(&mut self, handle: u8, mode: u8, offset: i32) -> PyResult<u8> {
+        let mode = crate::isobus::fs::SeekMode::try_from_u8(mode)
+            .ok_or_else(|| err_runtime("FS seek position mode 3-255 is reserved"))?;
         self.fs_client()?
-            .seek(handle, position)
+            .seek(handle, mode, offset)
             .map_err(err_runtime)
     }
     fn fs_client_current_directory(&mut self) -> PyResult<u8> {

@@ -295,12 +295,14 @@ bool machbus_session_fs_client_write(MachbusSession *h,
                                      uint8_t *out_tan);
 
 /**
- * Seek an open file handle to `position`. Writes the request TAN into
+ * Move an open file handle's pointer by a signed `offset` relative to `mode`
+ * (0 start, 1 current, 2 end; ISO 11783-13 B.17). Writes the request TAN into
  * `out_tan`. Requires FS client.
  */
 bool machbus_session_fs_client_seek(MachbusSession *h,
                                     uint8_t file_handle,
-                                    uint32_t position,
+                                    uint8_t mode,
+                                    int32_t offset,
                                     uint8_t *out_tan);
 
 /**

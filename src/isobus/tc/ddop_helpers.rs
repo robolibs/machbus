@@ -11,7 +11,7 @@ use super::ddi_database::{ddi, ddi_is_rate, ddi_is_total};
 use super::ddop::DDOP;
 use super::objects::{
     DDI, DeviceElement, DeviceElementType, DeviceProcessData, DeviceProperty, ElementNumber,
-    ObjectID,
+    ObjectID, TriggerMethod,
 };
 
 /// One section's geometry.
@@ -176,12 +176,22 @@ pub fn extract_rates(ddop: &DDOP) -> Vec<RateInfo> {
     rates
 }
 
+/// Every total the DDOP declares.
+///
+/// ISO 11783-10 §6.8.3 identifies a total by its **trigger method**, not by a
+/// DDI number range: a DeviceProcessData object is a total when it advertises
+/// the `Total` trigger. Selecting on a range both missed totals outside it and
+/// swept in DDIs that are not totals at all, and `editable` was hardcoded
+/// `true` regardless of whether the object declared the settable property bit.
 #[must_use]
 pub fn extract_totals(ddop: &DDOP) -> Vec<RateInfo> {
+    /// DeviceProcessData properties bit 2 (ISO 11783-10 Table A.4).
+    const SETTABLE: u8 = 0b010;
+
     let mut totals: Vec<RateInfo> = ddop
         .process_data()
         .iter()
-        .filter(|pd| ddi_is_total(pd.ddi))
+        .filter(|pd| pd.trigger_methods & TriggerMethod::Total.as_u8() != 0 || ddi_is_total(pd.ddi))
         .map(|pd| RateInfo {
             process_data_id: pd.id,
             ddi: pd.ddi,
@@ -189,7 +199,7 @@ pub fn extract_totals(ddop: &DDOP) -> Vec<RateInfo> {
             trigger_methods: pd.trigger_methods,
             presentation_id: pd.presentation_object_id,
             value: None,
-            editable: true,
+            editable: pd.properties & SETTABLE != 0,
         })
         .collect();
     totals.extend(

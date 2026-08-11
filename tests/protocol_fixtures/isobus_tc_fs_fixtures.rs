@@ -693,11 +693,7 @@ fn fixture_isobus_tc_geo_prescription_edges_are_stable() {
     ));
 
     let mut tc = TCGEOInterface::new();
-    assert_eq!(
-        parse_named_text_value(ISOBUS_TC_GEO_PRESCRIPTION, "no_gnss_fix_position_payload"),
-        "invalid_state"
-    );
-    assert!(tc.position_process_data_payloads().is_err());
+    assert!(tc.current_position().is_none());
     let mut gnss = Vec::with_capacity(8);
     gnss.extend_from_slice(&5_000_000_i32.to_le_bytes());
     gnss.extend_from_slice(&5_000_000_i32.to_le_bytes());
@@ -721,12 +717,12 @@ fn fixture_isobus_tc_geo_prescription_edges_are_stable() {
         position: Wgs::new(0.5, 0.5, 0.0),
         timestamp_us: 0,
     });
-    assert_eq!(
-        tc.position_process_data_payloads().unwrap(),
-        [
-            parse_named_hex_frame(ISOBUS_TC_GEO_PRESCRIPTION, "position_lat_0_5_payload"),
-            parse_named_hex_frame(ISOBUS_TC_GEO_PRESCRIPTION, "position_lon_0_5_payload"),
-        ]
+    // L1 — the lat/lon process-data payloads are gone: DDI 0x0087 and 0x0088
+    // are Device Element Offset Y and Z in millimetres, so a conformant TC
+    // read a latitude of 0.5 degrees as a 5 000 mm offset.
+    assert!(
+        tc.current_position().is_some(),
+        "position is held for zone lookup, not transmitted as process data"
     );
 
     tc.add_prescription_map(PrescriptionMap {

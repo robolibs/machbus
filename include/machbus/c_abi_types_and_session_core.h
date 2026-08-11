@@ -1062,11 +1062,6 @@ typedef struct {
   bool implement_ready;
 } MachbusTimInterlocks;
 
-/**
- * Data Dictionary Identifier (ISO 11783-11).
- */
-typedef uint16_t DDI;
-
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus

@@ -170,19 +170,29 @@ pub fn ddi_from_engineering(ddi: u16, eng: f64) -> i32 {
 
 // ─── DDI Category helpers ──────────────────────────────────────────────
 
+/// Whether `ddi` is an application rate, decided from the data dictionary
+/// rather than a number range.
+///
+/// The ranges this replaces classified 45 DDIs that are not rates — Tillage
+/// Depth, Traction Type, Machine Mode, Lifetime Total Distance and 30 tramline
+/// condensed work-state DDIs — as application rates, and missed the four real
+/// Percentage Application Rate DDIs (140, 308, 309, 310) entirely. ISO
+/// 11783-11 names every rate "... Application Rate", so the generated table is
+/// the authority and the classification cannot drift from it.
 #[must_use]
 pub fn ddi_is_rate(ddi: impl Into<u16>) -> bool {
-    let ddi = ddi.into();
-    (1..=55).contains(&ddi)
-        || (432..=451).contains(&ddi)
-        || (574..=577).contains(&ddi)
-        || (588..=637).contains(&ddi)
+    ddi_lookup(ddi.into()).is_some_and(|d| d.name.contains("Application Rate"))
 }
 
+/// Whether `ddi` is a lifetime or per-task total.
+///
+/// Also decided from the dictionary: ISO 11783-11 prefixes these "Total ..." or
+/// "Lifetime Total ...". The former numeric ranges both over- and
+/// under-matched, and §6.8.3 identifies a total by its trigger method and
+/// settable property, not by a number range — see [`ddi_total_trigger`].
 #[must_use]
 pub fn ddi_is_total(ddi: impl Into<u16>) -> bool {
-    let ddi = ddi.into();
-    (116..=123).contains(&ddi) || (130..=131).contains(&ddi) || (351..=353).contains(&ddi)
+    ddi_lookup(ddi.into()).is_some_and(|d| d.name.contains("Total"))
 }
 
 #[must_use]
@@ -534,11 +544,27 @@ mod tests {
         assert_eq!(ddi_from_engineering(ddi, -1.0e20), i32::MIN);
     }
 
+    /// L2 — `ddi_is_rate` used to be four number ranges. They classified 45
+    /// DDIs that are not rates as rates — Tillage Depth (51-55), Traction
+    /// Type, Machine Mode, Lifetime Total Distance and 30 tramline condensed
+    /// work-state DDIs — and missed the four real Percentage Application Rate
+    /// DDIs entirely. The generated dictionary decides now.
     #[test]
     fn category_helpers() {
         assert!(ddi_is_rate(1u16));
-        assert!(ddi_is_rate(55u16));
+        assert!(!ddi_is_rate(55u16), "Maximum Tillage Depth is not a rate");
         assert!(!ddi_is_rate(56u16));
+        for tillage in 51u16..=55 {
+            assert!(!ddi_is_rate(tillage));
+        }
+        assert!(!ddi_is_rate(593u16), "Traction Type is not a rate");
+        assert!(!ddi_is_rate(600u16), "a lifetime total is not a rate");
+        for percentage in [140u16, 308, 309, 310] {
+            assert!(
+                ddi_is_rate(percentage),
+                "Percentage Application Rate DDI {percentage} is a rate"
+            );
+        }
         assert!(ddi_is_rate(ddi::ACTUAL_APPLICATION_RATE_OF_PHOSPHOR));
         assert!(ddi_is_rate(
             ddi::SETPOINT_ELECTRICAL_ENERGY_PER_AREA_APPLICATION_RATE

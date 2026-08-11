@@ -74,12 +74,12 @@ pub mod embedded {
         GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd,
         HitchRollPitchCmd, HitchStatus, IMPLEMENT_FAMILIES, ImplementFamilyInfo,
         ImplementMessageFamily, LightState, LightingController, LightingState, LimitStatus,
-        MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus,
-        RequestResetCommandStatus, RequiredFacilitiesAggregator, SpeedExitCode, SpeedSource,
-        TECU_FACILITY_MATRIX, TecuClass, TractorControlModeMsg, TractorFacilities,
-        TractorFacilitiesRole, TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus,
-        ValveState, WheelBasedSpeedDist, curvature_within_range, estimated_flow_pgn, facilities_in,
-        family_info, measured_flow_pgn, wheel_slip_percent,
+        MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout,
+        PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus,
+        RequiredFacilitiesAggregator, SpeedExitCode, SpeedSource, TECU_FACILITY_MATRIX, TecuClass,
+        TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole, TractorMode, ValveCommand,
+        ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist, curvature_within_range,
+        estimated_flow_pgn, facilities_in, family_info, measured_flow_pgn, wheel_slip_percent,
     };
     pub use crate::isobus::{
         SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_ACTIVE_RATE_MS,

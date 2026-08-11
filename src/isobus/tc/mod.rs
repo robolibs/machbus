@@ -44,7 +44,7 @@ pub use ddop_helpers::{
     extract_rates, extract_totals, find_parent_element, section_count,
 };
 pub use geo::{
-    GeoPoint, PrescriptionMap, PrescriptionZone, TCGEOInterface, geo_ddi, point_in_polygon,
+    GeoPoint, PrescriptionMap, PrescriptionZone, TCGEOInterface, point_in_polygon,
     point_in_prescription_zone, prescription_rate_from_engineering,
     prescription_rate_process_data_payload, prescription_rate_to_engineering,
 };

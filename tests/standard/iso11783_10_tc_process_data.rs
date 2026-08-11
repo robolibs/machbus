@@ -6,7 +6,7 @@ use machbus::isobus::tc::{
     ObjectPoolErrorCodes, PeerControlAssignment, PeerControlInterface, PrescriptionMap,
     PrescriptionZone, ProcessDataAcknowledgeErrorCodes, ProcessDataCommands, ServerOptions,
     TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig, TCGEOInterface,
-    TCServerConfig, TCState, TaskControllerClient, TaskControllerServer, TriggerMethod, geo_ddi,
+    TCServerConfig, TCState, TaskControllerClient, TaskControllerServer, TriggerMethod,
     prescription_rate_from_engineering, prescription_rate_process_data_payload,
     prescription_rate_to_engineering, tc_cmd, tc_options_byte_is_valid,
 };
@@ -768,48 +768,33 @@ fn tc_status_frames_preserve_busy_source_and_client_server_binding() {
     assert_eq!(running, [0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00]);
 }
 
+/// L1 — TC-GEO used to transmit latitude and longitude as Process Data under
+/// DDI 0x0087 and 0x0088. The ISO 11783-11 data dictionary assigns those to
+/// Device Element Offset Y and Device Element Offset Z, both in millimetres,
+/// so a conformant TC decoded a latitude of 52.1° as a device element sitting
+/// 521 km off the datum. There is no TC-GEO position DDI to substitute; the TC
+/// receives position over `PGN_GNSS_POSITION`.
 #[test]
-fn tc_geo_position_process_data_payloads_use_canonical_value_headers() {
+fn tc_geo_does_not_transmit_position_under_device_element_offset_ddis() {
     let mut geo = TCGEOInterface::new();
-    geo.set_position(GeoPoint {
-        position: Wgs::new(52.123_456_7, 5.765_432_1, 0.0),
-        timestamp_us: 42,
-    });
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&521_234_567i32.to_le_bytes());
+    payload.extend_from_slice(&57_654_321i32.to_le_bytes());
+    geo.try_handle_gnss_position(&Message::new(PGN_GNSS_POSITION, payload, 0x24))
+        .expect("a well-formed GNSS position is the supported ingress");
 
-    let [lat, lon] = geo.position_process_data_payloads().unwrap();
-    for payload in [lat, lon] {
-        assert_eq!(
-            payload[0] & 0x0F,
-            ProcessDataCommands::Value.as_u8(),
-            "TC-GEO position values must use the process-data Value command"
-        );
-        assert_eq!(
-            payload[0] >> 4,
-            0,
-            "TC-GEO position values must not leak reserved element low bits"
-        );
-        assert_eq!(
-            payload[1], 0,
-            "TC-GEO position values must use a canonical zero element high byte"
+    let held = geo.current_position().expect("position recorded");
+    assert!((held.position.latitude - 52.123_456_7).abs() < 1e-7);
+    assert!((held.position.longitude - 5.765_432_1).abs() < 1e-7);
+
+    // The offset DDIs are not rates and are refused as prescription payloads,
+    // which is the only process-data channel TC-GEO still builds.
+    for offset_ddi in [DDI(0x0087), DDI(0x0088)] {
+        assert!(
+            prescription_rate_from_engineering(offset_ddi, 1.0).is_err(),
+            "a device-element offset DDI is not a prescription rate"
         );
     }
-
-    assert_eq!(
-        u16::from_le_bytes([lat[2], lat[3]]),
-        geo_ddi::ACTUAL_LATITUDE
-    );
-    assert_eq!(
-        u16::from_le_bytes([lon[2], lon[3]]),
-        geo_ddi::ACTUAL_LONGITUDE
-    );
-    assert_eq!(
-        i32::from_le_bytes(lat[4..8].try_into().unwrap()),
-        521_234_567
-    );
-    assert_eq!(
-        i32::from_le_bytes(lon[4..8].try_into().unwrap()),
-        57_654_321
-    );
 }
 
 #[test]
@@ -939,7 +924,7 @@ fn tc_geo_prescription_rate_payloads_validate_ddi_resolution_and_range() {
             "non-finite and out-of-range engineering rates must not encode to TC process data"
         );
     }
-    for invalid_ddi in [geo_ddi::ACTUAL_LATITUDE, DDI(0xFFFF)] {
+    for invalid_ddi in [DDI(0x0087), DDI(0xFFFF)] {
         assert!(
             prescription_rate_from_engineering(invalid_ddi, 1.0).is_err(),
             "non-rate or unknown DDIs must not be accepted as prescription-rate payloads"

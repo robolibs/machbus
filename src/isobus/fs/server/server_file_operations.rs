@@ -516,24 +516,25 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::OpenFile, tan) {
             return response;
         }
-        if request.len() < 4 {
+        // C.3.2.2: byte 3 Flags, bytes 4-5 Path Name Length, bytes 6-n Name.
+        // The two used to be swapped and the length read as one byte, so a
+        // conformant request parsed as garbage in both fields.
+        if request.len() < 5 {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         }
-        let path_len = request[2] as usize;
-        let flags = request[3];
-        let used = 4 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
+        let flags = request[2];
+        let Some(path_bytes) = counted_path_bytes(request, 3, 5) else {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
-        }
-        let Some(requested_path) = decode_wire_path(&request[4..4 + path_len]) else {
+        };
+        let Some(requested_path) = decode_wire_path(path_bytes) else {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
@@ -1063,12 +1064,20 @@ impl FileServer {
                 FSError::InvalidLength,
             );
         }
-        let mut response = vec![0u8; 4 + cwd_bytes.len()];
+        // C.2.2.3: bytes 4-7 Total Space, bytes 8-11 Free Space (both B.11, in
+        // 512-byte units), bytes 12,13 Path Name Length, bytes 14-n the path.
+        // The response used to stop after a one-byte length at byte 4, so a
+        // conformant client read the first characters of the path as the
+        // volume's capacity — and, since free space is reported nowhere else,
+        // could not tell whether a task log would fit before writing it.
+        let mut response = vec![0u8; 13 + cwd_bytes.len()];
         response[0] = FSFunction::GetCurrentDirectory.as_u8();
         response[1] = tan;
         response[2] = FSError::Success.as_u8();
-        response[3] = cwd_bytes.len() as u8;
-        response[4..].copy_from_slice(cwd_bytes);
+        response[3..7].copy_from_slice(&fs_space_blocks(self.volume_capacity_bytes).to_le_bytes());
+        response[7..11].copy_from_slice(&fs_space_blocks(self.free_bytes()).to_le_bytes());
+        response[11..13].copy_from_slice(&(cwd_bytes.len() as u16).to_le_bytes());
+        response[13..].copy_from_slice(cwd_bytes);
         response
     }
 
@@ -1076,22 +1085,14 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::ChangeDirectory, tan) {
             return response;
         }
-        if request.len() < 3 {
+        // C.2.3.2: bytes 3,4 Path Name Length; bytes 5-n Path Name.
+        let Some(path_bytes) = counted_path_bytes(request, 2, 4) else {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(
-                FSFunction::ChangeDirectory.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
+        };
         if !self.config.supports_directories {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
@@ -1099,7 +1100,7 @@ impl FileServer {
                 FSError::NotSupported,
             );
         }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
+        let Some(requested_path) = decode_wire_path(path_bytes) else {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
@@ -1367,14 +1368,16 @@ impl FileServer {
                 FSError::NotSupported,
             );
         }
-        if request.len() < 4 {
+        // C.4.5, laid out like Open File: byte 3 the operand, bytes 4,5 the
+        // B.12 Path Name Length, bytes 6-n the name.
+        if request.len() < 5 {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         }
-        let new_attrs = request[3];
+        let new_attrs = request[2];
         if new_attrs
             & !(FileAttributes::ReadOnly.bit()
                 | FileAttributes::Hidden.bit()
@@ -1392,7 +1395,7 @@ impl FileServer {
             .clients
             .get(&client)
             .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path_with_count_at(request, 2, 4, current_directory)
+        let Some(path) = parse_counted_file_path_with_count_at(request, 3, 5, current_directory)
         else {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),

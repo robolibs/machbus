@@ -8,8 +8,13 @@ fn decode_response_error(response: &[u8]) -> Result<FSError, FSError> {
     Ok(FSError::from_u8(raw_error))
 }
 
-fn is_valid_one_byte_file_path(path: &str) -> bool {
-    path.is_ascii() && path.len() <= u8::MAX as usize && is_valid_fs_path(path, true, false)
+/// B.12 Path Name Length is two bytes, so the whole path may run to 65535
+/// bytes; A.2.2.1 caps each individual name component at 255, which
+/// [`is_valid_fs_path`] already enforces.
+pub(crate) const FS_MAX_PATH_LEN: usize = u16::MAX as usize;
+
+fn is_valid_counted_file_path(path: &str) -> bool {
+    path.is_ascii() && path.len() <= FS_MAX_PATH_LEN && is_valid_fs_path(path, true, false)
 }
 
 fn resolve_client_directory_response_path(

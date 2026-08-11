@@ -126,7 +126,8 @@ fn fs_request(data: Vec<u8>, source: u8) -> Message {
 }
 
 fn open_request(tan: u8, path: &str, flags: u8) -> Vec<u8> {
-    let mut request = vec![FSFunction::OpenFile.as_u8(), tan, path.len() as u8, flags];
+    let mut request = vec![FSFunction::OpenFile.as_u8(), tan, flags];
+    request.extend_from_slice(&(path.len() as u16).to_le_bytes());
     request.extend_from_slice(path.as_bytes());
     request
 }
@@ -463,8 +464,9 @@ fn file_server_non_ccm_requests_do_not_suppress_first_ccm_connection_event() {
     let malformed_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x10,
-        1,
         OpenFlags::Read.bit(),
+        1,
+        0,
         b'a',
         0x00,
     ];
@@ -1121,8 +1123,9 @@ fn file_server_rejects_non_ascii_counted_paths_without_file_or_directory_mutatio
         vec![
             FSFunction::OpenFile.as_u8(),
             0x36,
-            2,
             OpenFlags::ReadWrite | OpenFlags::Create,
+            2,
+            0,
             0xC3,
             0xBF,
         ],
@@ -1144,6 +1147,7 @@ fn file_server_rejects_non_ascii_counted_paths_without_file_or_directory_mutatio
             FSFunction::ChangeDirectory.as_u8(),
             0x37,
             4,
+            0,
             b'l',
             b'o',
             b'g',
@@ -1163,7 +1167,7 @@ fn file_server_rejects_non_ascii_counted_paths_without_file_or_directory_mutatio
     );
 
     let change_non_ascii = server.handle_client_message(&fs_request(
-        vec![FSFunction::ChangeDirectory.as_u8(), 0x38, 2, 0xC3, 0xBF],
+        vec![FSFunction::ChangeDirectory.as_u8(), 0x38, 2, 0, 0xC3, 0xBF],
         0x42,
     ));
     assert_response(
@@ -1179,7 +1183,7 @@ fn file_server_rejects_non_ascii_counted_paths_without_file_or_directory_mutatio
     );
 
     let delete_non_ascii = server.handle_client_message(&fs_request(
-        vec![FSFunction::DeleteFile.as_u8(), 0x39, 2, 0xC3, 0xBF],
+        vec![FSFunction::DeleteFile.as_u8(), 0x39, 2, 0, 0xC3, 0xBF],
         0x42,
     ));
     assert_response(
@@ -1190,7 +1194,7 @@ fn file_server_rejects_non_ascii_counted_paths_without_file_or_directory_mutatio
     );
 
     let date_time_non_ascii = server.handle_client_message(&fs_request(
-        vec![FSFunction::GetFileDateTime.as_u8(), 0x3A, 2, 0, 0xC3, 0xBF],
+        vec![FSFunction::GetFileDateTime.as_u8(), 0x3A, 2, 0, 0, 0xC3, 0xBF],
         0x42,
     ));
     assert_response(
@@ -1444,6 +1448,7 @@ fn file_server_directory_capability_blocks_directory_operations_without_state_mu
             FSFunction::ChangeDirectory.as_u8(),
             0x60,
             4,
+            0,
             b'l',
             b'o',
             b'g',
@@ -1489,7 +1494,7 @@ fn file_server_directory_capability_blocks_directory_operations_without_state_mu
     );
 
     let change_root = server.handle_client_message(&fs_request(
-        vec![FSFunction::ChangeDirectory.as_u8(), 0x62, 1, b'\\'],
+        vec![FSFunction::ChangeDirectory.as_u8(), 0x62, 1, 0, b'\\'],
         0x42,
     ));
     assert_response(
@@ -1523,7 +1528,9 @@ fn file_server_directory_capability_blocks_directory_operations_without_state_mu
 #[test]
 fn file_client_rejects_unencodable_requests_before_transport() {
     let mut client = FileClient::new(FileClientConfig::default());
-    let too_long = "x".repeat(usize::from(u8::MAX) + 1);
+    // A.2.2.1 caps an individual name component at 255 bytes; B.12 gives the
+    // whole path two length bytes, so only the component limit bites here.
+    let too_long = "x".repeat(256);
 
     for server in [NULL_ADDRESS, BROADCAST_ADDRESS] {
         let err = client
@@ -1588,7 +1595,7 @@ fn file_client_rejects_non_ascii_path_requests_before_transport() {
         .try_open_file("plain.txt", OpenFlags::Read.bit())
         .expect("ASCII path requests remain encodable after rejected paths");
     assert_eq!(valid_open.data[0], FSFunction::OpenFile.as_u8());
-    assert_eq!(&valid_open.data[4..], b"plain.txt");
+    assert_eq!(&valid_open.data[5..], b"plain.txt");
 }
 
 #[test]
@@ -1617,12 +1624,12 @@ fn file_client_management_requests_validate_and_parse_standard_responses() {
 
     let move_req = client
         .try_move_file("old.txt", "new.txt")
-        .expect("valid one-byte counted MoveFile request");
+        .expect("valid counted MoveFile request");
     assert_eq!(move_req.data[0], FSFunction::MoveFile.as_u8());
-    assert_eq!(move_req.data[2], 7);
-    assert_eq!(move_req.data[3], 7);
-    assert_eq!(&move_req.data[4..11], b"old.txt");
-    assert_eq!(&move_req.data[11..18], b"new.txt");
+    assert_eq!(u16::from_le_bytes([move_req.data[2], move_req.data[3]]), 7);
+    assert_eq!(u16::from_le_bytes([move_req.data[4], move_req.data[5]]), 7);
+    assert_eq!(&move_req.data[6..13], b"old.txt");
+    assert_eq!(&move_req.data[13..20], b"new.txt");
 
     let attrs_log: ClientAttributeLog = Rc::new(RefCell::new(Vec::new()));
     let attrs_log_sub = attrs_log.clone();

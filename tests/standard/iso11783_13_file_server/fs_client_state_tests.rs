@@ -41,7 +41,7 @@ fn optional_commands_are_refused_by_the_server_not_gated_on_the_capability_byte(
         ..FileServerConfig::default()
     });
     let refused = server.handle_client_message(&fs_request(
-        vec![FSFunction::ChangeDirectory.as_u8(), 0x10, 1, b'\\'],
+        vec![FSFunction::ChangeDirectory.as_u8(), 0x10, 1, 0, b'\\'],
         0x42,
     ));
     assert_response(
@@ -440,8 +440,10 @@ fn file_client_rejects_invalid_current_directory_responses_before_state_mutation
             FSFunction::GetCurrentDirectory.as_u8(),
             tan,
             FSError::Success.as_u8(),
-            invalid.len() as u8,
         ];
+        // C.2.2.3 bytes 4-11 Total/Free Space, bytes 12,13 Path Name Length.
+        response.extend_from_slice(&[0u8; 8]);
+        response.extend_from_slice(&(invalid.len() as u16).to_le_bytes());
         response.extend_from_slice(invalid.as_bytes());
         while response.len() < 8 {
             response.push(0xFF);
@@ -460,8 +462,9 @@ fn file_client_rejects_invalid_current_directory_responses_before_state_mutation
         FSFunction::GetCurrentDirectory.as_u8(),
         tan,
         FSError::Success.as_u8(),
-        6,
     ];
+    response.extend_from_slice(&[0u8; 8]);
+    response.extend_from_slice(&6u16.to_le_bytes());
     response.extend_from_slice(b"\\logs\\");
     client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, response, 0x80));
     assert_eq!(client.current_directory(), "\\logs\\");
@@ -486,7 +489,16 @@ fn file_client_rejects_non_ascii_current_directory_response_before_state_mutatio
         FSFunction::GetCurrentDirectory.as_u8(),
         tan,
         FSError::Success.as_u8(),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
         4,
+        0,
         b'\\',
         0xC3,
         0xBF,
@@ -515,8 +527,9 @@ fn file_client_rejects_non_ascii_current_directory_response_before_state_mutatio
         FSFunction::GetCurrentDirectory.as_u8(),
         valid_tan,
         FSError::Success.as_u8(),
-        6,
     ];
+    valid_response.extend_from_slice(&[0u8; 8]);
+    valid_response.extend_from_slice(&6u16.to_le_bytes());
     valid_response.extend_from_slice(b"\\logs\\");
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
@@ -1259,8 +1272,8 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut set_attrs = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0x41,
-        path.len() as u8,
         FileAttributes::Hidden.bit(),
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     set_attrs.extend_from_slice(path);
     let denied = server.handle_client_message(&fs_request(set_attrs, 0x43));
@@ -1274,7 +1287,7 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut get_attrs = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0x42,
-        path.len() as u8,
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     get_attrs.extend_from_slice(path);
     let attrs = server.handle_client_message(&fs_request(get_attrs, 0x42));
@@ -1544,8 +1557,9 @@ fn file_server_rejects_move_of_read_only_source_without_file_mutation() {
     let mut request = vec![
         FSFunction::MoveFile.as_u8(),
         0x70,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         destination.len() as u8,
+        (destination.len() >> 8) as u8,
     ];
     request.extend_from_slice(source);
     request.extend_from_slice(destination);
@@ -1639,8 +1653,9 @@ fn file_server_requires_existing_parent_directories_for_create_and_move() {
     let mut move_missing_parent = vec![
         FSFunction::MoveFile.as_u8(),
         0x76,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         missing_dest.len() as u8,
+        (missing_dest.len() >> 8) as u8,
     ];
     move_missing_parent.extend_from_slice(source);
     move_missing_parent.extend_from_slice(missing_dest);

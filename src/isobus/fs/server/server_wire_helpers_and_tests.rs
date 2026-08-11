@@ -37,6 +37,11 @@ fn fs_file_size_to_wire(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
 }
 
+/// B.11 Space is counted in 512-byte blocks.
+fn fs_space_blocks(bytes: u64) -> u32 {
+    u32::try_from(bytes / 512).unwrap_or(u32::MAX)
+}
+
 fn fs_payload_len_is_canonical(data: &[u8], used: usize) -> bool {
     used <= data.len()
         && (data.len() == used
@@ -121,12 +126,29 @@ fn normalize_directory_listing_request(
     Ok((directory, pattern.to_string()))
 }
 
+/// Read a B.12 Path Name Length (2 bytes, little-endian) at `count_index` and
+/// return the raw path bytes that follow it.
+///
+/// Every one of these fields used to be read as a single byte, so a conformant
+/// request had its path truncated and the residual length byte prepended to
+/// the name.
+fn counted_path_bytes(request: &[u8], count_index: usize, path_start: usize) -> Option<&[u8]> {
+    let low = *request.get(count_index)?;
+    let high = *request.get(count_index + 1)?;
+    let path_len = u16::from_le_bytes([low, high]) as usize;
+    let used = path_start.checked_add(path_len)?;
+    if !fs_payload_len_is_canonical(request, used) {
+        return None;
+    }
+    request.get(path_start..used)
+}
+
 fn parse_counted_file_path(
     request: &[u8],
     count_index: usize,
     current_directory: &str,
 ) -> Option<String> {
-    parse_counted_file_path_with_count_at(request, count_index, count_index + 1, current_directory)
+    parse_counted_file_path_with_count_at(request, count_index, count_index + 2, current_directory)
 }
 
 /// Like [`parse_counted_file_path`], but accepts a directory (including the
@@ -139,12 +161,7 @@ fn parse_counted_file_or_directory_path(
     if let Some(path) = parse_counted_file_path(request, count_index, current_directory) {
         return Some(path);
     }
-    let path_len = *request.get(count_index)? as usize;
-    let used = count_index.checked_add(1)?.checked_add(path_len)?;
-    if !fs_payload_len_is_canonical(request, used) {
-        return None;
-    }
-    let requested_path = decode_wire_path(&request[count_index + 1..used])?;
+    let requested_path = decode_wire_path(counted_path_bytes(request, count_index, count_index + 2)?)?;
     normalize_directory_path(&requested_path, current_directory).ok()
 }
 
@@ -154,12 +171,7 @@ fn parse_counted_file_path_with_count_at(
     path_start: usize,
     current_directory: &str,
 ) -> Option<String> {
-    let path_len = *request.get(count_index)? as usize;
-    let used = path_start.checked_add(path_len)?;
-    if !fs_payload_len_is_canonical(request, used) {
-        return None;
-    }
-    let requested_path = decode_wire_path(&request[path_start..used])?;
+    let requested_path = decode_wire_path(counted_path_bytes(request, count_index, path_start)?)?;
     normalize_client_path(&requested_path, current_directory, false).ok()
 }
 
@@ -193,12 +205,12 @@ fn parse_two_counted_file_paths(
     request: &[u8],
     current_directory: &str,
 ) -> Option<(String, String)> {
-    if request.len() < 4 {
+    if request.len() < 6 {
         return None;
     }
-    let source_len = request[2] as usize;
-    let dest_len = request[3] as usize;
-    let source_start = 4usize;
+    let source_len = u16::from_le_bytes([request[2], request[3]]) as usize;
+    let dest_len = u16::from_le_bytes([request[4], request[5]]) as usize;
+    let source_start = 6usize;
     let dest_start = source_start.checked_add(source_len)?;
     let used = dest_start.checked_add(dest_len)?;
     if !fs_payload_len_is_canonical(request, used) {
@@ -419,8 +431,8 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"new.txt";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Write | OpenFlags::Create);
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out.len(), 1);
@@ -452,8 +464,8 @@ mod tests {
         // Open.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"data.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         let handle = out[0].data[3];
@@ -470,8 +482,8 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"missing.txt";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
@@ -492,8 +504,8 @@ mod tests {
         for (tan, path) in invalid_paths.into_iter().enumerate() {
             let mut s = FileServer::new(FileServerConfig::default());
             let mut req = vec![FSFunction::OpenFile.as_u8(), tan as u8];
-            req.push(path.len() as u8);
             req.push(OpenFlags::Write | OpenFlags::Create);
+            req.extend_from_slice(&(path.len() as u16).to_le_bytes());
             req.extend_from_slice(path.as_bytes());
 
             let out = s.handle_client_message(&req_msg(req, 0x42));
@@ -527,10 +539,10 @@ mod tests {
         let padded_open = vec![
             FSFunction::OpenFile.as_u8(),
             0x11,
-            1,
             OpenFlags::Write | OpenFlags::Create,
+            1,
+            0,
             b'a',
-            0xFF,
             0xFF,
             0xFF,
         ];
@@ -555,7 +567,7 @@ mod tests {
         let out = s.handle_client_message(&req_msg(bad_read, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
 
-        let bad_change_dir = vec![FSFunction::ChangeDirectory.as_u8(), 0x14, 1, b'\\', 0x00];
+        let bad_change_dir = vec![FSFunction::ChangeDirectory.as_u8(), 0x14, 1, 0, b'\\', 0x00];
         let out = s.handle_client_message(&req_msg(bad_change_dir, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
         assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
@@ -581,8 +593,8 @@ mod tests {
             let mut req = vec![
                 FSFunction::OpenFile.as_u8(),
                 tan,
-                path.len() as u8,
                 OpenFlags::OpenDir | OpenFlags::Create,
+                path.len() as u8, (path.len() >> 8) as u8,
             ];
             req.extend_from_slice(path);
             req
@@ -606,8 +618,9 @@ mod tests {
         let mut plain = vec![
             FSFunction::OpenFile.as_u8(),
             0x23,
-            7u8,
             OpenFlags::OpenDir.bit(),
+            7u8,
+            0,
         ];
         plain.extend_from_slice(b"\\absent");
         let out = s.handle_client_message(&req_msg(plain, 0x42));
@@ -622,7 +635,7 @@ mod tests {
         s.add_directory("\\full").unwrap();
         s.add_file("\\full\\f", b"x".to_vec(), 0).unwrap();
         let rmdir = |tan: u8, path: &[u8]| {
-            let mut req = vec![FSFunction::DeleteFile.as_u8(), tan, path.len() as u8];
+            let mut req = vec![FSFunction::DeleteFile.as_u8(), tan, path.len() as u8, (path.len() >> 8) as u8];
             req.extend_from_slice(path);
             req
         };
@@ -675,39 +688,47 @@ mod tests {
     }
 
     #[test]
-    fn directory_paths_reject_values_that_cannot_encode_in_one_count_byte() {
+    fn directory_paths_reject_values_that_cannot_encode_in_the_count_field() {
+        // B.12 gives Path Name Length two bytes; A.2.2.1 caps each individual
+        // name component at 255, so the whole path may still be long.
         let mut s = FileServer::new(FileServerConfig::default());
-        let max_body = "a".repeat(FS_WIRE_STRING_MAX_LEN - 2);
+        let component = "a".repeat(255);
+        let max_body = core::iter::repeat_n(component.as_str(), 200)
+            .collect::<Vec<_>>()
+            .join("\\");
         s.add_directory(format!("\\{max_body}")).unwrap();
 
-        let too_long_body = "b".repeat(FS_WIRE_STRING_MAX_LEN - 1);
-        assert!(s.add_directory(format!("\\{too_long_body}")).is_err());
+        let too_long_component = "b".repeat(256);
+        assert!(s.add_directory(format!("\\{too_long_component}")).is_err());
 
         let mut cd = vec![
             FSFunction::ChangeDirectory.as_u8(),
             0x01,
-            max_body.len() as u8,
+            max_body.len() as u8, (max_body.len() >> 8) as u8,
         ];
         cd.extend_from_slice(max_body.as_bytes());
         let response = s.handle_client_message(&req_msg(cd, 0x42));
         assert_eq!(response[0].data[2], FSError::Success.as_u8());
-        assert_eq!(
-            s.clients().get(&0x42).unwrap().current_directory.len(),
-            FS_WIRE_STRING_MAX_LEN
-        );
+        let deep_cwd_len = s.clients().get(&0x42).unwrap().current_directory.len();
+        assert_eq!(deep_cwd_len, max_body.len() + 2);
 
         let mut get_cwd = vec![FSFunction::GetCurrentDirectory.as_u8(), 0x02];
         get_cwd.extend_from_slice(&[0xFF; 6]);
         let response = s.handle_client_message(&req_msg(get_cwd, 0x42));
         assert_eq!(response[0].data[2], FSError::Success.as_u8());
-        assert_eq!(response[0].data[3], FS_WIRE_STRING_MAX_LEN as u8);
+        // C.2.2.3 bytes 12,13 — a path this long cannot fit one byte at all.
+        assert_eq!(
+            u16::from_le_bytes([response[0].data[11], response[0].data[12]]) as usize,
+            deep_cwd_len
+        );
 
-        let too_deep = vec![FSFunction::ChangeDirectory.as_u8(), 0x03, 1, b'b'];
-        let response = s.handle_client_message(&req_msg(too_deep, 0x42));
-        assert_eq!(response[0].data[2], FSError::InvalidSourceName.as_u8());
+        // The path is now encodable; what it names still has to exist.
+        let missing = vec![FSFunction::ChangeDirectory.as_u8(), 0x03, 1, 0, b'b'];
+        let response = s.handle_client_message(&req_msg(missing, 0x42));
+        assert_eq!(response[0].data[2], FSError::NotFound.as_u8());
         assert_eq!(
             s.clients().get(&0x42).unwrap().current_directory.len(),
-            FS_WIRE_STRING_MAX_LEN
+            deep_cwd_len
         );
     }
 
@@ -720,14 +741,14 @@ mod tests {
         s.add_file("\\log.txt", b"root".to_vec(), 0).unwrap();
 
         let path = b"\\safe";
-        let mut cd = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
+        let mut cd = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
         cd.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(cd, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x02];
-        open.push(b"log.txt".len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(b"log.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"log.txt");
         let out = s.handle_client_message(&req_msg(open, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
@@ -760,8 +781,8 @@ mod tests {
 
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x05];
         let path = b"data.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
 
         let out1 = s.handle_client_message(&req_msg(req.clone(), 0x42));
@@ -801,8 +822,8 @@ mod tests {
         // Open RW.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"rw.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::ReadWrite.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         let handle = out[0].data[3];
@@ -828,8 +849,8 @@ mod tests {
             .unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"ro.txt".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"ro.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"ro.txt");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
 
@@ -844,8 +865,8 @@ mod tests {
         s.add_file("rw.bin", Vec::new(), 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"rw.bin".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"rw.bin".len() as u16).to_le_bytes());
         open.extend_from_slice(b"rw.bin");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
 
@@ -867,8 +888,8 @@ mod tests {
         s.add_file("media.txt", b"abc".to_vec(), 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"media.txt".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"media.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"media.txt");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
         assert_eq!(s.open_files().len(), 1);
@@ -889,8 +910,8 @@ mod tests {
         assert_eq!(removed[0].data[2], VolumeState::Removed.as_u8());
 
         let mut open_after_remove = vec![FSFunction::OpenFile.as_u8(), 0x03];
-        open_after_remove.push(b"media.txt".len() as u8);
         open_after_remove.push(OpenFlags::Read.bit());
+        open_after_remove.extend_from_slice(&(b"media.txt".len() as u16).to_le_bytes());
         open_after_remove.extend_from_slice(b"media.txt");
         let out = s.handle_client_message(&req_msg(open_after_remove, 0x42));
         assert_eq!(out[0].data[2], FSError::MediaNotPresent.as_u8());
@@ -915,8 +936,8 @@ mod tests {
         s.add_file("shared.bin", vec![0; 2], 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"shared.bin".len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open.extend_from_slice(b"shared.bin");
         let handle_a = s.handle_client_message(&req_msg(open.clone(), 0x42))[0].data[3];
 
@@ -933,8 +954,8 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open_writer = vec![FSFunction::OpenFile.as_u8(), 0x05];
-        open_writer.push(b"shared.bin".len() as u8);
         open_writer.push(OpenFlags::ReadWrite.bit());
+        open_writer.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open_writer.extend_from_slice(b"shared.bin");
         let handle_writer = s.handle_client_message(&req_msg(open_writer, 0x42))[0].data[3];
 
@@ -947,8 +968,8 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open_reader = vec![FSFunction::OpenFile.as_u8(), 0x08];
-        open_reader.push(b"shared.bin".len() as u8);
         open_reader.push(OpenFlags::Read.bit());
+        open_reader.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open_reader.extend_from_slice(b"shared.bin");
         let handle_reader = s.handle_client_message(&req_msg(open_reader, 0x43))[0].data[3];
 
@@ -1003,7 +1024,7 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\safe").unwrap();
         let path = b"safe\\..";
-        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
+        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out[0].data[2], FSError::InvalidSourceName.as_u8());
@@ -1015,7 +1036,7 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\safe").unwrap();
         let path = b"\\safe";
-        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
+        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
@@ -1049,8 +1070,9 @@ mod tests {
         let mut move_req = vec![
             FSFunction::MoveFile.as_u8(),
             0x10,
-            src.len() as u8,
+            src.len() as u8, (src.len() >> 8) as u8,
             dst.len() as u8,
+            (dst.len() >> 8) as u8,
         ];
         move_req.extend_from_slice(src);
         move_req.extend_from_slice(dst);
@@ -1063,7 +1085,7 @@ mod tests {
         let mut get_attrs = vec![
             FSFunction::GetFileAttributes.as_u8(),
             0x11,
-            attrs_path.len() as u8,
+            attrs_path.len() as u8, (attrs_path.len() >> 8) as u8,
         ];
         get_attrs.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(get_attrs, 0x42));
@@ -1073,8 +1095,8 @@ mod tests {
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
             0x12,
-            attrs_path.len() as u8,
             FileAttributes::ReadOnly.bit() | FileAttributes::Hidden.bit(),
+            attrs_path.len() as u8, (attrs_path.len() >> 8) as u8,
         ];
         set_attrs.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(set_attrs, 0x42));
@@ -1088,7 +1110,7 @@ mod tests {
         );
 
         let mut delete_read_only =
-            vec![FSFunction::DeleteFile.as_u8(), 0x13, attrs_path.len() as u8];
+            vec![FSFunction::DeleteFile.as_u8(), 0x13, attrs_path.len() as u8, (attrs_path.len() >> 8) as u8];
         delete_read_only.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(delete_read_only.clone(), 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
@@ -1119,7 +1141,7 @@ mod tests {
         let initial_files = s.files.clone();
         let initial_attrs = s.file_attrs.clone();
 
-        let malformed_move = vec![FSFunction::MoveFile.as_u8(), 0x21, 5, 5, b'a', b'.'];
+        let malformed_move = vec![FSFunction::MoveFile.as_u8(), 0x21, 5, 0, 5, 0, b'a', b'.'];
         let out = s.handle_client_message(&req_msg(malformed_move, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
         assert_eq!(s.files, initial_files);
@@ -1129,8 +1151,8 @@ mod tests {
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
             0x22,
-            bad_attrs.len() as u8,
             FileAttributes::Volume.bit(),
+            bad_attrs.len() as u8, (bad_attrs.len() >> 8) as u8,
         ];
         set_attrs.extend_from_slice(bad_attrs);
         let out = s.handle_client_message(&req_msg(set_attrs, 0x42));
@@ -1138,11 +1160,11 @@ mod tests {
         assert_eq!(s.file_attrs, initial_attrs);
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x23];
-        open.push(bad_attrs.len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(bad_attrs.len() as u16).to_le_bytes());
         open.extend_from_slice(bad_attrs);
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
-        let mut delete_open = vec![FSFunction::DeleteFile.as_u8(), 0x24, bad_attrs.len() as u8];
+        let mut delete_open = vec![FSFunction::DeleteFile.as_u8(), 0x24, bad_attrs.len() as u8, (bad_attrs.len() >> 8) as u8];
         delete_open.extend_from_slice(bad_attrs);
         let out = s.handle_client_message(&req_msg(delete_open, 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
@@ -1168,8 +1190,8 @@ mod tests {
         // Open a file → Present should advance to InUse on next update.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"f";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Write | OpenFlags::Create);
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         s.handle_client_message(&req_msg(req, 0x42));
         let _ = s.update(0);

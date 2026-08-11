@@ -188,6 +188,11 @@ pub struct FileClient {
 
     open_files: BTreeMap<FileHandle, OpenFileInfo>,
     current_directory: String,
+    /// Volume capacity and free space in 512-byte blocks (B.11), taken from
+    /// the last Get Current Directory Response — the only place ISO 11783-13
+    /// reports them.
+    volume_total_blocks: u32,
+    volume_free_blocks: u32,
 
     pub on_connected: Event<()>,
     pub on_disconnected: Event<()>,
@@ -237,6 +242,8 @@ impl FileClient {
             server_status: None,
             open_files: BTreeMap::new(),
             current_directory: "\\".to_string(),
+            volume_total_blocks: 0,
+            volume_free_blocks: 0,
             on_connected: Event::new(),
             on_disconnected: Event::new(),
             on_error: Event::new(),
@@ -337,6 +344,18 @@ impl FileClient {
         &self.current_directory
     }
 
+    /// Volume capacity and free space in bytes, from the last Get Current
+    /// Directory Response. C.2.2.3 is the only place ISO 11783-13 reports
+    /// these; both read zero until one arrives, and a server that cannot
+    /// detect them reports zero too.
+    #[must_use]
+    pub const fn volume_space_bytes(&self) -> (u64, u64) {
+        (
+            self.volume_total_blocks as u64 * 512,
+            self.volume_free_blocks as u64 * 512,
+        )
+    }
+
     #[must_use]
     pub fn server_properties(&self) -> Option<FileServerProperties> {
         self.server_properties
@@ -422,7 +441,7 @@ impl FileClient {
         }
         let open_dir = get_access_mode(flags) == OpenFlags::OpenDir.bit();
         if !path.is_ascii()
-            || path.len() > u8::MAX as usize
+            || path.len() > FS_MAX_PATH_LEN
             || !open_flags_have_no_reserved_bits(flags)
             || !is_valid_fs_path(path, open_dir, false)
         {
@@ -431,13 +450,14 @@ impl FileClient {
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + path.len()];
+        // C.3.2.2: byte 3 Flags, bytes 4,5 Path Name Length, bytes 6-n Name.
+        let mut data = vec![0u8; 5 + path.len()];
         data[0] = FSFunction::OpenFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3] = flags;
-        data[4..].copy_from_slice(path.as_bytes());
+        data[2] = flags;
+        data[3..5].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[5..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::OpenFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -574,7 +594,7 @@ impl FileClient {
             return Err(Error::not_connected());
         }
         if !path.is_ascii()
-            || path.len() > u8::MAX as usize
+            || path.len() > FS_MAX_PATH_LEN
             || (path != "." && path != ".." && !is_valid_fs_path(path, true, false))
         {
             return Err(Error::invalid_data(format!(
@@ -582,12 +602,12 @@ impl FileClient {
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::ChangeDirectory.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::ChangeDirectory, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -627,8 +647,8 @@ impl FileClient {
         destination_path: &str,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(source_path)
-            || !is_valid_one_byte_file_path(destination_path)
+        if !is_valid_counted_file_path(source_path)
+            || !is_valid_counted_file_path(destination_path)
             || source_path == destination_path
         {
             return Err(Error::invalid_data(format!(
@@ -637,14 +657,14 @@ impl FileClient {
                 destination_path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + source_path.len() + destination_path.len()];
+        let mut data = vec![0u8; 6 + source_path.len() + destination_path.len()];
         data[0] = FSFunction::MoveFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = source_path.len() as u8;
-        data[3] = destination_path.len() as u8;
-        data[4..4 + source_path.len()].copy_from_slice(source_path.as_bytes());
-        data[4 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
+        data[2..4].copy_from_slice(&(source_path.len() as u16).to_le_bytes());
+        data[4..6].copy_from_slice(&(destination_path.len() as u16).to_le_bytes());
+        data[6..6 + source_path.len()].copy_from_slice(source_path.as_bytes());
+        data[6 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
         self.track_request(tan, FSFunction::MoveFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -656,18 +676,18 @@ impl FileClient {
     /// Build a `DeleteFile` request with a one-byte path count.
     pub fn try_delete_file(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(path) {
+        if !is_valid_counted_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS DeleteFile path length {}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::DeleteFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::DeleteFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -679,18 +699,18 @@ impl FileClient {
     /// Build a `GetFileAttributes` request with a one-byte path count.
     pub fn try_get_file_attributes(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(path) {
+        if !is_valid_counted_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS GetFileAttributes path length {}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::GetFileAttributes.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::GetFileAttributes, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -707,19 +727,19 @@ impl FileClient {
         attrs: u8,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(path) || attrs & !FILE_ATTRIBUTES_SET_ALLOWED_MASK != 0 {
+        if !is_valid_counted_file_path(path) || attrs & !FILE_ATTRIBUTES_SET_ALLOWED_MASK != 0 {
             return Err(Error::invalid_data(format!(
                 "invalid FS SetFileAttributes path length {} or attributes 0x{attrs:02X}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + path.len()];
+        let mut data = vec![0u8; 5 + path.len()];
         data[0] = FSFunction::SetFileAttributes.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3] = attrs;
-        data[4..].copy_from_slice(path.as_bytes());
+        data[2] = attrs;
+        data[3..5].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[5..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::SetFileAttributes, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -1106,12 +1126,13 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::InvalidHandle)));
             return;
         }
-        // Recover path + flags from the original request (bytes 2..).
-        if request.len() >= 4 {
-            let path_len = request[2] as usize;
-            let flags = request[3];
-            if request.len() >= 4 + path_len {
-                let path_bytes = &request[4..4 + path_len];
+        // Recover flags and path from the original C.3.2.2 request: byte 3
+        // Flags, bytes 4,5 Path Name Length, bytes 6-n Name.
+        if request.len() >= 5 {
+            let flags = request[2];
+            let path_len = u16::from_le_bytes([request[3], request[4]]) as usize;
+            if request.len() >= 5 + path_len {
+                let path_bytes = &request[5..5 + path_len];
                 if !path_bytes.is_ascii() {
                     self.on_open_response
                         .emit(&(tan, Err(FSError::InvalidSourceName)));
@@ -1303,8 +1324,11 @@ impl FileClient {
         self.on_seek_response.emit(&(tan, Ok(())));
     }
 
+    /// C.2.2.3: error code, Total Space, Free Space, Path Name Length, path.
+    /// The response used to end after a one-byte length at byte 4, so the two
+    /// space fields were read out of the path text.
     fn handle_get_directory_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 4 {
+        if response.len() < 13 {
             self.on_current_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
@@ -1316,18 +1340,22 @@ impl FileClient {
                 return;
             }
         };
+        self.volume_total_blocks =
+            u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
+        self.volume_free_blocks =
+            u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
         if error != FSError::Success {
             self.on_current_directory_response.emit(&(tan, Err(error)));
             return;
         }
-        let path_len = response[3] as usize;
-        let end = 4 + path_len;
+        let path_len = u16::from_le_bytes([response[11], response[12]]) as usize;
+        let end = 13 + path_len;
         if !fs_payload_len_is_canonical(response, end) {
             self.on_current_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let path_bytes = &response[4..end];
+        let path_bytes = &response[13..end];
         if !path_bytes.is_ascii() {
             self.on_current_directory_response
                 .emit(&(tan, Err(FSError::InvalidSourceName)));
@@ -1368,19 +1396,20 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        if request.len() < 3 {
+        // C.2.3.2: bytes 3,4 Path Name Length; bytes 5-n Path Name.
+        if request.len() < 4 {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let path_len = request[2] as usize;
-        let end = 3 + path_len;
+        let path_len = u16::from_le_bytes([request[2], request[3]]) as usize;
+        let end = 4 + path_len;
         if end > request.len() {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let requested_path_bytes = &request[3..end];
+        let requested_path_bytes = &request[4..end];
         if !requested_path_bytes.is_ascii() {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::InvalidSourceName)));

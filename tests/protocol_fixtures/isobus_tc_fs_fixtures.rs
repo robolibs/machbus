@@ -1318,8 +1318,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut invalid_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x01,
-        invalid_path.len() as u8,
         OpenFlags::Write | OpenFlags::Create,
+        invalid_path.len() as u8, (invalid_path.len() >> 8) as u8,
     ];
     invalid_open.extend_from_slice(invalid_path);
     let invalid_open_resp =
@@ -1333,8 +1333,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut missing_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x02,
-        missing.len() as u8,
         OpenFlags::Read.bit(),
+        missing.len() as u8, (missing.len() >> 8) as u8,
     ];
     missing_open.extend_from_slice(missing);
     let missing_resp =
@@ -1348,8 +1348,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut read_only_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x21,
-        read_only.len() as u8,
         OpenFlags::Read.bit(),
+        read_only.len() as u8, (read_only.len() >> 8) as u8,
     ];
     read_only_open.extend_from_slice(read_only);
     let read_only_resp = server.handle_client_message(&Message::new(
@@ -1388,8 +1388,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut read_only_rw_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x23,
-        read_only.len() as u8,
         OpenFlags::ReadWrite.bit(),
+        read_only.len() as u8, (read_only.len() >> 8) as u8,
     ];
     read_only_rw_open.extend_from_slice(read_only);
     let read_only_rw_resp = server.handle_client_message(&Message::new(
@@ -1431,8 +1431,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut empty_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x22,
-        empty.len() as u8,
         OpenFlags::Read.bit(),
+        empty.len() as u8, (empty.len() >> 8) as u8,
     ];
     empty_open.extend_from_slice(empty);
     let empty_resp =
@@ -1470,7 +1470,7 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut change_dir = vec![
         FSFunction::ChangeDirectory.as_u8(),
         0x07,
-        invalid_dir.len() as u8,
+        invalid_dir.len() as u8, (invalid_dir.len() >> 8) as u8,
     ];
     change_dir.extend_from_slice(invalid_dir);
     let change_dir_resp =
@@ -1486,8 +1486,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut removed_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x08,
-        removed_path.len() as u8,
         OpenFlags::Read.bit(),
+        removed_path.len() as u8, (removed_path.len() >> 8) as u8,
     ];
     removed_open.extend_from_slice(removed_path);
     let removed_resp = removed_server.handle_client_message(&Message::new(
@@ -1510,8 +1510,8 @@ fn fixture_isobus_file_server_volume_status_transitions_are_stable() {
     let mut open = vec![
         FSFunction::OpenFile.as_u8(),
         0x01,
-        path.len() as u8,
         OpenFlags::ReadWrite.bit(),
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     open.extend_from_slice(path);
     let open_resp =

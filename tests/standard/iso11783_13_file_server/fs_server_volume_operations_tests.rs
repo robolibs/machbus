@@ -181,7 +181,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     let mut change_to_file = vec![
         FSFunction::ChangeDirectory.as_u8(),
         0xA2,
-        file_path.len() as u8,
+        file_path.len() as u8, (file_path.len() >> 8) as u8,
     ];
     change_to_file.extend_from_slice(file_path);
     let denied_change = server.handle_client_message(&fs_request(change_to_file, 0x42));
@@ -204,7 +204,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     let mut delete_directory = vec![
         FSFunction::DeleteFile.as_u8(),
         0xA3,
-        directory_path.len() as u8,
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     delete_directory.extend_from_slice(directory_path);
     let denied_delete = server.handle_client_message(&fs_request(delete_directory, 0x42));
@@ -220,7 +220,9 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         FSFunction::MoveFile.as_u8(),
         0xA4,
         directory_path.len() as u8,
+        (directory_path.len() >> 8) as u8,
         7,
+        0,
     ];
     move_directory.extend_from_slice(directory_path);
     move_directory.extend_from_slice(b"new.txt");
@@ -235,8 +237,8 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     let mut set_directory_attrs = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xA5,
-        directory_path.len() as u8,
         FileAttributes::Hidden.bit(),
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     set_directory_attrs.extend_from_slice(directory_path);
     let denied_set_attrs = server.handle_client_message(&fs_request(set_directory_attrs, 0x42));
@@ -250,7 +252,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     let mut get_directory_attrs = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xA8,
-        directory_path.len() as u8,
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     get_directory_attrs.extend_from_slice(directory_path);
     let directory_attrs = server.handle_client_message(&fs_request(get_directory_attrs, 0x42));
@@ -307,8 +309,9 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xB0,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         destination.len() as u8,
+        (destination.len() >> 8) as u8,
     ];
     move_request.extend_from_slice(source);
     move_request.extend_from_slice(destination);
@@ -320,7 +323,7 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
         FSError::NotSupported,
     );
 
-    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xB1, source.len() as u8];
+    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xB1, source.len() as u8, (source.len() >> 8) as u8];
     delete_request.extend_from_slice(source);
     let denied_delete = server.handle_client_message(&fs_request(delete_request, 0x42));
     assert_response(
@@ -333,7 +336,7 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
     let mut get_attrs_request = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xB2,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
     ];
     get_attrs_request.extend_from_slice(source);
     let denied_get_attrs = server.handle_client_message(&fs_request(get_attrs_request, 0x42));
@@ -347,8 +350,8 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
     let mut set_attrs_request = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xB3,
-        source.len() as u8,
         FileAttributes::Hidden.bit(),
+        source.len() as u8, (source.len() >> 8) as u8,
     ];
     set_attrs_request.extend_from_slice(source);
     let denied_set_attrs = server.handle_client_message(&fs_request(set_attrs_request, 0x42));
@@ -546,8 +549,9 @@ fn file_server_preserves_and_cleans_per_path_date_time_metadata() {
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xCA,
-        b"log.txt".len() as u8,
+        b"log.txt".len() as u8, (b"log.txt".len() >> 8) as u8,
         b"moved.txt".len() as u8,
+        (b"moved.txt".len() >> 8) as u8,
     ];
     move_request.extend_from_slice(b"log.txt");
     move_request.extend_from_slice(b"moved.txt");
@@ -574,7 +578,7 @@ fn file_server_preserves_and_cleans_per_path_date_time_metadata() {
     let mut delete_request = vec![
         FSFunction::DeleteFile.as_u8(),
         0xCD,
-        b"moved.txt".len() as u8,
+        b"moved.txt".len() as u8, (b"moved.txt".len() >> 8) as u8,
     ];
     delete_request.extend_from_slice(b"moved.txt");
     let deleted = server.handle_client_message(&fs_request(delete_request, 0x42));
@@ -613,7 +617,7 @@ fn file_server_removed_volume_resets_and_blocks_current_directory_state() {
         vec![
             FSFunction::ChangeDirectory.as_u8(),
             0xD0,
-            b"jobs".len() as u8,
+            b"jobs".len() as u8, (b"jobs".len() >> 8) as u8,
             b'j',
             b'o',
             b'b',
@@ -667,7 +671,7 @@ fn file_server_removed_volume_resets_and_blocks_current_directory_state() {
         vec![
             FSFunction::ChangeDirectory.as_u8(),
             0xD2,
-            b"jobs".len() as u8,
+            b"jobs".len() as u8, (b"jobs".len() >> 8) as u8,
             b'j',
             b'o',
             b'b',
@@ -808,8 +812,9 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xD5,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
         b"two.txt".len() as u8,
+        (b"two.txt".len() >> 8) as u8,
     ];
     move_request.extend_from_slice(b"one.txt");
     move_request.extend_from_slice(b"two.txt");
@@ -821,7 +826,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
         FSError::MediaNotPresent,
     );
 
-    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xD6, b"one.txt".len() as u8];
+    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xD6, b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8];
     delete_request.extend_from_slice(b"one.txt");
     let delete_denied = server.handle_client_message(&fs_request(delete_request, 0x42));
     assert_response(
@@ -834,7 +839,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut get_attrs_request = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xD7,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
     ];
     get_attrs_request.extend_from_slice(b"one.txt");
     let get_attrs_denied = server.handle_client_message(&fs_request(get_attrs_request, 0x42));
@@ -848,8 +853,9 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut set_attrs_request = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xD8,
-        b"one.txt".len() as u8,
         FileAttributes::ReadOnly.bit(),
+        b"one.txt".len() as u8,
+        (b"one.txt".len() >> 8) as u8,
     ];
     set_attrs_request.extend_from_slice(b"one.txt");
     let set_attrs_denied = server.handle_client_message(&fs_request(set_attrs_request, 0x42));
@@ -904,7 +910,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut get_attrs_after = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xDC,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
     ];
     get_attrs_after.extend_from_slice(b"one.txt");
     let attrs_after = server.handle_client_message(&fs_request(get_attrs_after, 0x42));

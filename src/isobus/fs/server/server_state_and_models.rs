@@ -25,8 +25,10 @@ use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT}
 use crate::net::state_machine::StateMachine;
 use crate::net::types::{Address, Pgn};
 
-/// FS string lengths carried in command/response payloads are one byte.
-const FS_WIRE_STRING_MAX_LEN: usize = u8::MAX as usize;
+/// B.12 Path Name Length is two bytes, so a whole path may run to 65535 bytes.
+/// It used to be capped at one byte, which truncated any real task-data path —
+/// A.2.3.1 allows any number of components, each up to 255 bytes.
+const FS_WIRE_STRING_MAX_LEN: usize = u16::MAX as usize;
 const READ_FILE_REQUEST_LEN: usize = 8;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
 const WRITE_FILE_RESPONSE_LEN: usize = 8;

@@ -292,8 +292,8 @@ impl<const N: usize> EtpRxFixed<N> {
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
 
-        if !etp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) || !pgn_is_valid(cm_pgn)
-        {
+        // G3 — see the TP engine: reserved bytes are ignored on receive.
+        if !pgn_is_valid(cm_pgn) {
             return Ok(EtpRxFixedOutcome::default());
         }
 
@@ -835,24 +835,17 @@ impl ExtendedTransportProtocol {
     /// using the address". ETP is always destination-specific, so every
     /// dropped session gets an abort. See the TP counterpart for why open
     /// sessions used to outlive the address they were running on.
+    /// Nothing is transmitted; see the TP engine's counterpart. Every frame an
+    /// abort here could carry would have SA = the address the CF was just told
+    /// to stop using, and §4.4.2.4 restricts a CF that cannot claim to Cannot
+    /// Claim and Request for Address Claimed. The peer closes its half on
+    /// T2/T3 within 1250 ms.
     pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
-        let mut frames = Vec::new();
-        for session in self.sessions.iter() {
-            if session.can_port != port
-                || (session.source_address != address && session.destination_address != address)
-            {
-                continue;
-            }
-            frames.push(make_session_abort(
-                session,
-                TransportAbortReason::ResourcesUnavailable,
-            ));
-        }
         self.sessions.retain(|session| {
             session.can_port != port
                 || (session.source_address != address && session.destination_address != address)
         });
-        frames
+        Vec::new()
     }
 
     #[inline]
@@ -946,15 +939,6 @@ impl ExtendedTransportProtocol {
         let src = frame.source();
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
-        if !etp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) {
-            tracing::warn!(
-                target: "machbus.transport.etp",
-                control_byte,
-                "dropping ETP CM frame with non-canonical reserved bytes"
-            );
-            self.note_dropped_frame();
-            return responses;
-        }
         if !pgn_is_valid(cm_pgn) {
             tracing::warn!(
                 target: "machbus.transport.etp",
@@ -1488,13 +1472,6 @@ fn rx_buffer(
         .map_err(|_| TransportAbortReason::ResourcesUnavailable)?;
     data.resize(total_bytes as usize, 0xFF);
     Ok(data)
-}
-
-fn etp_cm_reserved_bytes_are_canonical(control_byte: u8, data: &[u8; 8]) -> bool {
-    match control_byte {
-        etp_cm::ABORT => data[2..5].iter().all(|&byte| byte == 0xFF),
-        _ => true,
-    }
 }
 
 fn make_rts(s: &TransportSession) -> Frame {

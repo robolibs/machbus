@@ -42,13 +42,17 @@ mod tests {
 
         let aborts = tp.abort_sessions_for_address(0, 0x10);
 
-        // The destination-specific session is aborted so the peer can release
-        // its half; the BAM has no peer state, so it is only dropped.
-        assert_eq!(aborts.len(), 1);
-        assert_eq!(aborts[0].pgn(), PGN_TP_CM);
-        assert_eq!(aborts[0].data[0], tp_cm::ABORT);
-        assert_eq!(aborts[0].source(), 0x10);
-        assert_eq!(aborts[0].destination(), 0x20);
+        // §4.4.2.4 restricts a CF that cannot claim to Cannot Claim and Request
+        // for Address Claimed; a Conn_Abort is neither, and every frame one
+        // could carry would have SA = the address just surrendered. Sending it
+        // landed on the CF that had legitimately won that address, whose
+        // `check_address_violation` answers with an unsolicited Address Claimed
+        // — spurious duplicate-address noise from the node this teardown exists
+        // to protect. The peer closes its half on T2/T3 within 1250 ms.
+        assert!(
+            aborts.is_empty(),
+            "nothing may be transmitted from a surrendered address"
+        );
 
         // Only the sessions on the surrendered address are gone.
         let left: Vec<Pgn> = tp.active_sessions_iter().map(|s| s.pgn).collect();

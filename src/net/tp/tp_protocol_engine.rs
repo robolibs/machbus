@@ -456,24 +456,17 @@ impl TransportProtocol {
     /// needs no peer cooperation at all, so it carried on emitting DT frames
     /// from an address now owned by somebody else.
     ///
-    /// A destination-specific session gets an abort so the peer can release
-    /// its half immediately; a BAM has no peer state to release, so it is just
-    /// dropped.
+    /// Nothing is transmitted. Every frame such an abort could carry would
+    /// have SA = the address the CF was just told to stop using — for a
+    /// transmit session that *is* `source_address`, and for a receive session
+    /// it is `destination_address` — and §4.4.2.4 restricts a CF that cannot
+    /// claim to Cannot Claim and Request for Address Claimed. A Conn_Abort is
+    /// neither. Sending one also lands on the CF that just legitimately won the
+    /// address, whose `check_address_violation` answers it with an unsolicited
+    /// Address Claimed: spurious duplicate-address noise from the node the fix
+    /// was meant to protect. The peer closes its half on T2/T3 within 1250 ms,
+    /// which is the same reasoning already applied to a BAM.
     pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
-        let mut frames = Vec::new();
-        for session in self.sessions.iter() {
-            if session.can_port != port
-                || (session.source_address != address && session.destination_address != address)
-            {
-                continue;
-            }
-            if session.destination_address != BROADCAST_ADDRESS {
-                frames.push(make_session_abort(
-                    session,
-                    TransportAbortReason::ResourcesUnavailable,
-                ));
-            }
-        }
         self.sessions.retain(|session| {
             session.can_port != port
                 || (session.source_address != address && session.destination_address != address)
@@ -481,7 +474,7 @@ impl TransportProtocol {
         self.timer_sessions.retain(|session| {
             session.port != port || (session.source != address && session.destination != address)
         });
-        frames
+        Vec::new()
     }
 
     #[inline]
@@ -744,15 +737,6 @@ impl TransportProtocol {
         let src = frame.source();
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
-        if !tp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) {
-            tracing::warn!(
-                target: "machbus.transport.tp",
-                control_byte,
-                "dropping TP CM frame with non-canonical reserved bytes"
-            );
-            self.note_dropped_frame();
-            return responses;
-        }
         if !pgn_is_valid(cm_pgn) {
             tracing::warn!(
                 target: "machbus.transport.tp",
@@ -1397,15 +1381,6 @@ fn valid_tp_payload_shape(total_bytes: u32, total_packets: u8) -> bool {
         && total_bytes <= TP_MAX_DATA_LENGTH
         && total_packets != 0
         && total_packets as u32 == total_bytes.div_ceil(TP_BYTES_PER_FRAME)
-}
-
-fn tp_cm_reserved_bytes_are_canonical(control_byte: u8, data: &[u8; 8]) -> bool {
-    match control_byte {
-        tp_cm::CTS => data[3] == 0xFF && data[4] == 0xFF,
-        tp_cm::EOMA | tp_cm::BAM => data[4] == 0xFF,
-        tp_cm::ABORT => data[2..5].iter().all(|&byte| byte == 0xFF),
-        _ => true,
-    }
 }
 
 fn rx_buffer(

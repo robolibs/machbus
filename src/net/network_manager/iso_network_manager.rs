@@ -401,7 +401,7 @@ impl<L: Link> IsoNet<L> {
         }
 
         if self.is_fast_packet_pgn(pgn) && (data.len() as u32) <= FAST_PACKET_MAX_DATA {
-            let frames = self.fast_packet.send(pgn, data, src_addr)?;
+            let frames = self.fast_packet.send_to(pgn, data, src_addr, dst, priority)?;
             return self.send_frames(&frames, port);
         }
 
@@ -762,12 +762,29 @@ impl<L: Link> IsoNet<L> {
         self.drain_transport_completions();
         self.start_ready_pending_transport();
 
-        // 4) Drive address claimers.
+        // 4) Drive address claimers. Any relocation originating inside
+        //    `AddressClaimer::update` — a `finish_listen` relocation after a
+        //    restart, say — vacates an address the same way an arbitration loss
+        //    does, and had no teardown at all.
         let mut emitted: Vec<(u8, Frame)> = Vec::new();
+        let mut surrendered: Vec<(u8, Address)> = Vec::new();
         for (icf, claimer) in self.internal_cfs.iter_mut().zip(self.claimers.iter_mut()) {
             let port = icf.port();
+            let held = icf.address();
+            let was_online = icf.cf().is_online();
             for f in claimer.update(icf, elapsed_ms) {
                 emitted.push((port, f));
+            }
+            if held != NULL_ADDRESS
+                && (icf.address() != held || (was_online && !icf.cf().is_online()))
+            {
+                surrendered.push((port, held));
+            }
+        }
+        for (port, address) in surrendered {
+            let aborts = self.discontinue_address(port, address);
+            for f in &aborts {
+                let _ = self.send_frame(f, port);
             }
         }
         for (port, f) in &emitted {
@@ -1172,12 +1189,12 @@ impl<L: Link> IsoNet<L> {
         );
 
         if claimed_addr <= MAX_ADDRESS {
-            self.handle_duplicate_internal_name(claimed_name, claimed_addr, port);
+            let mut surrendered =
+                self.handle_duplicate_internal_name(claimed_name, claimed_addr, port);
 
             // Notify our claimers, remembering which addresses they were on so
             // a CF that yields can stop using the one it just gave up.
             let mut emitted: Vec<Frame> = Vec::new();
-            let mut surrendered: Vec<Address> = Vec::new();
             for (icf, claimer) in self.internal_cfs.iter_mut().zip(self.claimers.iter_mut()) {
                 if icf.port() != port {
                     continue;
@@ -1207,18 +1224,29 @@ impl<L: Link> IsoNet<L> {
         }
     }
 
+    /// Returns the addresses the local CFs stopped using, so the caller can
+    /// tear down transports that would otherwise keep transmitting from them.
+    ///
+    /// Two ECUs sharing a NAME — an unprogrammed identity number is a routine
+    /// field fault — put the local CF into cannot-claim. It correctly emitted
+    /// Cannot Claim and went offline, and then kept transmitting: `update`
+    /// unconditionally pumps the TP/ETP engines and routes their frames by
+    /// address, so an in-flight VT pool or TC DDOP upload went on emitting DT
+    /// frames with the source address the CF had just renounced, for as long as
+    /// the transfer lasted. A BAM needs no peer cooperation at all.
     fn handle_duplicate_internal_name(
         &mut self,
         claimed_name: Name,
         claimed_addr: Address,
         port: u8,
-    ) {
+    ) -> Vec<Address> {
         if claimed_addr == NULL_ADDRESS || claimed_addr == BROADCAST_ADDRESS {
-            return;
+            return Vec::new();
         }
 
         let mut emitted: Vec<Frame> = Vec::new();
         let mut duplicate_events: Vec<(Name, Address)> = Vec::new();
+        let mut vacated: Vec<Address> = Vec::new();
         for (icf, claimer) in self.internal_cfs.iter_mut().zip(self.claimers.iter_mut()) {
             if icf.port() != port
                 || icf.name() != claimed_name
@@ -1230,13 +1258,18 @@ impl<L: Link> IsoNet<L> {
             }
 
             duplicate_events.push((claimed_name, claimed_addr));
+            let held = icf.address();
             emitted.extend(claimer.handle_duplicate_name(icf));
+            if icf.address() != held || !icf.cf().is_online() {
+                vacated.push(held);
+            }
         }
 
         for event in &duplicate_events {
             self.on_duplicate_name.emit(event);
         }
         self.send_frames_best_effort(&emitted, port);
+        vacated
     }
 
     fn dispatch_message(&mut self, msg: &Message) {

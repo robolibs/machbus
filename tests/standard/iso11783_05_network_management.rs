@@ -1396,3 +1396,78 @@ fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
     assert!(recovered.cf().is_online());
     assert_eq!(recovered.name(), stranded_name);
 }
+
+/// G2 — ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+/// using the address", and §4.4.2.4 restricts a CF that cannot claim to
+/// cannot-claim and request-for-address-claimed. Two ECUs sharing a NAME (an
+/// unprogrammed identity number is a routine field fault) put the local CF into
+/// cannot-claim: it correctly emitted Cannot Claim and went offline, and then
+/// kept transmitting, because `update` unconditionally pumps the transport
+/// engines and routes their frames by address. An in-flight VT pool or TC DDOP
+/// upload went on emitting DT frames from the renounced address for as long as
+/// the transfer lasted, and a BAM needs no peer cooperation at all.
+#[test]
+fn a_duplicate_name_tears_down_transports_on_the_address_it_vacates() {
+    let name = name_with_identity(0x777, false);
+
+    let mut net: IsoNet<ShmLink> = IsoNet::new(NetworkConfig::default());
+    net.set_capture_outbound(true);
+    let cf = net.create_internal(name, 0, 0x43).unwrap();
+    net.start_address_claiming().unwrap();
+    for _ in 0..40 {
+        net.update(50);
+        while net.take_outbound().is_some() {}
+        if net.internal_cf(cf).unwrap().claim_state() == ClaimState::Claimed {
+            break;
+        }
+    }
+    assert_eq!(net.internal_cf(cf).unwrap().address(), 0x43);
+
+    // A BAM: no peer cooperation, so it runs on its own.
+    net.send(
+        0xEF00,
+        &[0xA5u8; 40],
+        cf,
+        BROADCAST_ADDRESS,
+        Priority::Lowest,
+    )
+    .unwrap();
+    net.update(0);
+    assert!(
+        !net.transport_protocol().active_sessions().is_empty(),
+        "precondition: a broadcast transfer is in flight"
+    );
+    while net.take_outbound().is_some() {}
+
+    // Somebody else on the bus is transmitting our own NAME, from 0x50.
+    let mut claim = [0xFFu8; 8];
+    claim.copy_from_slice(&name.to_bytes());
+    net.feed(
+        &Frame::new(
+            Identifier::encode(Priority::Lowest, PGN_ADDRESS_CLAIMED, 0x50, BROADCAST_ADDRESS),
+            claim,
+            8,
+        ),
+        0,
+    );
+
+    assert!(
+        net.transport_protocol().active_sessions().is_empty(),
+        "the transfer on the vacated address must be torn down"
+    );
+
+    // And nothing further leaves from the address we just gave up, except the
+    // Cannot Claim / Address Claimed frames §4.4.2.4 still allows.
+    for _ in 0..20 {
+        net.update(50);
+    }
+    while let Some((_, frame)) = net.take_outbound() {
+        if frame.source() == 0x43 {
+            assert_eq!(
+                frame.pgn(),
+                PGN_ADDRESS_CLAIMED,
+                "only address-claim traffic may leave a surrendered address"
+            );
+        }
+    }
+}

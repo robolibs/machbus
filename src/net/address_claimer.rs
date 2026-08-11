@@ -185,7 +185,19 @@ impl AddressClaimer {
         self.listen_timer_ms = 0;
 
         let preferred = cf.preferred_address();
-        let address = if self.is_occupied(preferred) {
+        // ISO 11783-5 Table 1, NAME MSB: "1 = Self-configurable address, 0 =
+        // Not self-configurable address". Only a self-configurable CF may pick
+        // another address from the configurable range; a fixed-address CF
+        // (TECU at 0x00, VT at 0x26, TC at 0x2B) must claim its own and, if it
+        // cannot, say Cannot Claim — which is what `handle_claim` already does
+        // on the arbitration path. Relocating unconditionally moved such a CF
+        // into 128..=247 at power-up merely because somebody answered its
+        // Request for Address Claimed, so every frame it sent carried the wrong
+        // SA, destination-specific TP/ETP addressed to its real address was
+        // dropped, it advertised self-configurable = 0 while using a
+        // self-configured address, and §4.5.3 arbitration — which would have
+        // removed one contender — was never entered.
+        let address = if self.is_occupied(preferred) && cf.name().self_configurable() {
             let next = self.find_next_address(cf, preferred);
             tracing::info!(
                 target: "machbus.network.claim",
@@ -703,6 +715,32 @@ mod tests {
             "the incumbent must not be evicted from an address we never held"
         );
         assert_eq!(cf.address(), claim[0].source());
+    }
+
+    /// G1 — ISO 11783-5 Table 1, NAME MSB: only a self-configurable CF may
+    /// select another address. A fixed-address CF (TECU at 0x00, VT at 0x26, TC
+    /// at 0x2B) used to relocate into the configurable range at power-up merely
+    /// because somebody answered its Request for Address Claimed, so every
+    /// frame it sent carried the wrong SA, destination-specific TP/ETP was
+    /// dropped, and §4.5.3 arbitration was never entered — the collision was
+    /// papered over with both devices still online.
+    #[test]
+    fn a_fixed_address_cf_claims_its_own_address_after_the_listen_window() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, false), 0, 0x26);
+        let mut clm = AddressClaimer::new(0);
+        clm.start(&mut cf);
+
+        let incumbent = name_with_identity(0x900, true);
+        assert!(clm.handle_claim(&mut cf, 0x26, incumbent).is_empty());
+
+        let claim = clm.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS);
+        assert_eq!(claim.len(), 1);
+        assert_eq!(
+            claim[0].source(),
+            0x26,
+            "a CF that is not self-configurable has exactly one address to claim"
+        );
+        assert_eq!(cf.address(), 0x26);
     }
 
     #[test]

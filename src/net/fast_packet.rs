@@ -54,6 +54,12 @@ struct FastPacketSession {
     total_bytes: u32,
     bytes_received: u32,
     source_address: Address,
+    /// The frame's destination and priority, so reassembly reproduces the
+    /// message that arrived rather than assuming a broadcast at default
+    /// priority. A PDU1 fast-packet PGN (126208 Request/Command/Acknowledge
+    /// Group Function, 126720 proprietary addressable) is destination-specific.
+    destination_address: Address,
+    priority: Priority,
     sequence_counter: u8,
     expected_frame: u8,
     timer_ms: u32,
@@ -137,6 +143,32 @@ impl FastPacketProtocol {
     /// [`ErrorCode::BufferOverflow`]: super::error::ErrorCode::BufferOverflow
     /// [`ErrorCode::InvalidState`]: super::error::ErrorCode::InvalidState
     pub fn send(&mut self, pgn: Pgn, data: &[u8], source: Address) -> Result<Vec<Frame>> {
+        self.send_to(
+            pgn,
+            data,
+            source,
+            super::constants::BROADCAST_ADDRESS,
+            Priority::Default,
+        )
+    }
+
+    /// Send a fast packet to a named destination at a chosen priority.
+    ///
+    /// `IsoNet::send` honours `dst` and `priority` on the single-frame and
+    /// TP/ETP paths and used to drop both here, silently: a PDU1 fast-packet
+    /// PGN — NMEA 2000 126208 (Request/Command/Acknowledge Group Function,
+    /// PF = 0xED) or 126720 (proprietary addressable, PF = 0xEF) — went to the
+    /// broadcast address instead of the named ECU, so an addressed group
+    /// function reached everyone and was answered by nobody. For a PDU2 PGN
+    /// `Identifier::encode` ignores `destination` anyway.
+    pub fn send_to(
+        &mut self,
+        pgn: Pgn,
+        data: &[u8],
+        source: Address,
+        destination: Address,
+        priority: Priority,
+    ) -> Result<Vec<Frame>> {
         if !pgn_is_valid(pgn) {
             return Err(Error::invalid_pgn(pgn));
         }
@@ -158,12 +190,7 @@ impl FastPacketProtocol {
             1 + (data.len() - FIRST_FRAME_DATA).div_ceil(SUBSEQUENT_FRAME_DATA) as u8;
 
         let mut frames = Vec::with_capacity(total_frames as usize);
-        let id = Identifier::encode(
-            Priority::Default,
-            pgn,
-            source,
-            super::constants::BROADCAST_ADDRESS,
-        );
+        let id = Identifier::encode(priority, pgn, source, destination);
 
         // First frame: byte 0 = seq | 0, byte 1 = total length, bytes 2..8 = first 6 data bytes.
         let mut first = [0xFFu8; 8];
@@ -434,6 +461,8 @@ impl FastPacketProtocol {
             total_bytes,
             bytes_received: copy_len as u32,
             source_address: src,
+            destination_address: frame.destination(),
+            priority: frame.priority(),
             sequence_counter: seq_counter,
             expected_frame: 1,
             timer_ms: 0,
@@ -507,8 +536,8 @@ fn make_message(session: &FastPacketSession) -> Message {
         pgn: session.pgn,
         data: payload_as_slice(&session.data).to_vec(),
         source: session.source_address,
-        destination: super::constants::BROADCAST_ADDRESS,
-        priority: Priority::Default,
+        destination: session.destination_address,
+        priority: session.priority,
         timestamp_us: session.last_timestamp_us,
     }
 }
@@ -519,8 +548,8 @@ fn make_fixed_message<const N: usize>(session: &FastPacketSession) -> Result<Fix
         session.pgn,
         payload_as_slice(&session.data),
         session.source_address,
-        super::constants::BROADCAST_ADDRESS,
-        Priority::Default,
+        session.destination_address,
+        session.priority,
     )
     .map(|mut message| {
         message.timestamp_us = session.last_timestamp_us;
@@ -577,6 +606,56 @@ mod tests {
     fn pick_frames(payload: &[u8], pgn: Pgn, src: Address) -> Vec<Frame> {
         let mut p = FastPacketProtocol::new();
         p.send(pgn, payload, src).expect("send ok")
+    }
+
+    /// G5 — `IsoNet::send` honours `dst` and `priority` on the single-frame and
+    /// TP/ETP paths and dropped both here, without an error or a warning. A
+    /// PDU1 fast-packet PGN — NMEA 2000 126208 (Request/Command/Acknowledge
+    /// Group Function, PF = 0xED) or 126720 (proprietary addressable) — went to
+    /// 0xFF instead of the named ECU, so an addressed group function reached
+    /// everyone and was answered by nobody, and priority was pinned at 6.
+    /// Reassembly had the mirror problem: it hardcoded broadcast and default.
+    #[test]
+    fn an_addressed_fast_packet_keeps_its_destination_and_priority() {
+        const PGN_GROUP_FUNCTION: Pgn = 126_208;
+
+        let payload: Vec<u8> = (0..30u8).collect();
+        let mut tx = FastPacketProtocol::new();
+        let frames = tx
+            .send_to(
+                PGN_GROUP_FUNCTION,
+                &payload,
+                0x10,
+                0x26,
+                Priority::Highest,
+            )
+            .expect("a 30-byte addressed fast packet encodes");
+        assert!(frames.len() > 1);
+        for frame in &frames {
+            assert_eq!(frame.destination(), 0x26, "PDU1: PS is the destination");
+            assert_eq!(frame.priority(), Priority::Highest);
+            assert_eq!(frame.pgn(), PGN_GROUP_FUNCTION);
+        }
+
+        // And the receiver reproduces the message that actually arrived.
+        let mut rx = FastPacketProtocol::new();
+        let mut delivered = None;
+        for frame in &frames {
+            if let Some(message) = rx.process_frame(frame) {
+                delivered = Some(message);
+            }
+        }
+        let message = delivered.expect("the fast packet reassembles");
+        assert_eq!(message.destination, 0x26);
+        assert_eq!(message.priority, Priority::Highest);
+        assert_eq!(message.data, payload);
+
+        // `send` still means broadcast at default priority.
+        let broadcast = FastPacketProtocol::new()
+            .send(PGN_GROUP_FUNCTION, &payload, 0x10)
+            .expect("encodes");
+        assert_eq!(broadcast[0].destination(), BROADCAST_ADDRESS);
+        assert_eq!(broadcast[0].priority(), Priority::Default);
     }
 
     #[test]

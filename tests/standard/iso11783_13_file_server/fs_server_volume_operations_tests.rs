@@ -163,7 +163,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &open_directory_as_file[0].data,
         FSFunction::OpenFile,
         0xA0,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let open_file_as_directory = server.handle_client_message(&fs_request(
@@ -174,7 +174,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &open_file_as_directory[0].data,
         FSFunction::OpenFile,
         0xA1,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let file_path = b"plain.txt";
@@ -189,7 +189,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_change[0].data,
         FSFunction::ChangeDirectory,
         0xA2,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
     assert_eq!(
         server.clients().get(&0x42).unwrap().current_directory,
@@ -209,7 +209,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_delete[0].data,
         FSFunction::DeleteFile,
         0xA3,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let mut move_directory = vec![
@@ -225,7 +225,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_move[0].data,
         FSFunction::MoveFile,
         0xA4,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let mut set_directory_attrs = vec![
@@ -240,7 +240,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_set_attrs[0].data,
         FSFunction::SetFileAttributes,
         0xA5,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let mut get_directory_attrs = vec![

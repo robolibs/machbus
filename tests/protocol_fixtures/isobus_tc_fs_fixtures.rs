@@ -1011,7 +1011,10 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     };
     let nack_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "nack_move_not_supported");
     assert_eq!(nack.encode(), nack_bytes);
-    assert_eq!(FSError::from_u8(20), FSError::NotSupported);
+    // B.9 puts "function not supported" at 12; 14..=41 and 48..=255 are
+    // reserved. 20 used to be emitted for every unimplemented command.
+    assert_eq!(FSError::from_u8(12), FSError::NotSupported);
+    assert_eq!(FSError::try_from_u8(20), None);
     assert_eq!(
         FileAttributes::ReadOnly | FileAttributes::Archive,
         0x21,

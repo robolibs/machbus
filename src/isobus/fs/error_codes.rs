@@ -2,8 +2,18 @@
 //!
 //! Mirrors the C++ `machbus::isobus::fs::error_codes.hpp`.
 
-/// 48-entry standard error set (only the populated codes; gaps are
-/// reserved per the spec).
+/// ISO 11783-13:2022 B.9 Error Code table.
+///
+/// Everything from 5 upward used to be shifted by one or two, and an
+/// unimplemented function answered 20, which B.9 marks reserved. A conformant
+/// server's 10 (media is not present) was read as "volume out of free space",
+/// so a client retried a write forever instead of prompting the operator, and
+/// its 12 (function not supported) was read as "media not present", which
+/// [`FSError::is_fatal`] treats as unrecoverable.
+///
+/// The former `WrongType` and `MaxHandles` values have no code of their own:
+/// B.9 gives a file-where-a-directory-was-expected as the reason for 2, and
+/// the handle ceiling as the reason for 3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum FSError {
@@ -13,16 +23,15 @@ pub enum FSError {
     InvalidAccess = 2,
     TooManyOpen = 3,
     NotFound = 4,
-    WrongType = 5,
-    MaxHandles = 6,
-    InvalidHandle = 7,
-    InvalidSourceName = 8,
-    InvalidDestName = 9,
-    NoSpace = 10,
-    WriteFail = 11,
-    MediaNotPresent = 12,
+    InvalidHandle = 5,
+    InvalidSourceName = 6,
+    InvalidDestName = 7,
+    NoSpace = 8,
+    WriteFail = 9,
+    MediaNotPresent = 10,
+    ReadFail = 11,
+    NotSupported = 12,
     NotInitialized = 13,
-    NotSupported = 20,
     InvalidLength = 42,
     OutOfMemory = 43,
     OtherError = 44,
@@ -54,16 +63,15 @@ impl FSError {
             2 => Some(Self::InvalidAccess),
             3 => Some(Self::TooManyOpen),
             4 => Some(Self::NotFound),
-            5 => Some(Self::WrongType),
-            6 => Some(Self::MaxHandles),
-            7 => Some(Self::InvalidHandle),
-            8 => Some(Self::InvalidSourceName),
-            9 => Some(Self::InvalidDestName),
-            10 => Some(Self::NoSpace),
-            11 => Some(Self::WriteFail),
-            12 => Some(Self::MediaNotPresent),
+            5 => Some(Self::InvalidHandle),
+            6 => Some(Self::InvalidSourceName),
+            7 => Some(Self::InvalidDestName),
+            8 => Some(Self::NoSpace),
+            9 => Some(Self::WriteFail),
+            10 => Some(Self::MediaNotPresent),
+            11 => Some(Self::ReadFail),
+            12 => Some(Self::NotSupported),
             13 => Some(Self::NotInitialized),
-            20 => Some(Self::NotSupported),
             42 => Some(Self::InvalidLength),
             43 => Some(Self::OutOfMemory),
             44 => Some(Self::OtherError),
@@ -83,16 +91,15 @@ impl FSError {
             Self::InvalidAccess => "Invalid Access",
             Self::TooManyOpen => "Too Many Open",
             Self::NotFound => "Not Found",
-            Self::WrongType => "Wrong Type",
-            Self::MaxHandles => "Max Handles",
             Self::InvalidHandle => "Invalid Handle",
             Self::InvalidSourceName => "Invalid Source Name",
             Self::InvalidDestName => "Invalid Dest Name",
             Self::NoSpace => "No Space",
             Self::WriteFail => "Write Fail",
             Self::MediaNotPresent => "Media Not Present",
-            Self::NotInitialized => "Not Initialized",
+            Self::ReadFail => "Read Fail",
             Self::NotSupported => "Not Supported",
+            Self::NotInitialized => "Not Initialized",
             Self::InvalidLength => "Invalid Length",
             Self::OutOfMemory => "Out Of Memory",
             Self::OtherError => "Other Error",
@@ -108,19 +115,20 @@ impl FSError {
         match self {
             Self::Success => "Operation completed successfully",
             Self::AccessDenied => "File access denied due to insufficient permissions",
-            Self::InvalidAccess => "Invalid access mode requested (read/write/append)",
-            Self::TooManyOpen => "Too many files already open by this client",
-            Self::NotFound => "File or directory not found at specified path",
-            Self::WrongType => "Wrong type - expected file but found directory or vice versa",
-            Self::MaxHandles => "Maximum number of file handles reached server-wide",
-            Self::InvalidHandle => "Invalid file handle specified in request",
-            Self::InvalidSourceName => "Invalid source filename (illegal characters or format)",
-            Self::InvalidDestName => "Invalid destination filename (illegal characters or format)",
-            Self::NoSpace => "Insufficient space on volume for operation",
-            Self::WriteFail => "Write operation failed (I/O error or media fault)",
-            Self::MediaNotPresent => "Removable media not present in drive",
-            Self::NotInitialized => "File system not initialized or mount failed",
-            Self::NotSupported => "Operation not supported by this file server",
+            Self::InvalidAccess => {
+                "Invalid access - the path names a file where a directory was expected, or vice versa"
+            }
+            Self::TooManyOpen => "Too many files open - the file server's handle ceiling is reached",
+            Self::NotFound => "File, path or volume not found",
+            Self::InvalidHandle => "The request names a handle the file server does not know",
+            Self::InvalidSourceName => "Invalid given source name",
+            Self::InvalidDestName => "Invalid given destination name",
+            Self::NoSpace => "Volume out of free space",
+            Self::WriteFail => "Failure during a write operation",
+            Self::MediaNotPresent => "Media is not present",
+            Self::ReadFail => "Failure during a read operation",
+            Self::NotSupported => "Function not supported",
+            Self::NotInitialized => "Volume is possibly not initialized",
             Self::InvalidLength => "Invalid data length in request",
             Self::OutOfMemory => "Insufficient memory to complete operation",
             Self::OtherError => "Other unspecified error occurred",
@@ -142,7 +150,10 @@ impl FSError {
     /// Indicates a retry might succeed.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
-        matches!(self, Self::TooManyOpen | Self::MaxHandles | Self::WriteFail)
+        matches!(
+            self,
+            Self::TooManyOpen | Self::WriteFail | Self::ReadFail
+        )
     }
 }
 
@@ -277,18 +288,40 @@ pub const fn has_attribute(attrs: u8, attr: FileAttributes) -> bool {
 mod tests {
     use super::*;
 
+    /// The B.9 table verbatim. Everything from 5 up used to be shifted, and
+    /// "function not supported" was emitted as 20 out of the reserved range.
     #[test]
-    fn fs_error_round_trip() {
-        for e in [
-            FSError::Success,
-            FSError::AccessDenied,
-            FSError::EndOfFile,
-            FSError::TANError,
-            FSError::MalformedRequest,
+    fn fs_error_codes_match_the_b9_table() {
+        for (code, error) in [
+            (0, FSError::Success),
+            (1, FSError::AccessDenied),
+            (2, FSError::InvalidAccess),
+            (3, FSError::TooManyOpen),
+            (4, FSError::NotFound),
+            (5, FSError::InvalidHandle),
+            (6, FSError::InvalidSourceName),
+            (7, FSError::InvalidDestName),
+            (8, FSError::NoSpace),
+            (9, FSError::WriteFail),
+            (10, FSError::MediaNotPresent),
+            (11, FSError::ReadFail),
+            (12, FSError::NotSupported),
+            (13, FSError::NotInitialized),
+            (42, FSError::InvalidLength),
+            (43, FSError::OutOfMemory),
+            (44, FSError::OtherError),
+            (45, FSError::EndOfFile),
+            (46, FSError::TANError),
+            (47, FSError::MalformedRequest),
         ] {
-            assert_eq!(FSError::from_u8(e.as_u8()), e);
+            assert_eq!(FSError::try_from_u8(code), Some(error));
+            assert_eq!(error.as_u8(), code);
         }
-        assert_eq!(FSError::from_u8(99), FSError::OtherError);
+
+        for reserved in [14, 20, 41, 48, 99, 255] {
+            assert_eq!(FSError::try_from_u8(reserved), None, "{reserved} is reserved");
+            assert_eq!(FSError::from_u8(reserved), FSError::OtherError);
+        }
     }
 
     #[test]

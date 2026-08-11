@@ -1606,7 +1606,7 @@ fn file_server_requires_existing_parent_directories_for_create_and_move() {
         &create_under_file[0].data,
         FSFunction::OpenFile,
         0x74,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let missing_created = server.handle_client_message(&fs_request(
@@ -1704,7 +1704,7 @@ fn file_server_enforces_advertised_open_file_capacity_before_creation() {
         &over_capacity[0].data,
         FSFunction::OpenFile,
         0x81,
-        FSError::MaxHandles,
+        FSError::TooManyOpen,
     );
     assert_eq!(
         server.open_files().len(),

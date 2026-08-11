@@ -593,7 +593,7 @@ impl FileServer {
                 .min(self.properties.max_simultaneous_files),
         );
         if self.open_files.len() >= max_open_files_total {
-            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::MaxHandles);
+            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::TooManyOpen);
         }
 
         if is_dir_listing {
@@ -606,7 +606,7 @@ impl FileServer {
                     return encode_error_response(
                         FSFunction::OpenFile.as_u8(),
                         tan,
-                        FSError::WrongType,
+                        FSError::InvalidAccess,
                     );
                 }
                 return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::NotFound);
@@ -616,7 +616,7 @@ impl FileServer {
                 return encode_error_response(
                     FSFunction::OpenFile.as_u8(),
                     tan,
-                    FSError::WrongType,
+                    FSError::InvalidAccess,
                 );
             }
             let exists = self.files.contains_key(&path);
@@ -649,7 +649,7 @@ impl FileServer {
                         return encode_error_response(
                             FSFunction::OpenFile.as_u8(),
                             tan,
-                            FSError::WrongType,
+                            FSError::InvalidAccess,
                         );
                     }
                     return encode_error_response(
@@ -682,7 +682,7 @@ impl FileServer {
 
         let handle = self.allocate_handle();
         if handle == INVALID_FILE_HANDLE {
-            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::MaxHandles);
+            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::TooManyOpen);
         }
         self.open_files.push(OpenFile {
             handle,
@@ -1152,7 +1152,7 @@ impl FileServer {
                     return encode_error_response(
                         FSFunction::ChangeDirectory.as_u8(),
                         tan,
-                        FSError::WrongType,
+                        FSError::InvalidAccess,
                     );
                 }
                 return encode_error_response(
@@ -1204,7 +1204,7 @@ impl FileServer {
         // A file already occupies the path ⇒ wrong type; an existing directory
         // is an idempotent success; otherwise create it.
         if self.file_exists_at_directory_path(&target_path) {
-            return encode_error_response(func, tan, FSError::WrongType);
+            return encode_error_response(func, tan, FSError::InvalidAccess);
         }
         if !self.directories.iter().any(|d| d == &target_path) {
             self.directories.push(target_path);
@@ -1295,7 +1295,7 @@ impl FileServer {
             );
         }
         if self.is_file_path_directory(&source_path) {
-            return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::WrongType);
+            return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::InvalidAccess);
         }
         if self.is_path_open(&source_path) || self.is_path_open(&destination_path) {
             return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::AccessDenied);
@@ -1309,7 +1309,7 @@ impl FileServer {
                 return encode_error_response(
                     FSFunction::MoveFile.as_u8(),
                     tan,
-                    FSError::WrongType,
+                    FSError::InvalidAccess,
                 );
             }
             return encode_error_response(
@@ -1369,7 +1369,7 @@ impl FileServer {
         };
         let Some(data) = self.files.get(&path) else {
             if self.directory_exists(&path) {
-                return encode_error_response(func, tan, FSError::WrongType);
+                return encode_error_response(func, tan, FSError::InvalidAccess);
             }
             return encode_error_response(func, tan, FSError::NotFound);
         };
@@ -1397,7 +1397,7 @@ impl FileServer {
             return encode_error_response(func, tan, FSError::InvalidDestName);
         }
         if self.is_file_path_directory(&source_path) {
-            return encode_error_response(func, tan, FSError::WrongType);
+            return encode_error_response(func, tan, FSError::InvalidAccess);
         }
         let Some(data) = self.files.get(&source_path).cloned() else {
             return encode_error_response(func, tan, FSError::NotFound);
@@ -1408,7 +1408,7 @@ impl FileServer {
         let destination_parent = file_parent_directory_path(&destination_path);
         if !self.directory_exists(&destination_parent) {
             if self.file_exists_at_directory_path(&destination_parent) {
-                return encode_error_response(func, tan, FSError::WrongType);
+                return encode_error_response(func, tan, FSError::InvalidAccess);
             }
             return encode_error_response(func, tan, FSError::InvalidDestName);
         }
@@ -1447,7 +1447,7 @@ impl FileServer {
             );
         };
         if self.is_file_path_directory(&path) {
-            return encode_error_response(FSFunction::DeleteFile.as_u8(), tan, FSError::WrongType);
+            return encode_error_response(FSFunction::DeleteFile.as_u8(), tan, FSError::InvalidAccess);
         }
         if self.is_path_open(&path) {
             return encode_error_response(
@@ -1561,7 +1561,7 @@ impl FileServer {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
-                FSError::WrongType,
+                FSError::InvalidAccess,
             );
         }
         if !self.files.contains_key(&path) {

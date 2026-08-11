@@ -581,7 +581,7 @@ mod tests {
         ];
         req.extend_from_slice(file_path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[2], FSError::WrongType.as_u8());
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
     }
 
     #[test]
@@ -633,7 +633,7 @@ mod tests {
 
         // A directory is wrong type; a missing file is NotFound.
         let out = s.handle_client_message(&req_msg(size_req(0x21, b"\\d"), 0x42));
-        assert_eq!(out[0].data[2], FSError::WrongType.as_u8());
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
         let out = s.handle_client_message(&req_msg(size_req(0x22, b"\\nope"), 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
     }

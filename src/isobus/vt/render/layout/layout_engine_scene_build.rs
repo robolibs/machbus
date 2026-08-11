@@ -779,6 +779,7 @@ impl LayoutEngine {
                     NodeKind::OutputString {
                         text: self.resolve_string_value(pool, &body),
                         transparent_bg: body.options & 0x01 != 0,
+                        auto_wrap: body.options & 0x02 != 0,
                         justification: body.justification,
                     },
                 ))

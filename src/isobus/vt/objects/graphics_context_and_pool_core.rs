@@ -1028,13 +1028,13 @@ impl VTObject {
             return self.serialize_working_set();
         }
         if self.r#type == ObjectType::PictureGraphic {
-            return Ok(self.serialize_picture_graphic());
+            return self.serialize_picture_graphic();
         }
         let record_size = parent_record_size(self.r#type).unwrap_or(0);
         let children_size = if is_parent {
             serialized_child_macro_tail_len(
                 self.children_pos.len(),
-                self.macros.len(),
+                usize::from(macro_grouping_count(&self.macros)?),
                 record_size,
             )?
         } else {
@@ -1060,7 +1060,7 @@ impl VTObject {
             // ISO 11783-6 parent tail — both counts precede both lists:
             //   `[num_objects:u8][num_macros:u8][object records][macro records]`.
             data.push(self.children_pos.len() as u8);
-            data.push(macro_grouping_count(&self.macros));
+            data.push(macro_grouping_count(&self.macros)?);
             for cref in &self.children_pos {
                 push_u16_le(&mut data, cref.id);
                 if record_size == 6 {
@@ -1073,7 +1073,7 @@ impl VTObject {
             }
         } else if leaf_has_macro_tail(self.r#type) {
             // Leaf objects carry only the trailing `[num_macros][macro refs]`.
-            data.push(macro_grouping_count(&self.macros));
+            data.push(macro_grouping_count(&self.macros)?);
             for mref in &self.macros {
                 push_macro_ref(&mut data, *mref);
             }
@@ -1084,18 +1084,18 @@ impl VTObject {
     /// Picture Graphic has an interleaved tail — `[13 header incl data-length]
     /// [num_macros][raw data][macro refs]`. `self.body` stores `[13 header][data]`,
     /// so the macro count is re-inserted before the pixel data on the wire.
-    fn serialize_picture_graphic(&self) -> Vec<u8> {
+    fn serialize_picture_graphic(&self) -> Result<Vec<u8>> {
         let split = self.body.len().min(13);
         let mut data = Vec::with_capacity(3 + self.body.len() + 1 + self.macros.len() * 2);
         push_u16_le(&mut data, self.id);
         data.push(self.r#type.as_u8());
         data.extend_from_slice(&self.body[..split]);
-        data.push(macro_grouping_count(&self.macros));
+        data.push(macro_grouping_count(&self.macros)?);
         data.extend_from_slice(&self.body[split..]);
         for mref in &self.macros {
             push_macro_ref(&mut data, *mref);
         }
-        data
+        Ok(data)
     }
 
     fn serialize_working_set(&self) -> Result<Vec<u8>> {
@@ -1105,9 +1105,10 @@ impl VTObject {
                 "Working Set object count must fit the 1..=255 count field",
             ));
         }
-        if self.macros.len() > u8::MAX as usize || body.languages.len() > u8::MAX as usize {
+        let macro_groupings = usize::from(macro_grouping_count(&self.macros)?);
+        if body.languages.len() > u8::MAX as usize {
             return Err(Error::invalid_data(
-                "Working Set macro/language count exceeds u8 count field",
+                "Working Set language count exceeds u8 count field",
             ));
         }
         let child_bytes = self
@@ -1115,9 +1116,7 @@ impl VTObject {
             .len()
             .checked_mul(6)
             .ok_or_else(|| Error::invalid_data("Working Set child-list length overflows"))?;
-        let macro_bytes = self
-            .macros
-            .len()
+        let macro_bytes = macro_groupings
             .checked_mul(2)
             .ok_or_else(|| Error::invalid_data("Working Set macro-list length overflows"))?;
         let language_bytes = body
@@ -1138,7 +1137,7 @@ impl VTObject {
         data.push(body.selectable);
         push_u16_le(&mut data, body.active_mask);
         data.push(self.children_pos.len() as u8);
-        data.push(macro_grouping_count(&self.macros));
+        data.push(macro_grouping_count(&self.macros)?);
         data.push(body.languages.len() as u8);
         for cref in &self.children_pos {
             push_u16_le(&mut data, cref.id);

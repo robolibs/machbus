@@ -385,6 +385,7 @@ impl GtuiRenderer {
             NodeKind::OutputString {
                 text,
                 transparent_bg,
+                auto_wrap,
                 justification,
             } => {
                 if !transparent_bg {
@@ -399,7 +400,7 @@ impl GtuiRenderer {
                     node.style,
                     HorizontalAlign::from_justification(*justification),
                     vertical_align_from_justification(*justification),
-                    true,
+                    *auto_wrap,
                 ));
             }
             NodeKind::OutputNumber {

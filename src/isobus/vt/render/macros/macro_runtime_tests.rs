@@ -1023,6 +1023,11 @@ mod tests {
                 (ObjectID::new(7), 1, 4),
                 (ObjectID::new(40), 1, 2),
                 (ObjectID::new(41), 4, 20),
+                // I2 — Output String AID 5 bit 2 is wrap-on-hyphen (VT4+), the
+                // same option bit Input String AID 6 already accepted. Refusing
+                // it here meant a Change Attribute enabling it at runtime was
+                // dropped on one object type and honoured on the other.
+                (ObjectID::new(41), 5, 4),
                 (ObjectID::new(42), 5, 2),
                 (ObjectID::new(42), 6, 2),
                 (ObjectID::new(43), 10, 1),
@@ -1033,7 +1038,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            report.skipped, 16,
+            report.skipped, 15,
             "unsupported/read-only AIDs, missing targets, invalid Window Mask values/designators, invalid typed references, invalid Key Group designators, invalid scalar flags, reserved numeric formats/decimal counts, list-value Change Attribute attempts, and reserved Alarm Mask acoustic signals must not leak into generic replay"
         );
         let window_mask = pool

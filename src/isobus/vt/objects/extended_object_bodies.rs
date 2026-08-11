@@ -407,6 +407,8 @@ fn validate_picture_graphic_format_and_options(
     Ok(())
 }
 
+/// `macro_count` is the *grouping* count, not the reference count, so the
+/// declared length and the bytes actually written cannot disagree.
 fn serialized_child_macro_tail_len(
     child_count: usize,
     macro_count: usize,
@@ -641,13 +643,24 @@ pub(crate) fn push_macro_ref(data: &mut Vec<u8>, mref: MacroRef) {
 }
 
 /// The number of two-byte *groupings* a macro list occupies. A 16-bit
-/// reference is two groupings, which is what the preceding count records.
-pub(crate) fn macro_grouping_count(macros: &[MacroRef]) -> u8 {
-    macros
+/// reference is two groupings (§4.6.22.3: an Event ID of 255 in the first byte
+/// means two groupings concatenate into one 16-bit Macro Object ID reference),
+/// which is what the preceding count records.
+///
+/// Errors above 255 rather than clamping. Clamping made the count field lie:
+/// an object with 130 references above ID 255 passed the length guard on
+/// `macros.len()`, computed 260 groupings, wrote 255, and then emitted 520
+/// bytes — so every receiver, including this crate's own
+/// `object_body_total_len`, resumed parsing 10 bytes early and the rest of the
+/// pool decoded as garbage.
+pub(crate) fn macro_grouping_count(macros: &[MacroRef]) -> Result<u8> {
+    let groupings: usize = macros
         .iter()
         .map(|m| usize::from(m.macro_id > u16::from(u8::MAX)) + 1)
-        .sum::<usize>()
-        .min(usize::from(u8::MAX)) as u8
+        .sum();
+    u8::try_from(groupings).map_err(|_| {
+        Error::invalid_data("VT object macro groupings exceed the u8 count field")
+    })
 }
 
 /// Split a leaf object body into `(body, [], macros)`: the first `body_len`

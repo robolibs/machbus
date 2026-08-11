@@ -78,11 +78,39 @@ impl PadState {
         self.y_pressed = false;
         self.start_pressed = false;
     }
+
+    /// Drop every input to its released/centred value.
+    ///
+    /// A dead-man switch is only a dead-man if losing it reads as *released*.
+    /// gilrs sends no button-release events when a pad disconnects, so without
+    /// this the last `rtrigger` and stick values persisted: unplugging the pad
+    /// (or a flat battery, or a dropped Bluetooth link) while R2 was held left
+    /// `deadman` true forever and the machine steering at its last curvature.
+    fn release_all(&mut self) {
+        self.lstick_x = 0.0;
+        self.lstick_y = 0.0;
+        self.rtrigger = 0.0;
+        self.ltrigger = 0.0;
+        self.dpad_up = false;
+        self.dpad_down = false;
+        self.a_held = false;
+        self.b_held = false;
+        self.x_held = false;
+        self.y_held = false;
+        self.start_held = false;
+    }
 }
 
 /// Read all pending gilrs events, update pad state.
-fn poll_gamepad(gilrs: &mut Gilrs, pad: &mut PadState, active_id: &mut Option<gilrs::GamepadId>) {
+/// Returns `true` if the active pad went away this poll, so the caller can
+/// disarm — losing the controller is losing the dead-man.
+fn poll_gamepad(
+    gilrs: &mut Gilrs,
+    pad: &mut PadState,
+    active_id: &mut Option<gilrs::GamepadId>,
+) -> bool {
     pad.reset_edge();
+    let mut disconnected = false;
 
     // Pick the first connected pad if we don't have one.
     if active_id.is_none()
@@ -155,10 +183,26 @@ fn poll_gamepad(gilrs: &mut Gilrs, pad: &mut PadState, active_id: &mut Option<gi
             }
             EventType::Disconnected => {
                 pad.pad_name = "(disconnected)".into();
+                pad.release_all();
+                *active_id = None;
+                disconnected = true;
             }
             _ => {}
         }
     }
+
+    // Belt and braces: an unplug that produced no event still has to read as
+    // released, so check liveness rather than trusting the event stream.
+    if let Some(id) = *active_id
+        && !gilrs.gamepad(id).is_connected()
+    {
+        pad.pad_name = "(disconnected)".into();
+        pad.release_all();
+        *active_id = None;
+        disconnected = true;
+    }
+
+    disconnected
 }
 
 /// Ignore tiny stick movements near centre.
@@ -228,8 +272,14 @@ pub fn run(args: DriveArgs) -> Result<(), String> {
         let dt = now.duration_since(last).as_secs_f64().min(0.1);
         last = now;
 
-        // 1. Poll gamepad events.
-        poll_gamepad(&mut gilrs, &mut pad, &mut active_id);
+        // 1. Poll gamepad events. Losing the pad is losing the dead-man, so
+        //    it disarms: the operator must reconnect, release R2 and hold it
+        //    again for ARM_HOLD_SECS.
+        if poll_gamepad(&mut gilrs, &mut pad, &mut active_id) {
+            drive.speed = 0.0;
+            drive.steer = 0.0;
+            drive.disarm();
+        }
 
         // Read live axis state directly.
         if let Some(id) = active_id {
@@ -313,7 +363,12 @@ fn run_daemon(args: DriveArgs) -> Result<(), String> {
         let dt = now.duration_since(last).as_secs_f64().min(0.1);
         last = now;
 
-        poll_gamepad(&mut gilrs, &mut pad, &mut active_id);
+        // Same rule headless: losing the pad disarms.
+        if poll_gamepad(&mut gilrs, &mut pad, &mut active_id) {
+            drive.speed = 0.0;
+            drive.steer = 0.0;
+            drive.disarm();
+        }
         if let Some(id) = active_id {
             let gp = gilrs.gamepad(id);
             pad.lstick_y = deadzone(gp.value(Axis::LeftStickY) as f64);

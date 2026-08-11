@@ -368,4 +368,42 @@ mod tests {
             session.err()
         );
     }
+
+    /// A dead-man switch is only a dead-man if losing it reads as *released*.
+    /// The joystick path disarms when the pad disconnects; this pins the latch
+    /// behaviour that makes re-arming deliberate afterwards.
+    #[test]
+    fn losing_the_deadman_disarms_and_blocks_silent_rearm() {
+        let args = DriveArgs {
+            iface: "vcan0".into(),
+            addr: "80".into(),
+            default_speed: 2.0,
+            speed_step: 0.1,
+            max_curvature: 40.0,
+            daemon: false,
+        };
+        let mut d = DriveState::new(&args);
+
+        // Hold the dead-man for the full arm period: armed and commanding.
+        assert!(!d.update_arm(true, 1.0));
+        assert!(d.update_arm(true, 1.0), "held past ARM_HOLD_SECS -> active");
+        assert!(d.armed);
+
+        // The pad vanishes. The loop zeroes motion and disarms.
+        d.speed = 0.0;
+        d.steer = 0.0;
+        d.disarm();
+        assert!(!d.armed);
+        assert!(!d.engaged);
+
+        // A pad that reconnects still asserting R2 must NOT silently re-arm:
+        // `arm_block` holds until it is seen fully released once.
+        assert!(!d.update_arm(true, 10.0), "must not re-arm while still held");
+        assert!(!d.armed);
+
+        // Release, then hold again for the full period.
+        assert!(!d.update_arm(false, 0.1));
+        assert!(!d.update_arm(true, 1.0));
+        assert!(d.update_arm(true, 1.0), "deliberate re-hold re-arms");
+    }
 }

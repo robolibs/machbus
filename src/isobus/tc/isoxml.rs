@@ -574,6 +574,30 @@ impl TimeLogStructure {
         if self.position.status {
             out.push(rec.status.unwrap_or(0));
         }
+        // PTN E-I. `decode_record` already honours these widths and
+        // `prefix_len` already counts them, but nothing wrote them — so a
+        // header declaring any of them produced a record short by up to 11
+        // bytes, which this crate could not read back and no conformant reader
+        // could either.
+        //
+        // They are emitted as the Not Available values Table 3 assigns each
+        // column, because this crate does not model the readings: writing zero
+        // would claim a PDOP of 0.0 and zero satellites as measurements.
+        if self.position.pdop {
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+        }
+        if self.position.hdop {
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+        }
+        if self.position.satellites {
+            out.push(u8::MAX);
+        }
+        if self.position.gps_utc_time {
+            out.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+        if self.position.gps_utc_date {
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+        }
         // Table 3: `#DLV` then, per value, `DLVn` and the 32-bit PDV. §8.6.3:
         // "This means that a time entry can have a maximum of 255 PDVs."
         let count = u8::try_from(rec.values.len()).unwrap_or(u8::MAX);
@@ -823,6 +847,50 @@ mod tests {
 
         // Missing Time element is rejected.
         assert!(TimeLogStructure::from_header_xml("<root/>").is_err());
+    }
+
+    /// Table 3 puts five more position columns between PositionStatus and
+    /// `#DLV` — PDOP (E), HDOP (F), NumberOfSatellites (G), GpsUtcTime (H),
+    /// GpsUtcDate (I). `decode_record` skipped their widths and `prefix_len`
+    /// counted them, but `encode_record` never wrote them, so a header
+    /// declaring any of them produced a record short by up to 11 bytes that
+    /// this crate could not read back.
+    #[test]
+    fn time_log_records_carry_every_declared_position_column() {
+        let header = r#"<TIM A="">
+            <PTN A="" B="" C="" D="" E="" F="" G="" H="" I=""/>
+            <DLV A="0815" B="" C="DET1"/>
+        </TIM>"#;
+        let s = TimeLogStructure::from_header_xml(header).unwrap();
+        assert!(s.position.pdop && s.position.hdop && s.position.satellites);
+        assert!(s.position.gps_utc_time && s.position.gps_utc_date);
+
+        let rec = TimeLogRecord {
+            time_ms: 1_000,
+            date_days: 20,
+            has_time: true,
+            north_1e7_deg: Some(520_000_000),
+            east_1e7_deg: Some(50_000_000),
+            up_mm: Some(1_234),
+            status: Some(4),
+            values: vec![(0, -42)],
+        };
+
+        let encoded = s.encode_record(&rec);
+        // 6 time + 12 north/east/up + 1 status + 11 for PTN E-I + 1 count + 5.
+        assert_eq!(encoded.len(), 36, "every declared column must be written");
+
+        // Table 3's Not Available values for the columns this crate does not
+        // model — never zero, which would read as a real measurement.
+        assert_eq!(&encoded[19..21], &[0xFF, 0xFF], "PDOP not available");
+        assert_eq!(&encoded[21..23], &[0xFF, 0xFF], "HDOP not available");
+        assert_eq!(encoded[23], 0xFF, "satellite count not available");
+        assert_eq!(&encoded[24..28], &[0xFF; 4], "GPS UTC time not available");
+        assert_eq!(&encoded[28..30], &[0xFF, 0xFF], "GPS UTC date not available");
+
+        let (back, used) = s.decode_record(&encoded).expect("record round-trips");
+        assert_eq!(used, encoded.len());
+        assert_eq!(back, rec, "the fields this crate models survive intact");
     }
 
     #[test]

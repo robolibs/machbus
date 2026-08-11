@@ -2,9 +2,11 @@
 //! [`TaskControllerClient`]: routes `PGN_TC_TO_ECU`, ships FSM-driven outbound
 //! frames on tick, and surfaces state changes as [`TcEvent`].
 
-use crate::isobus::tc::{DDOP, TCClientConfig, TCClientOutbound, TCState, TaskControllerClient};
+use crate::isobus::tc::{
+    DDOP, ProcessDataCommands, TCClientConfig, TCClientOutbound, TCState, TaskControllerClient,
+};
 use crate::net::pgn_defs::PGN_TC_TO_ECU;
-use crate::net::{Address, BROADCAST_ADDRESS, Message, Pgn, Priority, Result};
+use crate::net::{Address, BROADCAST_ADDRESS, Message, Pgn, Result};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{Event, TcEvent};
 use crate::time::Instant;
@@ -86,11 +88,14 @@ impl TcClient {
     }
 
     fn ship(out: TCClientOutbound, ctx: &mut PluginCtx<'_>) {
+        // ISO 11783-10 B.2 sets the Process Data priority per command value,
+        // not per PG — see `ProcessDataCommands::priority`.
+        let priority = ProcessDataCommands::priority_for_payload(&out.data);
         ctx.send(
             out.pgn,
             out.data,
             out.dest.unwrap_or(BROADCAST_ADDRESS),
-            Priority::Default,
+            priority,
         );
     }
 

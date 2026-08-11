@@ -33,6 +33,20 @@ pub const MAX_TC_SERVER_SECTIONS: u8 = 254;
 /// machbus preserves all `u8` values here and does not infer additional
 /// section/channel topology constraints without an official-spec citation.
 pub const MAX_TC_SERVER_CHANNELS: u8 = u8::MAX;
+/// Largest element number the process-data messages can carry.
+///
+/// ISO 11783-10 B.3.2: "The element number is a 12-bit field that comprises
+/// Byte 1, bits 5 to 8 and Byte 2", data range 0 to 4095, SPN 5200. Note this
+/// is tighter than the DDOP's own field — Table A.2 sizes DeviceElement Number
+/// as 2 bytes with range 0 to 65534 — so an element numbered above 4095 is
+/// declarable but unaddressable, which is why the DDOP validator rejects it.
+///
+/// 4095 itself is accepted here because B.3.2's range includes it, but it is
+/// worth avoiding: B.8.1 and B.8.2 encode "element number, set to not
+/// available" as exactly this value (byte 1 bits 8-5 = 1111 with byte 2 = FF16),
+/// a meaning their footnote says "is introduced in ISO 11783-10 version 2". An
+/// element genuinely numbered 4095 is therefore indistinguishable from an
+/// absent one on any version-2-or-later network.
 pub const MAX_PROCESS_DATA_ELEMENT_NUMBER: u16 = 0x0FFF;
 
 /// Server-side measurement trigger runtime for one process-data value.

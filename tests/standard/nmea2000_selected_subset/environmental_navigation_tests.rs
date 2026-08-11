@@ -479,7 +479,7 @@ fn nmea2000_selected_categorical_fields_reject_reserved_values_before_events() {
 }
 
 #[test]
-fn nmea2000_selected_sequence_ids_reject_reserved_values_before_events_or_cache_update() {
+fn nmea2000_selected_sequence_ids_cost_the_binding_not_the_measurement() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_RAPID,
@@ -657,6 +657,24 @@ fn nmea2000_selected_sequence_ids_reject_reserved_values_before_events_or_cache_
         (PGN_GNSS_POSITION_DATA, standard_position_detail_frame()),
     ];
 
+    // DD056 reserves SID 253-254 for future use, but the Sequence ID is only a
+    // correlation tag — "identical SID values within two or more different PGN
+    // transmissions identifies those PGN transmissions as a single related data
+    // set". It carries no measurement, so refusing the frame threw away the
+    // reading to punish its label. A reserved SID now lands on 0xFF, the value
+    // the standard already defines for "No binding provided": the data arrives
+    // and only the correlation is refused.
+    // Baseline: the same frames with a bindable SID. Comparing against this
+    // rather than a hand-counted total keeps the test honest about which PGNs
+    // happen to raise more than one event.
+    for (pgn, frame) in &sid_frames {
+        let mut canonical = frame.clone();
+        canonical[0] = 0x2A;
+        iface.handle_message(&Message::new(*pgn, canonical, 0x24));
+    }
+    let per_pass = *events.borrow();
+    assert!(per_pass > 0, "the baseline frames must decode at all");
+
     for reserved_sid in [0xFD, 0xFE] {
         for (pgn, frame) in &sid_frames {
             let mut reserved = frame.clone();
@@ -667,13 +685,13 @@ fn nmea2000_selected_sequence_ids_reject_reserved_values_before_events_or_cache_
 
     assert_eq!(
         *events.borrow(),
-        0,
-        "reserved sequence identifiers must not emit selected-PGN events"
+        3 * per_pass,
+        "a reserved sequence identifier must decode exactly as a bindable one does"
     );
-    assert_eq!(
+    assert_ne!(
         iface.latest_position().unwrap(),
         cached,
-        "reserved sequence identifiers must not mutate the GNSS cache"
+        "the position-bearing frames in this set do reach the GNSS cache"
     );
 }
 

@@ -204,6 +204,55 @@ mod tests {
         );
     }
 
+    /// DD056 describes the Sequence ID purely as a correlation tag — "identical
+    /// SID values within two or more different PGN transmissions identifies
+    /// those PGN transmissions as a single related data set" — and reserves
+    /// 253-254 for future use.
+    ///
+    /// Every handler used to drop the whole parameter group on one, throwing
+    /// away the measurement to punish its label: a receiver using a reserved
+    /// SID lost its DOPs entirely rather than just its ability to bind them.
+    /// The reserved band now lands on `0xFF`, the value the standard already
+    /// defines for "No binding provided", so the reading survives and only the
+    /// correlation is refused.
+    #[test]
+    fn a_reserved_sequence_id_costs_the_binding_not_the_measurement() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let seen: Rc<RefCell<Vec<GNSSDOPData>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        iface.on_gnss_dops.subscribe(move |d| sink.borrow_mut().push(*d));
+
+        let dop_frame = |sid: u8| {
+            let mut data = vec![sid, 0xD1, 0, 0, 0, 0, 0, 0];
+            data[2..4].copy_from_slice(&150i16.to_le_bytes()); // HDOP 1.50
+            data[4..6].copy_from_slice(&120i16.to_le_bytes()); // VDOP 1.20
+            data[6..8].copy_from_slice(&50i16.to_le_bytes()); // TDOP 0.50
+            data
+        };
+
+        for reserved in [253u8, 254] {
+            iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(reserved)));
+            let dops = *seen
+                .borrow()
+                .last()
+                .expect("a reserved SID must not discard the DOP report");
+            assert!((dops.hdop - 1.50).abs() < 1e-9, "the measurement survives");
+            assert_eq!(
+                dops.sid, 0xFF,
+                "a reserved SID reads as 'No binding provided'"
+            );
+        }
+
+        // A bindable SID is still passed through untouched, so correlation
+        // against a matching position report keeps working.
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(0x2A)));
+        assert_eq!(seen.borrow().last().unwrap().sid, 0x2A);
+
+        // 255 already meant "no binding" and is unchanged.
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(0xFF)));
+        assert_eq!(seen.borrow().last().unwrap().sid, 0xFF);
+    }
+
     /// H8 — the DOPs in PGN 129539 are documented as "Range: +/-327.64" with a
     /// 1x10E-2 resolution, i.e. `int16`. Decoding them as unsigned put the
     /// unavailable sentinel at 0xFFFF instead of 0x7FFF, so an unavailable DOP
@@ -629,13 +678,11 @@ mod tests {
             PGN_RATE_OF_TURN,
             vec![0x05, 0x00, 0xD4, 0x30, 0x00, 0x00, 0xFF, 0xFF],
         ));
-        // A non-canonical sequence ID (0xFD is reserved) is refused. Note the
-        // two NMEA reserved bits in byte 2 are *set*, as a conformant
-        // transmitter sends them — that alone must not reject the frame.
-        iface.handle_message(&nmea_msg(
-            PGN_GNSS_DOPS,
-            vec![0xFD, 0xD3, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],
-        ));
+        // A reserved sequence ID is *not* grounds for refusal — it costs the
+        // binding, not the measurement, so that frame is exercised in
+        // `a_reserved_sequence_id_costs_the_binding_not_the_measurement`
+        // instead of here.
+        //
         // A reserved Set Mode value (4) is refused.
         iface.handle_message(&nmea_msg(
             PGN_GNSS_DOPS,

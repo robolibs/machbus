@@ -1522,15 +1522,26 @@ fn fixture_nmea_gnss_detail_dops_and_attitude_vectors_are_stable() {
     assert!((dop_cached.vdop.unwrap() - 1.10).abs() < 0.000001);
     assert!((dop_cached.pdop.unwrap() - 1.32).abs() < 0.000001);
 
+    // DD056 reserves SID 253-254, but the SID is only a correlation tag — it
+    // carries no measurement — so a reserved one costs the binding, not the
+    // report: it decodes and lands on 0xFF, "No binding provided".
     iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_sequence, 0x23));
-    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved_mode, 0x23));
     assert_eq!(
         dops_log.borrow().len(),
-        1,
-        "a non-canonical sequence ID and a reserved Set Mode are both refused; \
-         the two NMEA reserved bits in byte 2 are set in every fixture here, as a \
-         conformant transmitter sends them, and must not cause a rejection"
+        2,
+        "a reserved sequence ID must not discard the DOP report"
     );
+    assert_eq!(
+        dops_log.borrow()[1].sid,
+        0xFF,
+        "a reserved sequence ID reads as 'No binding provided'"
+    );
+
+    // A reserved Set Mode value *is* refused — that one is a data field. The
+    // two NMEA reserved bits in byte 2 are set in every fixture here, as a
+    // conformant transmitter sends them, and must not cause a rejection.
+    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved_mode, 0x23));
+    assert_eq!(dops_log.borrow().len(), 2, "a reserved Set Mode is refused");
     let dop_cached = iface
         .latest_position()
         .expect("bad DOPs reserved bits should preserve cache");

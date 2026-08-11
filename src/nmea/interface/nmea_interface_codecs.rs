@@ -816,9 +816,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         // Byte 2 is [COG Reference: 2 bits][NMEA Reserved: 6 bits]. Appendix B
         // specifies "Variable number of reserved bits, all set to logic 1", so
         // reading the whole byte as the enum rejected every conformant frame —
@@ -854,9 +851,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let time_raw = data[1];
         let lat_raw = i24_from_le_bytes([data[2], data[3], data[4]]);
         let lon_raw = i24_from_le_bytes([data[5], data[6], data[7]]);
@@ -869,7 +863,7 @@ impl NMEAInterface {
             return;
         }
         let delta = PositionDeltaHighPrecisionRapidUpdateData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             time_delta_s: time_raw as f64 * POSITION_DELTA_TIME_RESOLUTION,
             latitude_delta_deg: lat_raw as f64 * POSITION_DELTA_RESOLUTION,
             longitude_delta_deg: lon_raw as f64 * POSITION_DELTA_RESOLUTION,
@@ -891,9 +885,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let yaw_raw = i16::from_le_bytes([data[1], data[2]]);
         let pitch_raw = i16::from_le_bytes([data[3], data[4]]);
         let roll_raw = i16::from_le_bytes([data[5], data[6]]);
@@ -921,9 +912,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 5) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let rot_raw = i32::from_le_bytes(data[1..5].try_into().unwrap());
         if signed_i32_data_is_reserved(rot_raw) {
             return;
@@ -940,14 +928,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(reference) = WindReference::try_from_u8(data[5]) else {
             return;
         };
         let mut wind = WindData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             reference,
             ..Default::default()
         };
@@ -972,14 +957,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = TemperatureSource::try_from_u8(data[2]) else {
             return;
         };
         let mut temp = TemperatureData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1028,11 +1010,8 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let mut depth = WaterDepthData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             ..Default::default()
         };
         let depth_raw = u32::from_le_bytes(data[1..5].try_into().unwrap());
@@ -1060,9 +1039,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         // As for 129026: the reference occupies the low 2 bits and the rest of
         // the byte is reserved, transmitted as 1s.
         if HeadingReference::try_from_u8(data[7] & 0x03).is_none() {
@@ -1091,9 +1067,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = TimeSource::try_from_u8(data[1]) else {
             return;
         };
@@ -1103,7 +1076,7 @@ impl NMEAInterface {
             return;
         }
         let mut time = SystemTimeData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             source,
             days_since_epoch: if days_raw == 0xFFFF { 0 } else { days_raw },
             ..Default::default()
@@ -1150,7 +1123,7 @@ impl NMEAInterface {
             return;
         }
         let mut out = GnssSatsInViewData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             sats_in_view: data[2],
             satellites: Vec::new(),
         };
@@ -1183,7 +1156,7 @@ impl NMEAInterface {
         }
         let flags = data[5];
         let nav = NavigationData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             distance_to_wp_m: u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as f64
                 * 0.01,
             bearing_reference: HeadingReference::try_from_u8(flags & 0x03).unwrap_or_default(),
@@ -1210,9 +1183,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         // Byte 2 is [Set Mode: 3 bits][Mode, GNSS: 3 bits][NMEA Reserved: 2
         // bits]. NMEA reserved fields are *transmitted as 1s*, so requiring the
         // top two bits to be zero rejected every conformant frame — the whole
@@ -1225,7 +1195,7 @@ impl NMEAInterface {
             return;
         };
         let mut dops = GNSSDOPData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             desired_mode,
             actual_mode,
             ..Default::default()
@@ -1268,9 +1238,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         if MagneticVariationSource::try_from_u8(data[1]).is_none() {
             return;
         }
@@ -1375,14 +1342,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(reference) = SpeedWaterRefType::try_from_u8(data[5]) else {
             return;
         };
         let mut spd = SpeedWaterData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             reference,
             ..Default::default()
         };
@@ -1404,9 +1368,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         if data[1] & !0x4F != 0 {
             return;
         }
@@ -1414,7 +1375,7 @@ impl NMEAInterface {
             return;
         };
         let mut xte = XTEData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             mode,
             navigation_terminated: data[1] & 0x40 != 0,
             ..Default::default()
@@ -1433,14 +1394,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = HumiditySource::try_from_u8(data[2]) else {
             return;
         };
         let mut hum = HumidityData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1466,14 +1424,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = PressureSource::try_from_u8(data[2]) else {
             return;
         };
         let mut pres = PressureData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1492,11 +1447,8 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let mut env = OutsideEnvironmentalData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             ..Default::default()
         };
         let water = u16::from_le_bytes([data[1], data[2]]);
@@ -1523,9 +1475,6 @@ impl NMEAInterface {
     /// PGN 129029 — fast-packet GNSS Position Data.
     fn handle_position_detail(&mut self, msg: &Message) {
         if !gnss_position_detail_payload_len_is_canonical(&msg.data) {
-            return;
-        }
-        if !nmea_sequence_id_is_canonical(msg.data[0]) {
             return;
         }
         let position_days_raw = u16::from_le_bytes([msg.data[1], msg.data[2]]);
@@ -1701,24 +1650,41 @@ const fn nmea_time_of_day_raw_is_canonical(value: u32) -> bool {
 /// DD056/DF53 Sequence ID: "0 - 252 = binding available … 253 - 254 = reserved
 /// for future use, 255 = No binding provided."
 ///
-/// Note what rejecting one costs. The SID carries no measurement — it exists so
-/// that "identical SID values within two or more different PGN transmissions
-/// identifies those PGN transmissions as a single related data set" — yet every
-/// handler that calls this drops the **whole** parameter group, so a receiver
-/// using a reserved SID would lose its position and DOP entirely rather than
-/// just its correlation tag.
-///
-/// That strictness is kept deliberately, on two grounds: 253-254 are unassigned
-/// so no conformant device emits them today, and the failure is fail-safe here
-/// — position simply stops arriving, which trips [`GnssHazards`] and safe-stops
-/// [`AutoDrive`](crate::session::plugins::AutoDrive) rather than feeding it a
-/// stale fix. Unlike the reserved-*bit* rules in ISO 11783-7 §5.4 and the
-/// file-server volume flags, nothing in NMEA 2000 requires a receiver to
-/// tolerate a reserved SID value, so there is no citation to fix this against.
-/// Revisit if a real receiver is ever seen using one.
+/// Used on the **transmit** side, where the standard's own ranges bind us:
+/// [`nmea_sequence_id_to_wire`] coerces anything else to `0xFF`.
 #[inline]
 const fn nmea_sequence_id_is_canonical(value: u8) -> bool {
     value <= 0xFC || value == 0xFF
+}
+
+/// Normalize a received Sequence ID, mapping the reserved 253-254 band onto
+/// `0xFF` — "No binding provided".
+///
+/// Every handler used to *reject* the whole parameter group on a reserved SID.
+/// That threw away the measurement to punish its label: DD056 describes the SID
+/// purely as a correlation tag — "identical SID values within two or more
+/// different PGN transmissions identifies those PGN transmissions as a single
+/// related data set" — so it carries no position, no DOP, no heading. A
+/// receiver that used one lost its entire fix rather than just its ability to
+/// bind that fix to a matching COG/SOG.
+///
+/// Degrading instead of dropping is what the standard already asks of the
+/// transmit path, and it matches NMEA 2000 A-4's stated intent that the
+/// per-field special states let "devices … provide partial information within a
+/// Parameter Group when the value for all the Data Fields within the Parameter
+/// Group are not known, not available, or not yet measured". An unusable
+/// correlation tag is exactly that: one field unknown, the rest good.
+///
+/// `0xFF` is the honest landing place — the value the standard already defines
+/// for "this data set cannot be bound to another" — so a consumer correlating
+/// on SID still refuses to pair it, and only the correlation is lost.
+#[inline]
+const fn nmea_sequence_id_on_receive(value: u8) -> u8 {
+    if nmea_sequence_id_is_canonical(value) {
+        value
+    } else {
+        0xFF
+    }
 }
 
 #[inline]

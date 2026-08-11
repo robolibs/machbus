@@ -106,6 +106,7 @@
     - [NMEA 2000](tutorials/nmea-2000.md)
     - [Serial GNSS](tutorials/serial-gnss.md)
   - [Tooling and validation]()
+    - [`machbus drive` safety model](tutorials/drive-tool.md)
     - [SocketCAN replay](tutorials/socketcan-replay.md)
     - [Fuzz and validation](tutorials/fuzz-and-validation.md)
 - [Examples](examples/index.md)

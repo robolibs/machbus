@@ -18,6 +18,12 @@ without change, and more so, because this plugin also commands speed:
 - **machbus is not a safety system and is not certified.** It moves setpoints on
   the wire. It does not plan paths, close a loop, or supervise anything.
 
+This plugin owns the *protocol* half of that: preconditions, a latching stop and
+refusals. The *operator input* half — a held dead-man, a deliberate arm latch,
+and treating a lost controller as a release — sits above it, in whatever drives
+the plugin. See [`machbus drive`'s safety model](drive-tool.md) for a worked
+example you can read and copy.
+
 ## Do I need TIM?
 
 **No — not for what `AutoDrive` does.** This is the single most common confusion,
@@ -276,6 +282,8 @@ system and is not certified.
 
 ## See also
 
+- [`machbus drive` safety model](drive-tool.md) — the operator-input layer:
+  dead-man, arm latch, and what happens when the controller is lost.
 - [Guidance](guidance.md) — the older, simpler boolean-engage plugin.
 - [Automatic guidance](../standards/automatic-guidance.md) — the curvature
   model and the two PGNs.

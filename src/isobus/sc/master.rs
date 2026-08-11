@@ -502,7 +502,12 @@ impl SCMaster {
             } else {
                 self.current_sequence_number()
             };
-        data[3] = seq.as_u8();
+        // G4 — F.2 byte 4: "FF16 When byte 2 is set to inactive".
+        data[3] = if matches!(master, SCMasterState::Inactive) {
+            SCSequenceState::NotApplicable.as_u8()
+        } else {
+            seq.as_u8()
+        };
         data[4] = (u8::from(self.busy_nv_memory)) | (u8::from(self.busy_parsing_scd) << 1);
         data
     }

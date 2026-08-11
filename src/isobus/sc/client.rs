@@ -433,8 +433,20 @@ impl SCClient {
         } else {
             (self.current_step_id & 0xFF) as u8
         };
-        data[3] = seq.as_u8();
-        data[4] = SCClientFuncError::NoErrors.as_u8();
+        // G4 — F.3 byte 4: "FF16 When byte 2 is set to disabled or
+        // initialization"; byte 5 likewise "FF16 When byte 2 is set to
+        // disabled". These transmitted 0x00, which a conformant SCM rejects.
+        let disabled = matches!(cs, SCClientState::Disabled);
+        data[3] = if disabled {
+            SCSequenceState::NotApplicable.as_u8()
+        } else {
+            seq.as_u8()
+        };
+        data[4] = if disabled {
+            SCClientFuncError::NotApplicable.as_u8()
+        } else {
+            SCClientFuncError::NoErrors.as_u8()
+        };
         self.time_since_last_status_ms = 0;
         data
     }

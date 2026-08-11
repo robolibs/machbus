@@ -105,11 +105,14 @@ fn client_initialization() -> [u8; 8] {
 }
 
 fn master_inactive() -> [u8; 8] {
+    // G4 — F.2 byte 4: "FF16 When byte 2 is set to inactive". This vector used
+    // Reserved (0x00), which is what the crate transmitted and therefore what
+    // it accepted; a conformant inactive SCM was rejected.
     [
         SC_MSG_CODE_MASTER,
         SCMasterState::Inactive.as_u8(),
         SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
-        SCSequenceState::Reserved.as_u8(),
+        SCSequenceState::NotApplicable.as_u8(),
         0,
         0xFF,
         0xFF,
@@ -118,12 +121,13 @@ fn master_inactive() -> [u8; 8] {
 }
 
 fn client_disabled() -> [u8; 8] {
+    // G4 — F.3 bytes 4 and 5: "FF16 When byte 2 is set to disabled".
     [
         SC_MSG_CODE_CLIENT,
         SCClientState::Disabled.as_u8(),
         SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
-        SCSequenceState::Reserved.as_u8(),
-        0,
+        SCSequenceState::NotApplicable.as_u8(),
+        SCClientFuncError::NotApplicable.as_u8(),
         0xFF,
         0xFF,
         0xFF,
@@ -145,7 +149,11 @@ fn sequence_control_public_state_enums_do_not_promote_reserved_values() {
     assert_eq!(SCClientState::from_u8(0xFF), SCClientState::Disabled);
 
     assert_eq!(SCSequenceState::from_u8(4), SCSequenceState::PlayBack);
-    assert_eq!(SCSequenceState::from_u8(0xFF), SCSequenceState::Reserved);
+    // G4 — 0xFF is the inactive/disabled sentinel, not a reserved value.
+    assert_eq!(
+        SCSequenceState::from_u8(0xFF),
+        SCSequenceState::NotApplicable
+    );
 }
 
 #[test]
@@ -190,7 +198,7 @@ fn sequence_control_public_status_decoders_reject_noncanonical_bytes() {
         assert_eq!(SCClientFuncError::from_u8(raw), error);
     }
 
-    for reserved in [6, 7, 0x08, 0x10, 0x40, 0xFE, 0xFF] {
+    for reserved in [6, 7, 0x08, 0x10, 0x40, 0xFE] {
         assert_eq!(SCSequenceState::try_from_u8(reserved), None);
         assert_eq!(
             SCSequenceState::from_u8(reserved),
@@ -214,7 +222,8 @@ fn sequence_control_public_status_decoders_reject_noncanonical_bytes() {
         );
     }
 
-    for reserved in [4, 5, 6, 0x08, 0x10, 0x40, 0xFF] {
+    // 0xFF is excluded: F.3 byte 5 assigns it to the disabled state.
+    for reserved in [4, 5, 6, 0x08, 0x10, 0x40, 0xFE] {
         assert_eq!(SCClientFuncError::try_from_u8(reserved), None);
         assert_eq!(
             SCClientFuncError::from_u8(reserved),
@@ -951,7 +960,7 @@ fn sequence_control_rejects_reserved_raw_sequence_state_bytes_without_mutation()
         .unwrap();
     assert!(client.is(SCState::Active));
 
-    for reserved_raw_sequence_state in [6, 0x7F, 0xFF] {
+    for reserved_raw_sequence_state in [6, 0x7F, 0xFE] {
         let mut bytes = master_inactive();
         bytes[3] = reserved_raw_sequence_state;
         let err = client
@@ -963,6 +972,11 @@ fn sequence_control_rejects_reserved_raw_sequence_state_bytes_without_mutation()
             "reserved raw sequence states must not be coerced to inactive/reserved"
         );
     }
+
+    // The one value F.2 does assign to an inactive master must be accepted.
+    client
+        .try_handle_master_status(&master_status(0x10, master_inactive()))
+        .expect("F.2 byte 4 sentinel FF16 is the conformant inactive encoding");
 
     let mut master = SCMaster::new(
         SCMasterConfig::default()
@@ -977,7 +991,7 @@ fn sequence_control_rejects_reserved_raw_sequence_state_bytes_without_mutation()
         .unwrap();
     assert!(master.is(SCState::Active));
 
-    for reserved_raw_sequence_state in [6, 0x7F, 0xFF] {
+    for reserved_raw_sequence_state in [6, 0x7F, 0xFE] {
         let mut bytes = client_disabled();
         bytes[3] = reserved_raw_sequence_state;
         let err = master
@@ -989,6 +1003,10 @@ fn sequence_control_rejects_reserved_raw_sequence_state_bytes_without_mutation()
             "reserved raw sequence states must not be coerced to disabled/reserved"
         );
     }
+
+    master
+        .try_handle_client_status(&client_status(0x20, client_disabled()))
+        .expect("F.3 byte 4 sentinel FF16 is the conformant disabled encoding");
 }
 
 #[test]

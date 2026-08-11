@@ -12,8 +12,8 @@ use super::error_codes::{
     open_flags_have_no_reserved_bits,
 };
 use super::types::{
-    CCMMessage, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry, FileHandle, FileServerProperties,
-    FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, TANResponse,
+    CCM_FUNCTION_CODE, CCMMessage, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry, FileHandle,
+    FileServerProperties, FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, TANResponse,
     VolumeState, dos_date_time_is_supported, has_wildcards, is_absolute_path, is_valid_fs_path,
     is_valid_volume_name, pack_dos_date, pack_dos_time,
 };
@@ -24,10 +24,6 @@ use crate::net::message::Message;
 use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT};
 use crate::net::state_machine::StateMachine;
 use crate::net::types::{Address, Pgn};
-
-/// CCM (Client Connection Maintenance) sentinel function code (FF =
-/// "not a real function code; treat as keepalive").
-const CCM_FUNCTION_CODE: u8 = 0xFF;
 
 /// FS string lengths carried in command/response payloads are one byte.
 const FS_WIRE_STRING_MAX_LEN: usize = u8::MAX as usize;
@@ -210,7 +206,8 @@ pub struct FileServer {
 
     clients: BTreeMap<Address, ServerClientConnection>,
 
-    busy: bool,
+    busy_reading: bool,
+    busy_writing: bool,
     status_timer_ms: u32,
     current_time_ms: u32,
 

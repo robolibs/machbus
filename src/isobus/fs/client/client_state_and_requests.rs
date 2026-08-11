@@ -12,7 +12,7 @@ use super::error_codes::{
     open_flags_have_no_reserved_bits,
 };
 use super::types::{
-    CCMMessage, FSFunction, FileHandle, FileServerProperties, FileServerStatus,
+    CCMMessage, FS_VERSION_NUMBER, FSFunction, FileHandle, FileServerProperties, FileServerStatus,
     INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, VolumeState,
     dos_date_time_is_supported, is_valid_fs_path, is_valid_volume_name,
 };
@@ -23,8 +23,6 @@ use crate::net::message::Message;
 use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT};
 use crate::net::types::{Address, Pgn};
 
-/// Special CCM keepalive function code.
-const CCM_FUNCTION_CODE: u8 = 0xFF;
 const READ_FILE_REQUEST_LEN: usize = 8;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
@@ -77,8 +75,6 @@ impl Default for OpenFileInfo {
 pub type FileDateTime = (u16, u16);
 pub type FileDateTimeResponse = Result<FileDateTime, FSError>;
 pub type FileAttributesResponse = Result<u8, FSError>;
-/// `(total_bytes, free_bytes)` or an error, from a `GetFreeSpace` query.
-pub type FreeSpaceResponse = Result<(u32, u32), FSError>;
 pub type FileOperationResponse = Result<(), FSError>;
 
 /// One in-flight request awaiting response. Tracked by TAN.
@@ -217,12 +213,6 @@ pub struct FileClient {
     pub on_change_directory_response: Event<(TAN, Result<String, FSError>)>,
     pub on_move_response: Event<(TAN, FileOperationResponse)>,
     pub on_delete_response: Event<(TAN, FileOperationResponse)>,
-    pub on_make_directory_response: Event<(TAN, FileOperationResponse)>,
-    pub on_remove_directory_response: Event<(TAN, FileOperationResponse)>,
-    pub on_copy_response: Event<(TAN, FileOperationResponse)>,
-    pub on_get_file_size_response: Event<(TAN, Result<u32, FSError>)>,
-    /// `(TAN, Result<(total_bytes, free_bytes), FSError>)`.
-    pub on_get_free_space_response: Event<(TAN, FreeSpaceResponse)>,
     pub on_file_attributes_response: Event<(TAN, FileAttributesResponse)>,
     pub on_set_file_attributes_response: Event<(TAN, FileOperationResponse)>,
     pub on_file_date_time_response: Event<(TAN, FileDateTimeResponse)>,
@@ -262,11 +252,6 @@ impl FileClient {
             on_current_directory_response: Event::new(),
             on_change_directory_response: Event::new(),
             on_move_response: Event::new(),
-            on_make_directory_response: Event::new(),
-            on_remove_directory_response: Event::new(),
-            on_copy_response: Event::new(),
-            on_get_file_size_response: Event::new(),
-            on_get_free_space_response: Event::new(),
             on_delete_response: Event::new(),
             on_file_attributes_response: Event::new(),
             on_set_file_attributes_response: Event::new(),
@@ -632,66 +617,23 @@ impl FileClient {
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
-    /// Build a Make Directory request for `path`. Response arrives on
-    /// [`Self::on_make_directory_response`].
+    /// Create `path` as a directory.
+    ///
+    /// ISO 11783-13 has no Make Directory command: C.3.2.2 creates a directory
+    /// through Open File with the access mode set to "directory" and the create
+    /// flag set. The response therefore arrives on
+    /// [`Self::on_open_response`] carrying a handle the caller closes.
     pub fn try_make_directory(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        if !self.is_connected() {
-            return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
-        if !path.is_ascii() || path.len() > u8::MAX as usize || !is_valid_fs_path(path, true, false)
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS MakeDirectory path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::MakeDirectory.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::MakeDirectory, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
+        self.try_open_file(path, OpenFlags::OpenDir | OpenFlags::Create)
     }
 
-    /// Build a Remove Directory request for `path`. Response arrives on
-    /// [`Self::on_remove_directory_response`].
+    /// Remove the directory at `path`.
+    ///
+    /// C.4.3 Delete File removes files and directories alike; there is no
+    /// separate Remove Directory command. The response arrives on
+    /// [`Self::on_delete_response`].
     pub fn try_remove_directory(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        if !self.is_connected() {
-            return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
-        if !path.is_ascii() || path.len() > u8::MAX as usize || !is_valid_fs_path(path, true, false)
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS RemoveDirectory path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::RemoveDirectory.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::RemoveDirectory, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
+        self.try_delete_file(path)
     }
 
     pub fn move_file(
@@ -740,36 +682,6 @@ impl FileClient {
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
-    /// Build a `CopyFile` request (one-byte source + destination counts).
-    /// Response arrives on [`Self::on_copy_response`].
-    pub fn try_copy_file(
-        &mut self,
-        source_path: &str,
-        destination_path: &str,
-    ) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(source_path)
-            || !is_valid_one_byte_file_path(destination_path)
-            || source_path == destination_path
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS CopyFile source/destination lengths {} -> {}",
-                source_path.len(),
-                destination_path.len()
-            )));
-        }
-        let mut data = vec![0u8; 4 + source_path.len() + destination_path.len()];
-        data[0] = FSFunction::CopyFile.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = source_path.len() as u8;
-        data[3] = destination_path.len() as u8;
-        data[4..4 + source_path.len()].copy_from_slice(source_path.as_bytes());
-        data[4 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
-        self.track_request(tan, FSFunction::CopyFile, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
-    }
-
     pub fn delete_file(&mut self, path: &str) -> Option<FSClientOutbound> {
         self.try_delete_file(path).ok()
     }
@@ -803,36 +715,6 @@ impl FileClient {
 
     pub fn get_file_attributes(&mut self, path: &str) -> Option<FSClientOutbound> {
         self.try_get_file_attributes(path).ok()
-    }
-
-    /// Build a `GetFreeSpace` request (volume-wide; no path). Response (total +
-    /// free bytes) arrives on [`Self::on_get_free_space_response`].
-    pub fn try_get_free_space(&mut self) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        let tan = self.allocate_tan();
-        let data = vec![FSFunction::GetFreeSpace.as_u8(), tan];
-        self.track_request(tan, FSFunction::GetFreeSpace, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
-    }
-
-    /// Build a `GetFileSize` request. Response (the file size in bytes) arrives
-    /// on [`Self::on_get_file_size_response`].
-    pub fn try_get_file_size(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(path) {
-            return Err(Error::invalid_data(format!(
-                "invalid FS GetFileSize path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::GetFileSize.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::GetFileSize, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
     }
 
     /// Build a `GetFileAttributes` request with a one-byte path count.
@@ -1067,12 +949,14 @@ impl FileClient {
         out
     }
 
-    fn send_ccm(&mut self) -> FSClientOutbound {
-        let tan = self.allocate_tan();
-        let _ = CCMMessage { version: 1, tan };
-        let mut data = [0xFFu8; 8];
-        data[0] = CCM_FUNCTION_CODE;
-        data[1] = tan;
+    /// C.1.3: command byte, version number, six reserved bytes. The CCM used
+    /// to burn a TAN and put it in the version slot, which 4.10 forbids — the
+    /// CCM is what establishes the connection *before* any TAN is in play.
+    fn send_ccm(&self) -> FSClientOutbound {
+        let data = CCMMessage {
+            version: FS_VERSION_NUMBER,
+        }
+        .encode();
         FSClientOutbound::new(data.to_vec(), self.server_address)
     }
 
@@ -1153,20 +1037,6 @@ impl FileClient {
                 let result = self.parse_simple_operation_response(&msg.data, false);
                 self.on_delete_response.emit(&(tan, result));
             }
-            FSFunction::MakeDirectory => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_make_directory_response.emit(&(tan, result));
-            }
-            FSFunction::RemoveDirectory => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_remove_directory_response.emit(&(tan, result));
-            }
-            FSFunction::CopyFile => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_copy_response.emit(&(tan, result));
-            }
-            FSFunction::GetFileSize => self.handle_get_file_size_response(tan, &msg.data),
-            FSFunction::GetFreeSpace => self.handle_get_free_space_response(tan, &msg.data),
             FSFunction::GetFileAttributes => self.handle_file_attributes_response(tan, &msg.data),
             FSFunction::SetFileAttributes => {
                 let result = self.parse_simple_operation_response(&msg.data, false);
@@ -1666,52 +1536,6 @@ impl FileClient {
         }
         self.on_file_attributes_response
             .emit(&(tan, Ok(response[3])));
-    }
-
-    fn handle_get_file_size_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 7 {
-            self.on_get_file_size_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_get_file_size_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_get_file_size_response.emit(&(tan, Err(error)));
-            return;
-        }
-        let size = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
-        self.on_get_file_size_response.emit(&(tan, Ok(size)));
-    }
-
-    fn handle_get_free_space_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 11 {
-            self.on_get_free_space_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_get_free_space_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_get_free_space_response.emit(&(tan, Err(error)));
-            return;
-        }
-        let total = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
-        let free = u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
-        self.on_get_free_space_response
-            .emit(&(tan, Ok((total, free))));
     }
 
     fn handle_file_date_time_response(&mut self, tan: TAN, response: &[u8]) {

@@ -329,12 +329,14 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     assert!(client.server_status().is_none());
 
     let mut malformed_busy = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 2,
     }
     .encode()
     .to_vec();
-    malformed_busy[0] = 0x02;
+    // B.3 bits 2-7 are reserved and sent as zero.
+    malformed_busy[1] = 0x04;
     client.update(500);
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
@@ -347,12 +349,13 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     );
 
     let mut malformed_tail = FileServerStatus {
-        busy: false,
+        busy_reading: false,
+        busy_writing: false,
         number_of_open_files: 1,
     }
     .encode()
     .to_vec();
-    malformed_tail[2] = 0x00;
+    malformed_tail[3] = 0x00;
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         malformed_tail,
@@ -364,7 +367,8 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     );
 
     let out_of_range_open_count = FileServerStatus {
-        busy: false,
+        busy_reading: false,
+        busy_writing: false,
         number_of_open_files: 251,
     }
     .encode()
@@ -393,7 +397,8 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     connect_file_client(&mut client, 0x80);
     client.update(500);
     let valid = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 3,
     }
     .encode()
@@ -402,7 +407,8 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     assert_eq!(
         client.server_status(),
         Some(FileServerStatus {
-            busy: true,
+            busy_reading: false,
+            busy_writing: true,
             number_of_open_files: 3
         })
     );

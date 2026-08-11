@@ -31,32 +31,45 @@ pub const fn fs_count_is_supported(count: u8) -> bool {
     count <= FS_SUPPORTED_COUNT_MAX
 }
 
-/// FS function codes (ISO 11783-13 §7).
+/// FS command byte (ISO 11783-13:2022 Annex C).
+///
+/// Bits 7-4 are the command group (B.1: 0000 connection management, 0001
+/// directory handling, 0010 file access, 0011 file handling, 0100 volume
+/// handling) and bits 3-0 the function within it. A response carries the same
+/// byte as its request.
+///
+/// Not one of these bytes used to match the standard: the crate opened a file
+/// with 0x02, which a conformant server reads as Volume Status, and read a
+/// conformant client's Open File (0x20) as its own Initialize Volume. Nothing
+/// interoperated in either direction.
+///
+/// Five former variants have no command byte in any edition. Directory
+/// creation goes through Open File with the create-directory flags (C.3.2.2),
+/// directory removal through Delete File, and free space is reported inside
+/// the Get Current Directory Response (C.2.2.3); Copy File and Get File Size
+/// have no ISO equivalent at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum FSFunction {
+    /// Server to client. The same byte from a client is a Client Connection
+    /// Maintenance message (C.1.3); the direction tells them apart.
     #[default]
-    GetCurrentDirectory = 0x00,
-    ChangeDirectory = 0x01,
-    OpenFile = 0x02,
-    SeekFile = 0x03,
-    ReadFile = 0x04,
-    WriteFile = 0x05,
-    CloseFile = 0x06,
-    MoveFile = 0x10,
-    DeleteFile = 0x11,
-    GetFileAttributes = 0x12,
-    SetFileAttributes = 0x13,
-    GetFileDateTime = 0x14,
-    MakeDirectory = 0x15,
-    RemoveDirectory = 0x16,
-    CopyFile = 0x17,
-    GetFileSize = 0x18,
-    GetFreeSpace = 0x19,
-    InitializeVolume = 0x20,
-    FileServerStatus = 0x30,
-    GetFileServerProperties = 0x31,
-    VolumeStatus = 0x40,
+    FileServerStatus = 0x00,
+    GetFileServerProperties = 0x01,
+    VolumeStatus = 0x02,
+    GetCurrentDirectory = 0x10,
+    ChangeDirectory = 0x11,
+    OpenFile = 0x20,
+    SeekFile = 0x21,
+    ReadFile = 0x22,
+    WriteFile = 0x23,
+    CloseFile = 0x24,
+    MoveFile = 0x30,
+    DeleteFile = 0x31,
+    GetFileAttributes = 0x32,
+    SetFileAttributes = 0x33,
+    GetFileDateTime = 0x34,
+    InitializeVolume = 0x40,
 }
 
 impl FSFunction {
@@ -74,31 +87,36 @@ impl FSFunction {
     #[must_use]
     pub const fn try_from_u8(v: u8) -> Option<Self> {
         match v {
-            0x00 => Some(Self::GetCurrentDirectory),
-            0x01 => Some(Self::ChangeDirectory),
-            0x02 => Some(Self::OpenFile),
-            0x03 => Some(Self::SeekFile),
-            0x04 => Some(Self::ReadFile),
-            0x05 => Some(Self::WriteFile),
-            0x06 => Some(Self::CloseFile),
-            0x10 => Some(Self::MoveFile),
-            0x11 => Some(Self::DeleteFile),
-            0x12 => Some(Self::GetFileAttributes),
-            0x13 => Some(Self::SetFileAttributes),
-            0x14 => Some(Self::GetFileDateTime),
-            0x15 => Some(Self::MakeDirectory),
-            0x16 => Some(Self::RemoveDirectory),
-            0x17 => Some(Self::CopyFile),
-            0x18 => Some(Self::GetFileSize),
-            0x19 => Some(Self::GetFreeSpace),
-            0x20 => Some(Self::InitializeVolume),
-            0x30 => Some(Self::FileServerStatus),
-            0x31 => Some(Self::GetFileServerProperties),
-            0x40 => Some(Self::VolumeStatus),
+            0x00 => Some(Self::FileServerStatus),
+            0x01 => Some(Self::GetFileServerProperties),
+            0x02 => Some(Self::VolumeStatus),
+            0x10 => Some(Self::GetCurrentDirectory),
+            0x11 => Some(Self::ChangeDirectory),
+            0x20 => Some(Self::OpenFile),
+            0x21 => Some(Self::SeekFile),
+            0x22 => Some(Self::ReadFile),
+            0x23 => Some(Self::WriteFile),
+            0x24 => Some(Self::CloseFile),
+            0x30 => Some(Self::MoveFile),
+            0x31 => Some(Self::DeleteFile),
+            0x32 => Some(Self::GetFileAttributes),
+            0x33 => Some(Self::SetFileAttributes),
+            0x34 => Some(Self::GetFileDateTime),
+            0x40 => Some(Self::InitializeVolume),
             _ => None,
         }
     }
 }
+
+/// The Client Connection Maintenance command byte (C.1.3 byte 1: command
+/// group 0000, function 0000). It shares its value with the File Server Status
+/// broadcast, which only ever travels the other way.
+pub const CCM_FUNCTION_CODE: u8 = FSFunction::FileServerStatus.as_u8();
+
+/// The B.5 Version Number this implementation reports: 4, third published
+/// edition. B.5 also forbids rejecting a peer over the version it reports, so
+/// this is advertised but never used as an acceptance test.
+pub const FS_VERSION_NUMBER: u8 = 4;
 
 /// Classic volume state (ISO 11783-13 §7.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -278,50 +296,97 @@ impl TANResponse {
     }
 }
 
-/// File-Server Status (ISO 11783-13 §7.3.1).
+/// File Server Status broadcast (ISO 11783-13:2022 C.1.2).
+///
+/// Byte 1 is the command byte, byte 2 the B.3 status bitfield, byte 3 the
+/// number of open files, bytes 4-8 reserved 0xFF. The frame used to start
+/// straight at the status byte, with no command byte at all.
+///
+/// B.3 gives byte 2 two independent flags. The crate modelled one, and its
+/// decoder rejected anything outside bit 0 — so a server flushing a write
+/// (bit 1) had its status dropped by the client. That is precisely the frame
+/// 4.3.3 relies on to extend the request timeout from 600 ms, so the client
+/// gave up on a legitimately slow write and reported a spurious fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FileServerStatus {
-    pub busy: bool,
+    pub busy_reading: bool,
+    pub busy_writing: bool,
     pub number_of_open_files: u8,
 }
 
+/// B.3 bit 0.
+pub const FS_STATUS_BUSY_READING: u8 = 1 << 0;
+/// B.3 bit 1.
+pub const FS_STATUS_BUSY_WRITING: u8 = 1 << 1;
+
 impl FileServerStatus {
+    /// Whether the server is busy at all — the condition 4.3.3 ties the
+    /// extended request timeout to.
+    #[must_use]
+    pub const fn is_busy(&self) -> bool {
+        self.busy_reading || self.busy_writing
+    }
+
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = u8::from(self.busy);
-        data[1] = self.number_of_open_files;
+        data[0] = FSFunction::FileServerStatus.as_u8();
+        let mut status = 0u8;
+        if self.busy_reading {
+            status |= FS_STATUS_BUSY_READING;
+        }
+        if self.busy_writing {
+            status |= FS_STATUS_BUSY_WRITING;
+        }
+        data[1] = status;
+        data[2] = self.number_of_open_files;
         data
     }
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 2 || data.len() > 8 || data[2..].iter().any(|&b| b != 0xFF) {
+        if data.len() < 3 || data.len() > 8 || data[3..].iter().any(|&b| b != 0xFF) {
             return None;
         }
-        if data[0] & !0x01 != 0 || !fs_count_is_supported(data[1]) {
+        if data[0] != FSFunction::FileServerStatus.as_u8() {
+            return None;
+        }
+        let status = data[1];
+        if status & !(FS_STATUS_BUSY_READING | FS_STATUS_BUSY_WRITING) != 0
+            || !fs_count_is_supported(data[2])
+        {
             return None;
         }
         Some(Self {
-            busy: data[0] & 0x01 != 0,
-            number_of_open_files: data[1],
+            busy_reading: status & FS_STATUS_BUSY_READING != 0,
+            busy_writing: status & FS_STATUS_BUSY_WRITING != 0,
+            number_of_open_files: data[2],
         })
     }
 }
 
-/// Client Connection Maintenance message (sent every 2 s).
+/// Client Connection Maintenance message (ISO 11783-13:2022 C.1.3).
+///
+/// Byte 1 is the command byte, byte 2 the client's version number, bytes 3-8
+/// reserved 0xFF. There is no TAN: 4.10 has the CCM *establish* the connection
+/// before the client sends anything that carries one.
+///
+/// The crate used to hold two mutually inconsistent encodings, neither of them
+/// C.1.3. One put 0xFF — a value the standard defines as no command at all —
+/// in byte 1, so a conformant server NACKed it and the client never connected;
+/// the other put the version number in the command slot, which reads as Get
+/// File Server Properties with a rolling TAN in the version field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CCMMessage {
     pub version: u8,
-    pub tan: TAN,
 }
 
 impl CCMMessage {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = self.version;
-        data[1] = self.tan;
+        data[0] = CCM_FUNCTION_CODE;
+        data[1] = self.version;
         data
     }
 
@@ -330,10 +395,10 @@ impl CCMMessage {
         if data.len() < 2 || data.len() > 8 || data[2..].iter().any(|&b| b != 0xFF) {
             return None;
         }
-        Some(Self {
-            version: data[0],
-            tan: data[1],
-        })
+        if data[0] != CCM_FUNCTION_CODE {
+            return None;
+        }
+        Some(Self { version: data[1] })
     }
 }
 
@@ -506,18 +571,38 @@ pub fn dos_date_time_is_supported(date: u16, time: u16) -> bool {
 mod tests {
     use super::*;
 
+    /// The Annex C command bytes verbatim. Every one of these used to be a
+    /// different value, so nothing interoperated in either direction.
     #[test]
-    fn fs_function_round_trip() {
-        for f in [
-            FSFunction::GetCurrentDirectory,
-            FSFunction::OpenFile,
-            FSFunction::ReadFile,
-            FSFunction::FileServerStatus,
-            FSFunction::VolumeStatus,
+    fn fs_function_codes_match_annex_c() {
+        for (code, function) in [
+            (0x00, FSFunction::FileServerStatus),
+            (0x01, FSFunction::GetFileServerProperties),
+            (0x02, FSFunction::VolumeStatus),
+            (0x10, FSFunction::GetCurrentDirectory),
+            (0x11, FSFunction::ChangeDirectory),
+            (0x20, FSFunction::OpenFile),
+            (0x21, FSFunction::SeekFile),
+            (0x22, FSFunction::ReadFile),
+            (0x23, FSFunction::WriteFile),
+            (0x24, FSFunction::CloseFile),
+            (0x30, FSFunction::MoveFile),
+            (0x31, FSFunction::DeleteFile),
+            (0x32, FSFunction::GetFileAttributes),
+            (0x33, FSFunction::SetFileAttributes),
+            (0x34, FSFunction::GetFileDateTime),
+            (0x40, FSFunction::InitializeVolume),
         ] {
-            assert_eq!(FSFunction::from_u8(f.as_u8()), Some(f));
+            assert_eq!(FSFunction::try_from_u8(code), Some(function));
+            assert_eq!(function.as_u8(), code);
         }
-        assert!(FSFunction::from_u8(0xFF).is_none());
+
+        // The five invented commands, and the 0xFF that used to stand in for
+        // the CCM, are not commands.
+        for undefined in [0x03, 0x12, 0x15, 0x18, 0x19, 0x25, 0x35, 0x41, 0xFF] {
+            assert_eq!(FSFunction::from_u8(undefined), None);
+        }
+        assert_eq!(CCM_FUNCTION_CODE, 0x00);
     }
 
     #[test]
@@ -551,10 +636,17 @@ mod tests {
     }
 
     #[test]
-    fn ccm_round_trip() {
-        let m = CCMMessage { version: 1, tan: 7 };
-        let d = CCMMessage::decode(&m.encode());
-        assert_eq!(d, Some(m));
+    fn ccm_matches_c_1_3() {
+        let m = CCMMessage { version: 4 };
+        assert_eq!(m.encode(), [0x00, 0x04, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(CCMMessage::decode(&m.encode()), Some(m));
+
+        // The old encoding put the version in the command slot and a TAN in
+        // the version slot; a conformant server read it as a properties query.
+        assert_eq!(
+            CCMMessage::decode(&[0x04, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            None
+        );
     }
 
     #[test]
@@ -570,10 +662,10 @@ mod tests {
         assert!(FileServerStatus::decode(&status[..1]).is_none());
         assert!(FileServerStatus::decode(&[status.as_slice(), &[0xFF]].concat()).is_none());
         let mut bad_status = status;
-        bad_status[2] = 0x00;
+        bad_status[3] = 0x00;
         assert!(FileServerStatus::decode(&bad_status).is_none());
 
-        let ccm = CCMMessage { version: 1, tan: 7 }.encode();
+        let ccm = CCMMessage { version: 4 }.encode();
         assert!(CCMMessage::decode(&ccm[..1]).is_none());
         assert!(CCMMessage::decode(&[ccm.as_slice(), &[0xFF]].concat()).is_none());
         let mut bad_ccm = ccm;

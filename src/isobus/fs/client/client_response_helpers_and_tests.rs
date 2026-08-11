@@ -421,7 +421,11 @@ mod tests {
         // Crosses cadence threshold.
         let out = c.update(60);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].data[0], CCM_FUNCTION_CODE);
+        // C.1.3: command byte 0, version number, six reserved bytes. No TAN.
+        assert_eq!(
+            out[0].data.as_slice(),
+            &[0x00, FS_VERSION_NUMBER, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
     }
 
     #[test]
@@ -580,7 +584,8 @@ mod tests {
         force_connected(&mut c);
 
         let status = FileServerStatus {
-            busy: true,
+            busy_reading: false,
+            busy_writing: true,
             number_of_open_files: 2,
         };
         c.handle_server_response(&server_msg(status.encode().to_vec(), 0x80));

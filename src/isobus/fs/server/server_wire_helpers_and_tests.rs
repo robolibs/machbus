@@ -6,14 +6,13 @@ impl Default for FileServer {
 
 // ─── Public CCM helper ────────────────────────────────────────────────
 
-/// Convenience: encode a CCM keepalive payload with the given TAN.
+/// Convenience: encode a Client Connection Maintenance payload (C.1.3).
+///
+/// The CCM carries no TAN — 4.10 has it establish the connection before the
+/// client sends anything TAN-bearing.
 #[must_use]
-pub fn encode_ccm(tan: TAN) -> [u8; 8] {
-    let mut data = [0xFFu8; 8];
-    data[0] = CCM_FUNCTION_CODE;
-    data[1] = tan;
-    let _ = CCMMessage { version: 1, tan }; // touch import
-    data
+pub fn encode_ccm(version: u8) -> [u8; 8] {
+    CCMMessage { version }.encode()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -128,6 +127,25 @@ fn parse_counted_file_path(
     current_directory: &str,
 ) -> Option<String> {
     parse_counted_file_path_with_count_at(request, count_index, count_index + 1, current_directory)
+}
+
+/// Like [`parse_counted_file_path`], but accepts a directory (including the
+/// volume root) as well. C.4.3 Delete File names either kind.
+fn parse_counted_file_or_directory_path(
+    request: &[u8],
+    count_index: usize,
+    current_directory: &str,
+) -> Option<String> {
+    if let Some(path) = parse_counted_file_path(request, count_index, current_directory) {
+        return Some(path);
+    }
+    let path_len = *request.get(count_index)? as usize;
+    let used = count_index.checked_add(1)?.checked_add(path_len)?;
+    if !fs_payload_len_is_canonical(request, used) {
+        return None;
+    }
+    let requested_path = decode_wire_path(&request[count_index + 1..used])?;
+    normalize_directory_path(&requested_path, current_directory).ok()
 }
 
 fn parse_counted_file_path_with_count_at(
@@ -552,146 +570,72 @@ mod tests {
         assert!(!s.clients().contains_key(&0x42));
     }
 
+    /// C.3.2.2 — a directory is created through Open File with the directory
+    /// access mode and the create flag. ISO 11783-13 has no Make Directory
+    /// command; the crate used to invent one at 0x15.
     #[test]
-    fn make_directory_creates_directory_and_is_idempotent() {
+    fn open_file_with_create_directory_flags_creates_the_directory() {
         let mut s = FileServer::new(FileServerConfig::default());
         let path = b"\\newdir";
-        let make = |tan: u8| {
-            let mut req = vec![FSFunction::MakeDirectory.as_u8(), tan, path.len() as u8];
+        let mkdir = |tan: u8, path: &[u8]| {
+            let mut req = vec![
+                FSFunction::OpenFile.as_u8(),
+                tan,
+                path.len() as u8,
+                OpenFlags::OpenDir | OpenFlags::Create,
+            ];
             req.extend_from_slice(path);
             req
         };
         assert!(!s.directory_exists("\\newdir"));
-        let out = s.handle_client_message(&req_msg(make(0x20), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::MakeDirectory.as_u8());
+        let out = s.handle_client_message(&req_msg(mkdir(0x20, path), 0x42));
+        assert_eq!(out[0].data[0], FSFunction::OpenFile.as_u8());
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert!(s.directory_exists("\\newdir"));
 
-        // Making the same directory again is an idempotent success.
-        let out = s.handle_client_message(&req_msg(make(0x21), 0x42));
+        // Opening it again just lists it — the create flag is not exclusive.
+        let out = s.handle_client_message(&req_msg(mkdir(0x21, path), 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
-        // A path where a file already exists is rejected as wrong type.
+        // A file already occupies the path.
         s.add_file("\\afile", b"x".to_vec(), 0).unwrap();
-        let file_path = b"\\afile";
-        let mut req = vec![
-            FSFunction::MakeDirectory.as_u8(),
-            0x22,
-            file_path.len() as u8,
+        let out = s.handle_client_message(&req_msg(mkdir(0x22, b"\\afile"), 0x42));
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
+
+        // Without the create flag a missing directory is still NotFound.
+        let mut plain = vec![
+            FSFunction::OpenFile.as_u8(),
+            0x23,
+            7u8,
+            OpenFlags::OpenDir.bit(),
         ];
-        req.extend_from_slice(file_path);
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
-    }
-
-    #[test]
-    fn get_free_space_reports_capacity_minus_used() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.set_volume_capacity_bytes(1000);
-        s.add_file("\\a", vec![0u8; 300], 0).unwrap();
-        let req = vec![FSFunction::GetFreeSpace.as_u8(), 0x20];
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[0], FSFunction::GetFreeSpace.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        let total = u32::from_le_bytes([
-            out[0].data[3],
-            out[0].data[4],
-            out[0].data[5],
-            out[0].data[6],
-        ]);
-        let free = u32::from_le_bytes([
-            out[0].data[7],
-            out[0].data[8],
-            out[0].data[9],
-            out[0].data[10],
-        ]);
-        assert_eq!(total, 1000);
-        assert_eq!(free, 700);
-        assert_eq!(s.used_bytes(), 300);
-    }
-
-    #[test]
-    fn get_file_size_returns_byte_length() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("\\f", b"hello".to_vec(), 0).unwrap();
-        s.add_directory("\\d").unwrap();
-        let size_req = |tan: u8, p: &[u8]| {
-            let mut req = vec![FSFunction::GetFileSize.as_u8(), tan, p.len() as u8];
-            req.extend_from_slice(p);
-            req
-        };
-        let out = s.handle_client_message(&req_msg(size_req(0x20, b"\\f"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::GetFileSize.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        let size = u32::from_le_bytes([
-            out[0].data[3],
-            out[0].data[4],
-            out[0].data[5],
-            out[0].data[6],
-        ]);
-        assert_eq!(size, 5);
-
-        // A directory is wrong type; a missing file is NotFound.
-        let out = s.handle_client_message(&req_msg(size_req(0x21, b"\\d"), 0x42));
-        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
-        let out = s.handle_client_message(&req_msg(size_req(0x22, b"\\nope"), 0x42));
+        plain.extend_from_slice(b"\\absent");
+        let out = s.handle_client_message(&req_msg(plain, 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
     }
 
+    /// C.4.3 — Delete File removes directories as well as files.
     #[test]
-    fn copy_file_duplicates_source_and_keeps_it() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("\\src", b"hello".to_vec(), 0).unwrap();
-        let copy = |tan: u8, src: &[u8], dst: &[u8]| {
-            let mut req = vec![
-                FSFunction::CopyFile.as_u8(),
-                tan,
-                src.len() as u8,
-                dst.len() as u8,
-            ];
-            req.extend_from_slice(src);
-            req.extend_from_slice(dst);
-            req
-        };
-        let out = s.handle_client_message(&req_msg(copy(0x20, b"\\src", b"\\dst"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::CopyFile.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        // Both source and destination now hold the data.
-        assert_eq!(s.files.get("\\src").unwrap().as_slice(), b"hello");
-        assert_eq!(s.files.get("\\dst").unwrap().as_slice(), b"hello");
-
-        // Copying onto an existing destination is refused.
-        let out = s.handle_client_message(&req_msg(copy(0x21, b"\\src", b"\\dst"), 0x42));
-        assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
-        // Copying a missing source is NotFound.
-        let out = s.handle_client_message(&req_msg(copy(0x22, b"\\nope", b"\\dst2"), 0x42));
-        assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
-    }
-
-    #[test]
-    fn remove_directory_deletes_empty_and_rejects_non_empty() {
+    fn delete_file_removes_empty_directories_and_rejects_non_empty() {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\empty").unwrap();
         s.add_directory("\\full").unwrap();
         s.add_file("\\full\\f", b"x".to_vec(), 0).unwrap();
         let rmdir = |tan: u8, path: &[u8]| {
-            let mut req = vec![FSFunction::RemoveDirectory.as_u8(), tan, path.len() as u8];
+            let mut req = vec![FSFunction::DeleteFile.as_u8(), tan, path.len() as u8];
             req.extend_from_slice(path);
             req
         };
 
-        // Empty directory removes successfully.
         let out = s.handle_client_message(&req_msg(rmdir(0x20, b"\\empty"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::RemoveDirectory.as_u8());
+        assert_eq!(out[0].data[0], FSFunction::DeleteFile.as_u8());
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert!(!s.directory_exists("\\empty"));
 
-        // Non-empty directory is refused.
         let out = s.handle_client_message(&req_msg(rmdir(0x21, b"\\full"), 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
         assert!(s.directory_exists("\\full"));
 
-        // A non-existent directory is NotFound; the root is refused.
         let out = s.handle_client_message(&req_msg(rmdir(0x22, b"\\nope"), 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
         let out = s.handle_client_message(&req_msg(rmdir(0x23, b"\\"), 0x42));
@@ -799,7 +743,7 @@ mod tests {
     #[test]
     fn tan_cache_reuses_response() {
         let mut s = FileServer::new(FileServerConfig::default());
-        let req = vec![FSFunction::FileServerStatus.as_u8(), 0x05];
+        let req = vec![FSFunction::GetFileServerProperties.as_u8(), 0x05];
         let out1 = s.handle_client_message(&req_msg(req.clone(), 0x42));
         let out2 = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out1[0].data, out2[0].data);

@@ -20,7 +20,8 @@ impl FileServer {
             open_files: Vec::new(),
             next_handle: 1,
             clients: BTreeMap::new(),
-            busy: false,
+            busy_reading: false,
+            busy_writing: false,
             status_timer_ms: 0,
             current_time_ms: 0,
             volume_state: StateMachine::new(VolumeState::Present),
@@ -235,13 +236,21 @@ impl FileServer {
         Some(self.broadcast_volume_status())
     }
 
-    pub fn set_busy(&mut self, busy: bool) {
-        self.busy = busy;
+    /// Declare a long read in progress. 4.3.3 has the status broadcast tell a
+    /// client to keep waiting past its 600 ms request timeout; without a
+    /// distinct writing flag a crate-hosted server could never say which.
+    pub const fn set_busy_reading(&mut self, busy: bool) {
+        self.busy_reading = busy;
+    }
+
+    /// Declare a long write or flush in progress (B.3 bit 1).
+    pub const fn set_busy_writing(&mut self, busy: bool) {
+        self.busy_writing = busy;
     }
 
     #[must_use]
     pub const fn is_busy(&self) -> bool {
-        self.busy
+        self.busy_reading || self.busy_writing
     }
 
     #[must_use]
@@ -276,7 +285,7 @@ impl FileServer {
         self.cleanup_disconnected_clients();
 
         self.status_timer_ms = self.status_timer_ms.saturating_add(elapsed_ms);
-        let interval = if self.busy {
+        let interval = if self.is_busy() {
             self.config.busy_status_interval_ms
         } else {
             self.config.status_broadcast_interval_ms
@@ -290,7 +299,8 @@ impl FileServer {
 
     fn broadcast_status(&self) -> FSOutbound {
         let status = FileServerStatus {
-            busy: self.busy,
+            busy_reading: self.busy_reading,
+            busy_writing: self.busy_writing,
             number_of_open_files: self.open_files.len() as u8,
         };
         FSOutbound::broadcast(status.encode().to_vec())
@@ -348,26 +358,27 @@ impl FileServer {
             return Vec::new();
         }
         let function = msg.data[0];
-        let tan = msg.data[1];
-        if tan == INVALID_TAN {
-            if function == CCM_FUNCTION_CODE {
-                return Vec::new();
-            }
-            return vec![FSOutbound::to(
-                encode_error_response(function, tan, FSError::TANError),
-                msg.source,
-            )];
-        }
 
+        // C.1.3 — command byte 0 from a client is a Client Connection
+        // Maintenance message. (The same byte from the server is the status
+        // broadcast, which never arrives here.) It carries no TAN.
         if function == CCM_FUNCTION_CODE {
-            if !fs_payload_len_is_canonical(&msg.data, 2) {
+            if CCMMessage::decode(&msg.data).is_none() {
                 return Vec::new();
             }
             self.clients
                 .entry(msg.source)
                 .or_insert_with(|| ServerClientConnection::new(msg.source));
-            self.handle_ccm(msg.source, tan);
+            self.handle_ccm(msg.source);
             return Vec::new();
+        }
+
+        let tan = msg.data[1];
+        if tan == INVALID_TAN {
+            return vec![FSOutbound::to(
+                encode_error_response(function, tan, FSError::TANError),
+                msg.source,
+            )];
         }
 
         self.clients
@@ -420,7 +431,7 @@ impl FileServer {
         vec![FSOutbound::to(response, msg.source)]
     }
 
-    fn handle_ccm(&mut self, client: Address, _tan: TAN) {
+    fn handle_ccm(&mut self, client: Address) {
         let timeout = self.config.ccm_timeout_ms;
         let now = self.current_time_ms;
         let was_connected = if let Some(c) = self.clients.get(&client) {
@@ -455,23 +466,22 @@ impl FileServer {
             FSFunction::WriteFile => self.handle_write_file(client, tan, request),
             FSFunction::SeekFile => self.handle_seek_file(client, tan, request),
             FSFunction::GetFileServerProperties => self.handle_get_properties(tan, request),
-            FSFunction::FileServerStatus => self.handle_get_status(tan, request),
             FSFunction::GetCurrentDirectory => {
                 self.handle_get_current_directory(client, tan, request)
             }
             FSFunction::ChangeDirectory => self.handle_change_directory(client, tan, request),
-            FSFunction::MakeDirectory => self.handle_make_directory(client, tan, request),
-            FSFunction::RemoveDirectory => self.handle_remove_directory(client, tan, request),
-            FSFunction::CopyFile => self.handle_copy_file(client, tan, request),
-            FSFunction::GetFileSize => self.handle_get_file_size(client, tan, request),
-            FSFunction::GetFreeSpace => self.handle_get_free_space(tan),
             FSFunction::MoveFile => self.handle_move_file(client, tan, request),
             FSFunction::DeleteFile => self.handle_delete_file(client, tan, request),
             FSFunction::GetFileAttributes => self.handle_get_file_attributes(client, tan, request),
             FSFunction::SetFileAttributes => self.handle_set_file_attributes(client, tan, request),
             FSFunction::GetFileDateTime => self.handle_get_file_date_time(client, tan, request),
             FSFunction::InitializeVolume => self.handle_initialize_volume(tan, request),
-            _ => encode_error_response(function_code, tan, FSError::NotSupported),
+            // The status broadcast is server-to-client only, and the CCM that
+            // shares its command byte was handled before dispatch; Volume
+            // Status has its own path in `handle_client_message`.
+            FSFunction::FileServerStatus | FSFunction::VolumeStatus => {
+                encode_error_response(function_code, tan, FSError::NotSupported)
+            }
         }
     }
 
@@ -609,7 +619,27 @@ impl FileServer {
                         FSError::InvalidAccess,
                     );
                 }
-                return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::NotFound);
+                // C.3.2.2 — access mode "directory" plus the create flag is how
+                // a directory is created; ISO 11783-13 has no Make Directory
+                // command of its own.
+                if !has_flag(flags, OpenFlags::Create) {
+                    return encode_error_response(
+                        FSFunction::OpenFile.as_u8(),
+                        tan,
+                        FSError::NotFound,
+                    );
+                }
+                let parent = file_parent_directory_path(&dir_path);
+                if !self.directory_exists(&parent) {
+                    return encode_error_response(
+                        FSFunction::OpenFile.as_u8(),
+                        tan,
+                        FSError::NotFound,
+                    );
+                }
+                self.directories.push(dir_path.clone());
+                self.file_date_times
+                    .insert(dir_path, default_file_date_time());
             }
         } else {
             if self.is_file_path_directory(&path) {
@@ -1012,31 +1042,6 @@ impl FileServer {
         response
     }
 
-    fn handle_get_status(&self, tan: TAN, request: &[u8]) -> Vec<u8> {
-        if !fs_payload_len_is_canonical(request, 2) {
-            return encode_error_response(
-                FSFunction::FileServerStatus.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
-        let status = FileServerStatus {
-            busy: self.busy,
-            number_of_open_files: self.open_files.len() as u8,
-        };
-        let status_data = status.encode();
-        let mut response = vec![0xFFu8; 8];
-        response[0] = FSFunction::FileServerStatus.as_u8();
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        for (i, &b) in status_data.iter().enumerate() {
-            if i + 3 < response.len() {
-                response[3 + i] = b;
-            }
-        }
-        response
-    }
-
     fn handle_get_current_directory(&self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::GetCurrentDirectory, tan)
         {
@@ -1175,98 +1180,6 @@ impl FileServer {
         response
     }
 
-    fn handle_make_directory(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::MakeDirectory.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::MakeDirectory, tan) {
-            return response;
-        }
-        if request.len() < 3 {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        if !self.properties.supports_directories {
-            return encode_error_response(func, tan, FSError::NotSupported);
-        }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Ok(target_path) = normalize_directory_path(&requested_path, current_directory) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        // A file already occupies the path ⇒ wrong type; an existing directory
-        // is an idempotent success; otherwise create it.
-        if self.file_exists_at_directory_path(&target_path) {
-            return encode_error_response(func, tan, FSError::InvalidAccess);
-        }
-        if !self.directories.iter().any(|d| d == &target_path) {
-            self.directories.push(target_path);
-        }
-        let mut response = vec![0xFFu8; 8];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response
-    }
-
-    fn handle_remove_directory(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::RemoveDirectory.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::RemoveDirectory, tan) {
-            return response;
-        }
-        if request.len() < 3 {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        if !self.properties.supports_directories {
-            return encode_error_response(func, tan, FSError::NotSupported);
-        }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Ok(target_path) = normalize_directory_path(&requested_path, current_directory) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        // Cannot remove the root, a non-existent directory, or a non-empty one.
-        if target_path == "\\" {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        if !self.directories.iter().any(|d| d == &target_path) {
-            return encode_error_response(func, tan, FSError::NotFound);
-        }
-        // `target_path` already ends with the directory separator, so it is the
-        // child prefix. A child file or sub-directory ⇒ not empty.
-        let non_empty = self.files.keys().any(|f| f.starts_with(&target_path))
-            || self
-                .directories
-                .iter()
-                .any(|d| d != &target_path && d.starts_with(&target_path));
-        if non_empty {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        self.directories.retain(|d| d != &target_path);
-        let mut response = vec![0xFFu8; 8];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response
-    }
-
     fn handle_move_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::MoveFile, tan) {
             return response;
@@ -1339,91 +1252,6 @@ impl FileServer {
         success_response(FSFunction::MoveFile, tan)
     }
 
-    fn handle_get_free_space(&self, tan: TAN) -> Vec<u8> {
-        let func = FSFunction::GetFreeSpace.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFreeSpace, tan) {
-            return response;
-        }
-        let total = u32::try_from(self.volume_capacity_bytes).unwrap_or(u32::MAX);
-        let free = u32::try_from(self.free_bytes()).unwrap_or(u32::MAX);
-        let mut response = vec![0xFFu8; 11];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response[3..7].copy_from_slice(&total.to_le_bytes());
-        response[7..11].copy_from_slice(&free.to_le_bytes());
-        response
-    }
-
-    fn handle_get_file_size(&self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::GetFileSize.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFileSize, tan) {
-            return response;
-        }
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path(request, 2, current_directory) else {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        };
-        let Some(data) = self.files.get(&path) else {
-            if self.directory_exists(&path) {
-                return encode_error_response(func, tan, FSError::InvalidAccess);
-            }
-            return encode_error_response(func, tan, FSError::NotFound);
-        };
-        let size = u32::try_from(data.len()).unwrap_or(u32::MAX);
-        let mut response = success_response(FSFunction::GetFileSize, tan);
-        response[3..7].copy_from_slice(&size.to_le_bytes());
-        response
-    }
-
-    fn handle_copy_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::CopyFile.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::CopyFile, tan) {
-            return response;
-        }
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some((source_path, destination_path)) =
-            parse_two_counted_file_paths(request, current_directory)
-        else {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        };
-        if source_path == destination_path {
-            return encode_error_response(func, tan, FSError::InvalidDestName);
-        }
-        if self.is_file_path_directory(&source_path) {
-            return encode_error_response(func, tan, FSError::InvalidAccess);
-        }
-        let Some(data) = self.files.get(&source_path).cloned() else {
-            return encode_error_response(func, tan, FSError::NotFound);
-        };
-        if self.files.contains_key(&destination_path) || self.directory_exists(&destination_path) {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        let destination_parent = file_parent_directory_path(&destination_path);
-        if !self.directory_exists(&destination_parent) {
-            if self.file_exists_at_directory_path(&destination_parent) {
-                return encode_error_response(func, tan, FSError::InvalidAccess);
-            }
-            return encode_error_response(func, tan, FSError::InvalidDestName);
-        }
-        let attrs = self.file_attrs.get(&source_path).copied().unwrap_or(0);
-        let date_time = self
-            .file_date_times
-            .get(&source_path)
-            .copied()
-            .unwrap_or_else(default_file_date_time);
-        self.files.insert(destination_path.clone(), data);
-        self.file_attrs.insert(destination_path.clone(), attrs);
-        self.file_date_times.insert(destination_path, date_time);
-        success_response(FSFunction::CopyFile, tan)
-    }
-
     fn handle_delete_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::DeleteFile, tan) {
             return response;
@@ -1439,15 +1267,40 @@ impl FileServer {
             .clients
             .get(&client)
             .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path(request, 2, current_directory) else {
+        let Some(path) = parse_counted_file_or_directory_path(request, 2, current_directory) else {
             return encode_error_response(
                 FSFunction::DeleteFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         };
+        // C.4.3 Delete File removes directories too; there is no Remove
+        // Directory command. A directory must be empty and must not be the
+        // volume root.
         if self.is_file_path_directory(&path) {
-            return encode_error_response(FSFunction::DeleteFile.as_u8(), tan, FSError::InvalidAccess);
+            let directory = ensure_directory_suffix(path);
+            if directory == "\\" {
+                return encode_error_response(
+                    FSFunction::DeleteFile.as_u8(),
+                    tan,
+                    FSError::AccessDenied,
+                );
+            }
+            let non_empty = self.files.keys().any(|f| f.starts_with(&directory))
+                || self
+                    .directories
+                    .iter()
+                    .any(|d| d != &directory && d.starts_with(&directory));
+            if non_empty {
+                return encode_error_response(
+                    FSFunction::DeleteFile.as_u8(),
+                    tan,
+                    FSError::AccessDenied,
+                );
+            }
+            self.directories.retain(|d| d != &directory);
+            self.file_date_times.remove(&directory);
+            return success_response(FSFunction::DeleteFile, tan);
         }
         if self.is_path_open(&path) {
             return encode_error_response(

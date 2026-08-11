@@ -928,7 +928,8 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     }
 
     let status = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 2,
     };
     let status_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "server_status_busy_two_open");
@@ -946,15 +947,9 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         );
     }
 
-    let ccm = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "ccm_tan7");
-    assert_eq!(encode_ccm(7), ccm);
-    assert_eq!(
-        CCMMessage::decode(&ccm),
-        Some(CCMMessage {
-            version: 0xFF,
-            tan: 7
-        })
-    );
+    let ccm = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "ccm_version4");
+    assert_eq!(encode_ccm(4), ccm);
+    assert_eq!(CCMMessage::decode(&ccm), Some(CCMMessage { version: 4 }));
     for malformed in ["ccm_short1", "ccm_overlong9", "ccm_bad_padding"] {
         assert!(
             CCMMessage::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed)).is_none(),

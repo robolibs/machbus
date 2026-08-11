@@ -198,6 +198,9 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     );
 
     let directory_path = b"logs";
+    // C.4.3 Delete File removes directories as well as files, so a non-empty
+    // one is refused for being non-empty, not for being the wrong type.
+    server.add_file("logs\\held.txt", b"x".to_vec(), 0).unwrap();
     let mut delete_directory = vec![
         FSFunction::DeleteFile.as_u8(),
         0xA3,
@@ -209,8 +212,9 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_delete[0].data,
         FSFunction::DeleteFile,
         0xA3,
-        FSError::InvalidAccess,
+        FSError::AccessDenied,
     );
+    assert!(server.directory_exists("logs"));
 
     let mut move_directory = vec![
         FSFunction::MoveFile.as_u8(),

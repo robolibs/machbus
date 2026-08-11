@@ -38,7 +38,8 @@ pub use server::{
     FSOutbound, FileServer, FileServerConfig, OpenFile, ServerClientConnection, encode_ccm,
 };
 pub use types::{
-    CCMMessage, FS_CLASSIC_PROPERTIES_VERSION, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry,
+    CCM_FUNCTION_CODE, CCMMessage, FS_CLASSIC_PROPERTIES_VERSION, FS_STATUS_BUSY_READING,
+    FS_STATUS_BUSY_WRITING, FS_SUPPORTED_COUNT_MAX, FS_VERSION_NUMBER, FSFunction, FileEntry,
     FileHandle, FileServerProperties, FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN,
     MAX_VOLUME_NAME_BYTES, RESERVED_FILE_HANDLE_0, TAN, TANResponse, VolumeState, has_wildcards,
     is_absolute_path, is_valid_fs_path, is_valid_path_component, is_valid_volume_name,

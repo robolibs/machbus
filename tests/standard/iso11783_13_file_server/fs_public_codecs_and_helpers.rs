@@ -368,11 +368,6 @@ fn file_server_function_codes_reject_reserved_values() {
         FSFunction::GetFileAttributes,
         FSFunction::SetFileAttributes,
         FSFunction::GetFileDateTime,
-        FSFunction::MakeDirectory,
-        FSFunction::RemoveDirectory,
-        FSFunction::CopyFile,
-        FSFunction::GetFileSize,
-        FSFunction::GetFreeSpace,
         FSFunction::InitializeVolume,
         FSFunction::FileServerStatus,
         FSFunction::GetFileServerProperties,
@@ -382,7 +377,9 @@ fn file_server_function_codes_reject_reserved_values() {
         assert_eq!(FSFunction::from_u8(function.as_u8()), Some(function));
     }
 
-    for raw in [0x07, 0x0F, 0x1A, 0x21, 0x32, 0x41, 0xFF] {
+    // 0x15/0x18/0x19 were MakeDirectory/GetFileSize/GetFreeSpace, none of
+    // which is an Annex C command; 0xFF used to stand in for the CCM.
+    for raw in [0x03, 0x07, 0x0F, 0x12, 0x15, 0x18, 0x19, 0x1A, 0x25, 0x41, 0xFF] {
         assert_eq!(FSFunction::try_from_u8(raw), None);
         assert_eq!(FSFunction::from_u8(raw), None);
     }
@@ -423,7 +420,8 @@ fn file_server_volume_state_decoders_reject_noncanonical_bytes() {
 fn file_server_ccm_requires_canonical_keepalive_payload_before_connection() {
     let mut server = FileServer::new(FileServerConfig::default());
 
-    let malformed_ccm = vec![0xFF, 0x20, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    // C.1.3: command byte 0, version, six reserved 0xFF. Byte 3 is not 0xFF.
+    let malformed_ccm = vec![0x00, 0x04, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         server
             .handle_client_message(&fs_request(malformed_ccm, 0x42))
@@ -435,18 +433,17 @@ fn file_server_ccm_requires_canonical_keepalive_payload_before_connection() {
         "malformed CCM keepalive frames must not establish a client connection"
     );
 
-    assert!(
-        server
-            .handle_client_message(&fs_request(vec![0xFF, INVALID_TAN], 0x42))
-            .is_empty(),
-        "reserved TAN is legal only as the CCM sentinel path and remains silent"
-    );
+    // 0xFF is no longer a command byte at all, so it is not a CCM and does not
+    // connect anyone. The CCM has no TAN field for a reserved TAN to sit in, so
+    // this is just a request with an unusable TAN and gets B.9 code 46.
+    let reserved_tan = server.handle_client_message(&fs_request(vec![0xFF, INVALID_TAN], 0x42));
+    assert_eq!(reserved_tan[0].data[2], FSError::TANError.as_u8());
     assert!(
         server.clients().is_empty(),
-        "reserved-TAN CCM must not create a connection"
+        "an undefined command must not create a connection"
     );
 
-    let valid_ccm = vec![0xFF, 0x20, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let valid_ccm = vec![0x00, 0x04, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         server
             .handle_client_message(&fs_request(valid_ccm, 0x42))
@@ -492,7 +489,7 @@ fn file_server_non_ccm_requests_do_not_suppress_first_ccm_connection_event() {
         "pre-CCM request bookkeeping must remain distinguishable from a live CCM connection"
     );
 
-    let valid_ccm = vec![0xFF, 0x20, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let valid_ccm = vec![0x00, 0x04, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         server
             .handle_client_message(&fs_request(valid_ccm, 0x42))
@@ -527,22 +524,25 @@ fn file_server_properties_and_paths_reject_malformed_inputs() {
     assert_eq!(VolumeState::try_from_u8(4), None);
 
     let mut bad_status = machbus::isobus::fs::FileServerStatus {
-        busy: true,
+        busy_reading: true,
+        busy_writing: false,
         number_of_open_files: 1,
     }
     .encode();
-    bad_status[0] |= 0xFE;
+    // B.3 bits 2-7 are reserved and sent as zero.
+    bad_status[1] |= 0xFC;
     assert_eq!(
         machbus::isobus::fs::FileServerStatus::decode(&bad_status),
         None
     );
     let mut bad_status_count = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: FS_SUPPORTED_COUNT_MAX,
     }
     .encode();
     assert!(FileServerStatus::decode(&bad_status_count).is_some());
-    bad_status_count[1] = FS_SUPPORTED_COUNT_MAX + 1;
+    bad_status_count[2] = FS_SUPPORTED_COUNT_MAX + 1;
     assert_eq!(FileServerStatus::decode(&bad_status_count), None);
 
     assert!(is_valid_fs_path("\\TASKDATA\\XML", true, false));
@@ -769,17 +769,16 @@ fn file_server_operation_cycle_preserves_tan_and_owner_scoped_handles() {
     assert_eq!(fs_count(&read[0].data), 3);
     assert_eq!(&read[0].data[5..8], b"XYc");
 
-    let status = server.handle_client_message(&fs_request(
-        vec![FSFunction::FileServerStatus.as_u8(), 0x15],
-        0x42,
-    ));
-    assert_response(
-        &status[0].data,
-        FSFunction::FileServerStatus,
-        0x15,
-        FSError::Success,
-    );
-    assert_eq!(status[0].data[4], 1, "one owner-scoped handle remains open");
+    // C.1.2 makes the status a server broadcast, not a request/response; the
+    // same command byte from a client is the CCM. The open-handle count is
+    // read from the broadcast instead.
+    let broadcast = server.update(2_000);
+    let status = broadcast
+        .iter()
+        .find(|frame| frame.data[0] == FSFunction::FileServerStatus.as_u8())
+        .expect("the server broadcasts its status");
+    assert_eq!(status.dest, None);
+    assert_eq!(status.data[2], 1, "one owner-scoped handle remains open");
 }
 
 #[test]

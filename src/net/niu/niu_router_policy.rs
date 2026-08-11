@@ -1317,9 +1317,9 @@ impl Niu {
 /// Build the PGN 59392 response to an NIU command, addressed to its sender.
 fn niu_acknowledgment(positive: bool, request: &Message) -> Message {
     let ack = if positive {
-        Acknowledgment::ack(PGN_NIU_NETWORK_MSG, request.destination)
+        Acknowledgment::ack(PGN_NIU_NETWORK_MSG, request.source)
     } else {
-        Acknowledgment::nack(PGN_NIU_NETWORK_MSG, request.destination)
+        Acknowledgment::nack(PGN_NIU_NETWORK_MSG, request.source)
     };
     let payload = ack.encode().unwrap_or([0xFFu8; 8]);
     Message::with_addressing(

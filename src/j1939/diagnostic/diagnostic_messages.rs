@@ -59,9 +59,16 @@ impl LampStatus {
 pub enum LampFlash {
     SlowFlash = 0,
     FastFlash = 1,
+    /// SPN 3038-3041 code point 10 is reserved; it does not mean "off".
+    Reserved = 2,
+    /// 11 — "Unavailable / Do Not Flash", and the default, because a steady
+    /// lamp is expressed here and not by a separate code. `Off` used to be the
+    /// default *and* map to 10, so `DiagnosticLamps::default()` encoded byte 2
+    /// as 0xAA — four copies of Reserved — in every DM1, DM2 and DM4 machbus
+    /// emitted, and a conformant peer's idle 0xFF surfaced as `NotAvailable`
+    /// rather than as "do not flash".
     #[default]
-    Off = 2,
-    NotAvailable = 3,
+    DoNotFlash = 3,
 }
 
 impl LampFlash {
@@ -70,8 +77,8 @@ impl LampFlash {
         match v & 0x03 {
             0 => Self::SlowFlash,
             1 => Self::FastFlash,
-            2 => Self::Off,
-            _ => Self::NotAvailable,
+            2 => Self::Reserved,
+            _ => Self::DoNotFlash,
         }
     }
 
@@ -80,8 +87,8 @@ impl LampFlash {
         match v {
             0 => Some(Self::SlowFlash),
             1 => Some(Self::FastFlash),
-            2 => Some(Self::Off),
-            3 => Some(Self::NotAvailable),
+            2 => Some(Self::Reserved),
+            3 => Some(Self::DoNotFlash),
             _ => None,
         }
     }
@@ -303,17 +310,28 @@ pub struct DiagnosticLamps {
 }
 
 impl DiagnosticLamps {
+    /// J1939-73 §5.7.1 byte 1: bits 8-7 Malfunction Indicator (SPN 1213),
+    /// 6-5 Red Stop (623), 4-3 Amber Warning (624), 2-1 Protect (987); byte 2
+    /// the matching flash SPNs 3041/3040/3039/3038.
+    ///
+    /// The crate had all four in the opposite order. Encode and decode were
+    /// each other's inverse, so machbus-to-machbus round-tripped and every test
+    /// passed — but on an ISOBUS network an engine ECU's byte 1 = 0x10, "Red
+    /// Stop Lamp On, shut the engine down", decoded as amber-warning-on with
+    /// red stop off, and that reached the cab indicators an integrator binds
+    /// through `machbus_dm_dtc_list_lamps`. The operator got amber where the
+    /// engine asked for a red stop.
     #[must_use]
     pub fn encode(&self) -> [u8; 2] {
         [
-            (self.engine_protect.as_u8() << 6)
-                | (self.amber_warning.as_u8() << 4)
-                | (self.red_stop.as_u8() << 2)
-                | self.malfunction.as_u8(),
-            (self.engine_protect_flash.as_u8() << 6)
-                | (self.amber_warning_flash.as_u8() << 4)
-                | (self.red_stop_flash.as_u8() << 2)
-                | self.malfunction_flash.as_u8(),
+            (self.malfunction.as_u8() << 6)
+                | (self.red_stop.as_u8() << 4)
+                | (self.amber_warning.as_u8() << 2)
+                | self.engine_protect.as_u8(),
+            (self.malfunction_flash.as_u8() << 6)
+                | (self.red_stop_flash.as_u8() << 4)
+                | (self.amber_warning_flash.as_u8() << 2)
+                | self.engine_protect_flash.as_u8(),
         ]
     }
 
@@ -323,14 +341,14 @@ impl DiagnosticLamps {
             return None;
         }
         Some(Self {
-            malfunction: LampStatus::try_from_u8(data[0] & 0x03)?,
-            red_stop: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
-            amber_warning: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
-            engine_protect: LampStatus::try_from_u8(data[0] >> 6)?,
-            malfunction_flash: LampFlash::try_from_u8(data[1] & 0x03)?,
-            red_stop_flash: LampFlash::try_from_u8((data[1] >> 2) & 0x03)?,
-            amber_warning_flash: LampFlash::try_from_u8((data[1] >> 4) & 0x03)?,
-            engine_protect_flash: LampFlash::try_from_u8(data[1] >> 6)?,
+            malfunction: LampStatus::try_from_u8(data[0] >> 6)?,
+            red_stop: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
+            amber_warning: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
+            engine_protect: LampStatus::try_from_u8(data[0] & 0x03)?,
+            malfunction_flash: LampFlash::try_from_u8(data[1] >> 6)?,
+            red_stop_flash: LampFlash::try_from_u8((data[1] >> 4) & 0x03)?,
+            amber_warning_flash: LampFlash::try_from_u8((data[1] >> 2) & 0x03)?,
+            engine_protect_flash: LampFlash::try_from_u8(data[1] & 0x03)?,
         })
     }
 }
@@ -481,11 +499,12 @@ impl Dm4Message {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut data = Vec::new();
+        // Same §5.7.1 lamp byte as DM1/DM2/DM6/DM12/DM23.
         data.push(
-            (self.protect_lamp.as_u8() << 6)
-                | (self.amber_warning.as_u8() << 4)
-                | (self.red_stop_lamp.as_u8() << 2)
-                | self.mil_status.as_u8(),
+            (self.mil_status.as_u8() << 6)
+                | (self.red_stop_lamp.as_u8() << 4)
+                | (self.amber_warning.as_u8() << 2)
+                | self.protect_lamp.as_u8(),
         );
         data.push(0xFF);
         for dtc in &self.dtcs {
@@ -509,10 +528,10 @@ impl Dm4Message {
         if data.len() == 8 {
             if data[2..].iter().all(|&byte| byte == 0xFF) {
                 return Some(Self {
-                    mil_status: LampStatus::try_from_u8(data[0] & 0x03)?,
-                    red_stop_lamp: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
-                    amber_warning: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
-                    protect_lamp: LampStatus::try_from_u8(data[0] >> 6)?,
+                    mil_status: LampStatus::try_from_u8(data[0] >> 6)?,
+                    red_stop_lamp: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
+                    amber_warning: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
+                    protect_lamp: LampStatus::try_from_u8(data[0] & 0x03)?,
                     dtcs,
                 });
             }
@@ -531,10 +550,10 @@ impl Dm4Message {
             }
         }
         Some(Self {
-            mil_status: LampStatus::try_from_u8(data[0] & 0x03)?,
-            red_stop_lamp: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
-            amber_warning: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
-            protect_lamp: LampStatus::try_from_u8(data[0] >> 6)?,
+            mil_status: LampStatus::try_from_u8(data[0] >> 6)?,
+            red_stop_lamp: LampStatus::try_from_u8((data[0] >> 4) & 0x03)?,
+            amber_warning: LampStatus::try_from_u8((data[0] >> 2) & 0x03)?,
+            protect_lamp: LampStatus::try_from_u8(data[0] & 0x03)?,
             dtcs,
         })
     }
@@ -1102,6 +1121,7 @@ impl Dm10VehicleIdentification {
         validate_ascii_star_field("Dm10VehicleIdentification.vin", &self.vin)?;
         let mut data = encode_iso11783_text_field("Dm10VehicleIdentification.vin", &self.vin, &[])?;
         data.push(b'*');
+        pad_single_frame(&mut data);
         Ok(data)
     }
 
@@ -1123,7 +1143,35 @@ pub struct ProductIdentification {
     pub serial_number: String,
 }
 
+/// Strip the single-frame 0xFF pad a short identification response carries.
+///
+/// J1939-21 / ISO 11783-3 pad a single CAN frame to eight bytes with 0xFF, and
+/// this crate does exactly that on transmit — but nothing makes that padding
+/// part of the last `*`-terminated field. A peer whose Software Identification
+/// is one short version string ("1.0"), or whose ECU Identification fits in
+/// eight bytes, sends a legal single-frame response the decoders rejected
+/// outright, so a service tool showed `software_id: None` with no error,
+/// indistinguishable from an ECU that never answered. The same failure
+/// machbus-to-machbus: `DmMemory` transmits it and `EcuIdentification::decode`
+/// rejected it.
+fn pad_single_frame(data: &mut Vec<u8>) {
+    while data.len() < 8 {
+        data.push(0xFF);
+    }
+}
+
+fn strip_single_frame_pad(raw: &[u8]) -> &[u8] {
+    if raw.len() != 8 {
+        return raw;
+    }
+    match raw.iter().rposition(|&byte| byte != 0xFF) {
+        Some(last) => &raw[..=last],
+        None => raw,
+    }
+}
+
 fn decode_exact_star_fields(raw: &[u8], expected_fields: usize) -> Option<Vec<String>> {
+    let raw = strip_single_frame_pad(raw);
     let mut fields = Vec::with_capacity(expected_fields);
     let mut start = 0usize;
     for (idx, &byte) in raw.iter().enumerate() {
@@ -1145,6 +1193,7 @@ fn decode_exact_star_fields(raw: &[u8], expected_fields: usize) -> Option<Vec<St
 }
 
 fn decode_exact_ascii_star_fields(raw: &[u8], expected_fields: usize) -> Option<Vec<String>> {
+    let raw = strip_single_frame_pad(raw);
     let mut fields = Vec::with_capacity(expected_fields);
     let mut start = 0usize;
     for (idx, &byte) in raw.iter().enumerate() {
@@ -1166,6 +1215,7 @@ fn decode_exact_ascii_star_fields(raw: &[u8], expected_fields: usize) -> Option<
 }
 
 fn decode_star_fields(raw: &[u8]) -> Option<Vec<String>> {
+    let raw = strip_single_frame_pad(raw);
     if raw.is_empty() {
         return None;
     }
@@ -1221,6 +1271,7 @@ impl ProductIdentification {
             data.extend_from_slice(&encode_iso11783_text_field(name, f, &[])?);
             data.push(b'*');
         }
+        pad_single_frame(&mut data);
         Ok(data)
     }
 
@@ -1266,11 +1317,14 @@ impl SoftwareIdentification {
             )?);
             data.push(b'*');
         }
+        pad_single_frame(&mut data);
         Ok(data)
     }
 
     #[must_use]
     pub fn decode(raw: &[u8]) -> Option<Self> {
+        // The count byte is inside the padded frame, so strip before splitting.
+        let raw = strip_single_frame_pad(raw);
         let (&count, rest) = raw.split_first()?;
         let versions = decode_star_fields(rest)?;
         // The count is authoritative: a mismatch means the payload was

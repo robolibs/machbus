@@ -88,21 +88,66 @@ mod tests {
         );
     }
 
+    /// H2 — J1939-73 §5.7.1 byte 1: bits 8-7 Malfunction Indicator (SPN 1213),
+    /// 6-5 Red Stop (623), 4-3 Amber Warning (624), 2-1 Protect (987). The
+    /// crate had all four in the opposite order; encode and decode were each
+    /// other's inverse, so a round-trip alone could never see it. Pin the
+    /// bytes, not the round trip.
+    ///
+    /// H3 — SPN 3038-3041 has no "off": 00 slow, 01 fast, 10 reserved, 11 do
+    /// not flash. `LampFlash::Off = 2` was the default, so every DM1, DM2 and
+    /// DM4 machbus emitted carried 0xAA — four copies of the reserved code — in
+    /// byte 2.
     #[test]
-    fn diagnostic_lamps_round_trip() {
+    fn diagnostic_lamps_match_the_j1939_73_bit_order() {
+        // Red Stop Lamp On, everything else off: "shut the engine down".
+        let red_stop_on = DiagnosticLamps {
+            red_stop: LampStatus::On,
+            malfunction_flash: LampFlash::SlowFlash,
+            red_stop_flash: LampFlash::SlowFlash,
+            amber_warning_flash: LampFlash::SlowFlash,
+            engine_protect_flash: LampFlash::SlowFlash,
+            ..DiagnosticLamps::default()
+        };
+        assert_eq!(
+            red_stop_on.encode(),
+            [0x10, 0x00],
+            "SPN 623 is bits 6-5 of byte 1"
+        );
+        assert_eq!(
+            DiagnosticLamps::decode(&[0x10, 0x00]).unwrap(),
+            red_stop_on,
+            "an engine ECU's red stop must not read back as amber warning"
+        );
+
+        let mil_on = DiagnosticLamps {
+            malfunction: LampStatus::On,
+            malfunction_flash: LampFlash::SlowFlash,
+            red_stop_flash: LampFlash::SlowFlash,
+            amber_warning_flash: LampFlash::SlowFlash,
+            engine_protect_flash: LampFlash::SlowFlash,
+            ..DiagnosticLamps::default()
+        };
+        assert_eq!(mil_on.encode(), [0x40, 0x00], "SPN 1213 is bits 8-7");
+
+        // The default is every lamp off and every flash "do not flash".
+        assert_eq!(
+            DiagnosticLamps::default().encode(),
+            [0x00, 0xFF],
+            "0xAA was four copies of the reserved flash code"
+        );
+
         let l = DiagnosticLamps {
             malfunction: LampStatus::On,
             malfunction_flash: LampFlash::FastFlash,
             red_stop: LampStatus::Error,
             red_stop_flash: LampFlash::SlowFlash,
             amber_warning: LampStatus::On,
-            amber_warning_flash: LampFlash::Off,
+            amber_warning_flash: LampFlash::Reserved,
             engine_protect: LampStatus::NotAvailable,
-            engine_protect_flash: LampFlash::NotAvailable,
+            engine_protect_flash: LampFlash::DoNotFlash,
         };
-        let bytes = l.encode();
-        let decoded = DiagnosticLamps::decode(&bytes).unwrap();
-        assert_eq!(decoded, l);
+        assert_eq!(DiagnosticLamps::decode(&l.encode()).unwrap(), l);
     }
 
     #[test]
@@ -554,6 +599,38 @@ mod tests {
         // A count that disagrees with the payload is a malformed message, not
         // a message with a different number of fields.
         assert!(SoftwareIdentification::decode(b"\x031.0.0*").is_none());
+
+        // H4 — J1939-21 pads a single CAN frame to eight bytes with 0xFF, and
+        // this crate does exactly that on transmit; nothing makes the padding
+        // part of the last `*`-terminated field. A peer whose Software
+        // Identification is one short version string sent a legal single-frame
+        // response that was rejected outright, so a service tool showed
+        // `software_id: None` with no error — indistinguishable from an ECU
+        // that never answered.
+        assert_eq!(
+            SoftwareIdentification::decode(b"\x011.0*\xFF\xFF\xFF"),
+            Some(SoftwareIdentification {
+                versions: vec!["1.0".into()],
+            })
+        );
+        assert_eq!(
+            SoftwareIdentification {
+                versions: vec!["1.0".into()],
+            }
+            .encode()
+            .unwrap(),
+            b"\x011.0*\xFF\xFF\xFF",
+            "the encoder pads the single frame the decoder now strips"
+        );
+
+        assert_eq!(
+            ProductIdentification::decode(b"A*B*C*\xFF\xFF"),
+            Some(ProductIdentification {
+                make: "A".into(),
+                model: "B".into(),
+                serial_number: "C".into(),
+            })
+        );
     }
 
     /// 6F — the encoder omitted the mandatory count, so a conformant receiver

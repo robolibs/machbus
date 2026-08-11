@@ -37,6 +37,34 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
+    /// The diagnostic PGNs this plugin is the CF's responder for.
+    ///
+    /// A NACK asserts that *this CF* does not support the PGN, so it may only
+    /// be sent for PGNs no other plugin in the session might serve. The DM
+    /// block is the one this plugin owns.
+    fn owns_pgn(pgn: Pgn) -> bool {
+        use crate::net::pgn_defs::{
+            PGN_DM2, PGN_DM3, PGN_DM4, PGN_DM6, PGN_DM8, PGN_DM10, PGN_DM11, PGN_DM12, PGN_DM13,
+            PGN_DM21, PGN_DM22, PGN_DM23, PGN_DM25,
+        };
+        matches!(
+            pgn,
+            PGN_DM2
+                | PGN_DM3
+                | PGN_DM4
+                | PGN_DM6
+                | PGN_DM8
+                | PGN_DM10
+                | PGN_DM11
+                | PGN_DM12
+                | PGN_DM13
+                | PGN_DM21
+                | PGN_DM22
+                | PGN_DM23
+                | PGN_DM25
+        )
+    }
+
     /// Broadcast active DTCs every `interval_ms` milliseconds.
     #[must_use]
     pub fn every(interval_ms: u32) -> Self {
@@ -103,34 +131,48 @@ impl Plugin for Diagnostics {
                 }
             }
             PGN_REQUEST => {
-                if msg.data.len() >= 3 {
-                    let requested = u32::from(msg.data[0])
-                        | (u32::from(msg.data[1]) << 8)
-                        | (u32::from(msg.data[2]) << 16);
-                    if requested == PGN_DM1 {
+                // §5.4.5 makes the responder "the specified destination". This
+                // arm tested only "not global", and inbound single-frame
+                // messages reach every plugin unfiltered — which is why the
+                // sibling plugins guard themselves — so a service tool asking
+                // implement ECU 0x81 for DM2 got a NACK from this unrelated
+                // node, and its request state machine abandoned the exchange
+                // before the real destination answered.
+                if msg.destination != BROADCAST_ADDRESS && msg.destination != ctx.address() {
+                    return;
+                }
+                let Some(requested) = crate::j1939::requested_pgn(msg) else {
+                    return;
+                };
+                if requested == PGN_DM1 {
+                    ctx.send(
+                        PGN_DM1,
+                        self.dm1_payload(),
+                        BROADCAST_ADDRESS,
+                        Priority::Default,
+                    );
+                } else if msg.destination != BROADCAST_ADDRESS && Self::owns_pgn(requested) {
+                    // "A response is always required from a specified
+                    // destination (not global), even if it is a NACK indicating
+                    // that the particular PGN value is not supported" — and
+                    // conversely "A global request shall not be responded to
+                    // with a NACK".
+                    //
+                    // Only the diagnostic PGNs this plugin owns. `Session`
+                    // delivers PGN_REQUEST to every interested plugin, and one
+                    // session may carry `Diagnostics`, `DmMemory` and
+                    // `ControlFunctionalities` together, so NACKing everything
+                    // unrecognised answered *and* NACKed the same request from
+                    // the same source address in one pass: a requester honouring
+                    // the NACK recorded "not supported" though the data arrived.
+                    let nack = Acknowledgment::nack(requested, msg.source);
+                    if let Ok(payload) = nack.encode() {
                         ctx.send(
-                            PGN_DM1,
-                            self.dm1_payload(),
-                            BROADCAST_ADDRESS,
+                            PGN_ACKNOWLEDGMENT,
+                            payload.to_vec(),
+                            msg.source,
                             Priority::Default,
                         );
-                    } else if msg.destination != BROADCAST_ADDRESS {
-                        // ISO 11783-3 §5.4.x: "A response is always required
-                        // from a specified destination (not global), even if it
-                        // is a NACK indicating that the particular PGN value is
-                        // not supported" — and conversely "A global request
-                        // shall not be responded to with a NACK". Staying
-                        // silent left the requester waiting out its timeout with
-                        // no way to tell "unsupported" from "no reply".
-                        let nack = Acknowledgment::nack(requested, ctx.address());
-                        if let Ok(payload) = nack.encode() {
-                            ctx.send(
-                                PGN_ACKNOWLEDGMENT,
-                                payload.to_vec(),
-                                msg.source,
-                                Priority::Default,
-                            );
-                        }
                     }
                 }
             }
@@ -251,6 +293,43 @@ mod tests {
         let nack = nack.expect("an addressed request for an unsupported PGN must be answered");
         assert_eq!(nack.control, AckControl::NegativeAck);
         assert_eq!(nack.acknowledged_pgn, PGN_DM2);
+        // H5 — J1939-21 §5.4.4 byte 5 is "Address Acknowledged": who the
+        // acknowledgment is *for*. The CAN identifier already carries the
+        // sender, so reporting our own SA made the NACK undiscoverable to a
+        // requester filtering on it — the entire point of adding it.
+        assert_eq!(
+            nack.address, 0x26,
+            "Address Acknowledged is the requester's SA, not ours"
+        );
+
+        // H1 — addressed to a third party. Inbound single-frame messages reach
+        // every plugin unfiltered, so this used to answer for a stranger: a
+        // service tool asking implement ECU 0x81 for DM2 got a NACK from this
+        // node and abandoned the exchange before the real destination replied.
+        s.feed(0, &request(0x81, PGN_DM2), now.add_millis(5));
+        let mut answered_for_a_stranger = false;
+        while let Some((_, frame)) = s.poll_transmit() {
+            answered_for_a_stranger |= frame.id.pgn() == PGN_ACKNOWLEDGMENT;
+        }
+        assert!(
+            !answered_for_a_stranger,
+            "only the specified destination responds (§5.4.5)"
+        );
+
+        // H1 — a PGN a sibling plugin serves must not be NACKed by this one:
+        // `Session` delivers PGN_REQUEST to every interested plugin, so the
+        // request was answered *and* NACKed from the same source address in one
+        // pass and a requester honouring the NACK recorded "not supported"
+        // though the data arrived.
+        s.feed(0, &request(our_address, 0xFC8E), now.add_millis(8));
+        let mut nacked_a_sibling = false;
+        while let Some((_, frame)) = s.poll_transmit() {
+            nacked_a_sibling |= frame.id.pgn() == PGN_ACKNOWLEDGMENT;
+        }
+        assert!(
+            !nacked_a_sibling,
+            "a NACK asserts the whole CF does not support the PGN"
+        );
 
         // The same request sent globally must not be NACKed.
         s.feed(0, &request(BROADCAST_ADDRESS, PGN_DM2), now.add_millis(10));

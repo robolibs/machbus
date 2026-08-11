@@ -97,13 +97,18 @@ fn diagnostics_lamp_status_round_trips_all_lamp_groups() {
         red_stop: LampStatus::Error,
         red_stop_flash: LampFlash::SlowFlash,
         amber_warning: LampStatus::NotAvailable,
-        amber_warning_flash: LampFlash::Off,
+        amber_warning_flash: LampFlash::Reserved,
         engine_protect: LampStatus::Off,
-        engine_protect_flash: LampFlash::NotAvailable,
+        engine_protect_flash: LampFlash::DoNotFlash,
     };
 
     assert_eq!(DiagnosticLamps::decode(&lamps.encode()), Some(lamps));
     assert_eq!(DiagnosticLamps::decode(&[0xFF]), None);
+
+    // J1939-73 §5.7.1 byte 1: bits 8-7 MIL (SPN 1213), 6-5 Red Stop (623),
+    // 4-3 Amber (624), 2-1 Protect (987). Round-tripping alone cannot see a
+    // reversed order, because encode and decode are each other's inverse.
+    assert_eq!(lamps.encode()[0], 0b01_10_11_00);
 }
 
 #[test]
@@ -121,8 +126,8 @@ fn diagnostics_public_lamp_decoders_reject_noncanonical_packed_bytes() {
     for (raw, flash) in [
         (0, LampFlash::SlowFlash),
         (1, LampFlash::FastFlash),
-        (2, LampFlash::Off),
-        (3, LampFlash::NotAvailable),
+        (2, LampFlash::Reserved),
+        (3, LampFlash::DoNotFlash),
     ] {
         assert_eq!(LampFlash::try_from_u8(raw), Some(flash));
         assert_eq!(LampFlash::from_u8(raw), flash);
@@ -140,8 +145,8 @@ fn diagnostics_public_lamp_decoders_reject_noncanonical_packed_bytes() {
         engine_protect: LampStatus::Off,
         malfunction_flash: LampFlash::FastFlash,
         red_stop_flash: LampFlash::SlowFlash,
-        amber_warning_flash: LampFlash::Off,
-        engine_protect_flash: LampFlash::NotAvailable,
+        amber_warning_flash: LampFlash::Reserved,
+        engine_protect_flash: LampFlash::DoNotFlash,
     };
     assert_eq!(DiagnosticLamps::decode(&lamps.encode()), Some(lamps));
 }

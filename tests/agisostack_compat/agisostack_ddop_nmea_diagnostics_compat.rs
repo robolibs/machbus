@@ -700,21 +700,31 @@ fn diagnostic_dtc_packing_matches_agisostack_reference_dtcs() {
 
 #[test]
 fn diagnostic_lamp_bytes_cover_agisostack_dm1_examples() {
+    // J1939-73 §5.7.1 byte 1: bits 8-7 MIL (SPN 1213), 6-5 Red Stop (623),
+    // 4-3 Amber (624), 2-1 Protect (987). Byte 2 carries the matching flash
+    // SPNs 3041/3040/3039/3038, whose code points are 00 slow, 01 fast, 10
+    // reserved, 11 do-not-flash — there is no "off".
+    //
+    // The crate had all four lamps in the opposite order and defaulted the
+    // flash field to the reserved code, so `all_off` used to encode as 0xAA:
+    // four copies of "reserved" in every DM1 machbus emitted. `amber_slow_flash`
+    // and `red_stop_solid` were exact mirror images of each other, which is
+    // what a reversed bit order looks like from inside a round trip.
     let all_off = DiagnosticLamps::default();
-    assert_eq!(all_off.encode(), [0x00, 0xAA]);
+    assert_eq!(all_off.encode(), [0x00, 0xFF]);
 
     let amber_slow_flash = DiagnosticLamps {
         amber_warning: LampStatus::On,
         amber_warning_flash: LampFlash::SlowFlash,
         ..DiagnosticLamps::default()
     };
-    assert_eq!(amber_slow_flash.encode(), [0x10, 0x8A]);
+    assert_eq!(amber_slow_flash.encode(), [0x04, 0xF3]);
 
     let red_stop_solid = DiagnosticLamps {
         red_stop: LampStatus::On,
         ..DiagnosticLamps::default()
     };
-    assert_eq!(red_stop_solid.encode(), [0x04, 0xAA]);
+    assert_eq!(red_stop_solid.encode(), [0x10, 0xFF]);
 }
 
 #[test]

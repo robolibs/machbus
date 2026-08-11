@@ -72,7 +72,13 @@ impl Default for Acknowledgment {
 }
 
 impl Acknowledgment {
-    /// Construct a positive ACK for `pgn` from `addr`.
+    /// Construct a positive ACK for `pgn`, acknowledged for the CF at `addr`.
+    ///
+    /// `addr` is J1939-21 §5.4.4 byte 5, "Address Acknowledged" — who the
+    /// acknowledgment is *for*, not who sent it. The CAN identifier already
+    /// carries the sender. Both call sites in this crate had it backwards, so a
+    /// requester filtering on "Address Acknowledged == my SA" — the only reason
+    /// the field exists — discarded the reply and waited out its timeout.
     #[must_use]
     pub const fn ack(pgn: Pgn, addr: Address) -> Self {
         Self {
@@ -83,7 +89,8 @@ impl Acknowledgment {
         }
     }
 
-    /// Construct a NACK for `pgn` from `addr`.
+    /// Construct a NACK for `pgn`, acknowledged for the CF at `addr`. See
+    /// [`Self::ack`] for what `addr` means.
     #[must_use]
     pub const fn nack(pgn: Pgn, addr: Address) -> Self {
         Self {

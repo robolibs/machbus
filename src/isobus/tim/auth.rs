@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use aes::Aes128;
 use cmac::{Cmac, Mac};
 use der::{Decode, Encode};
-use sha2::{Digest, Sha256};
 use rsa::pkcs8::DecodePublicKey;
+use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -315,10 +315,7 @@ impl CertificateChain {
             .last()
             .ok_or(AuthError::DeviceCertificateDataCorrupt)?;
         let spki = &device.tbs_certificate.subject_public_key_info;
-        let algorithm = spki
-            .algorithm
-            .oid
-            .as_bytes();
+        let algorithm = spki.algorithm.oid.as_bytes();
         if algorithm != OID_X25519 {
             return Err(AuthError::EccPublicKeyValidationFailed);
         }
@@ -1047,8 +1044,8 @@ mod tests {
         // old structural check accepted it outright.
         let evil_root = vector("evil_root");
         let evil_device = vector("evil_device");
-        let forged =
-            CertificateChain::parse_der(&[&evil_root, &evil_device]).expect("a forged chain parses");
+        let forged = CertificateChain::parse_der(&[&evil_root, &evil_device])
+            .expect("a forged chain parses");
         forged
             .check_issuer_linkage()
             .expect("the forgery links by name — that is the whole point");
@@ -1115,8 +1112,12 @@ mod tests {
         // Accepting the chain is what binds it, so key agreement has no
         // argument left for a peer to substitute.
         let mut auth = TimAuthentication::new();
-        auth.accept_chain(&chain, &vector("root_spki"), &CertificateRevocationList::new())
-            .expect("a genuine chain is accepted");
+        auth.accept_chain(
+            &chain,
+            &vector("root_spki"),
+            &CertificateRevocationList::new(),
+        )
+        .expect("a genuine chain is accepted");
         assert_eq!(auth.peer_ecdh_public, Some(from_cert));
 
         // A device certificate carrying an RSA key has no curve point to agree

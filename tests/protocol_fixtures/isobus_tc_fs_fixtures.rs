@@ -904,25 +904,28 @@ fn fixture_isobus_rear_hitch_raise_is_stable() {
 #[test]
 fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     let classic = FileServerProperties {
-        version_number: 1,
+        version_number: 4,
         max_simultaneous_files: 16,
-        supports_directories: true,
-        supports_volume_management: true,
-        supports_file_attributes: true,
-        supports_move_file: true,
-        supports_delete_file: true,
+        supports_multiple_volumes: true,
+        supports_removable_volumes: true,
     };
-    let classic_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "classic_properties_all_caps");
-    assert_eq!(classic.encode(), classic_bytes);
-    assert_eq!(FileServerProperties::decode(&classic_bytes), Some(classic));
+    let classic_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "properties_response_v4");
+    assert_eq!(classic.encode_response(0x07), classic_bytes);
+    assert_eq!(
+        FileServerProperties::decode_response(&classic_bytes),
+        Some((0x07, classic))
+    );
     for malformed in [
-        "classic_properties_short2",
-        "classic_properties_overlong9",
-        "classic_properties_bad_padding",
+        "properties_response_short4",
+        "properties_response_overlong9",
+        "properties_response_bad_padding",
     ] {
         assert!(
-            FileServerProperties::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed))
-                .is_none(),
+            FileServerProperties::decode_response(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                malformed
+            ))
+            .is_none(),
             "{malformed} must be rejected"
         );
     }
@@ -1020,12 +1023,9 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     server.add_file("log.txt", b"abc".to_vec(), 0).unwrap();
     let mut client = FileClient::new(FileClientConfig::default());
     let connect = client.connect_to_server(0x10).unwrap();
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect.data[1],
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect.data[1])
+        .to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,
@@ -1221,12 +1221,9 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     let mut strict_client = FileClient::new(FileClientConfig::default());
     let connect = strict_client.connect_to_server(0x10).unwrap();
     let connect_tan = connect.data[1];
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect_tan,
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect_tan)
+        .to_vec();
     strict_client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,
@@ -1543,12 +1540,9 @@ fn fixture_isobus_file_server_directory_workflow_is_stable() {
         .unwrap();
     let mut client = FileClient::new(FileClientConfig::default());
     let connect = client.connect_to_server(0x10).unwrap();
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect.data[1],
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect.data[1])
+        .to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,

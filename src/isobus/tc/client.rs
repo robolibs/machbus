@@ -1208,7 +1208,10 @@ mod tests {
         assert_eq!(sent, 3, "the cadence must not depend on inbound traffic");
 
         // B.8.2: the totals bit is mirrored from TC Status byte 5 bit 1.
-        c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0x01, 0, 0, 0], 0x33));
+        c.handle_tc_message(&tc_msg(
+            vec![tc_cmd::TC_STATUS, 0, 0, 0, 0x01, 0, 0, 0],
+            0x33,
+        ));
         let mirrored = c.update(CLIENT_TASK_INTERVAL_MS);
         let task = mirrored
             .iter()

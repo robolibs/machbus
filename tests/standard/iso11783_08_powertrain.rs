@@ -213,9 +213,8 @@ fn powertrain_eec3_asymmetry_rejects_reserved_special_values() {
     for value in [0xFB, 0xFC, 0xFD] {
         let mut reserved = encoded;
         reserved[3] = value;
-        let decoded = Eec3::decode(&reserved).unwrap_or_else(|| {
-            panic!("asymmetry raw 0x{value:02X} must not drop the whole PG")
-        });
+        let decoded = Eec3::decode(&reserved)
+            .unwrap_or_else(|| panic!("asymmetry raw 0x{value:02X} must not drop the whole PG"));
         assert_eq!(
             decoded.operating_speed_asymmetry,
             Signal::NotAvailable,
@@ -1254,15 +1253,16 @@ fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_de
     let mut status_economy = encoded_economy;
     status_economy[4] = 0xFE;
     assert_eq!(
-        FuelEconomy::decode(&status_economy).unwrap().throttle_position,
+        FuelEconomy::decode(&status_economy)
+            .unwrap()
+            .throttle_position,
         Signal::Error
     );
     for value in [0xFB, 0xFD, 0xFF] {
         let mut special = encoded_economy;
         special[4] = value;
-        let decoded = FuelEconomy::decode(&special).unwrap_or_else(|| {
-            panic!("throttle raw 0x{value:02X} must not drop the whole PG")
-        });
+        let decoded = FuelEconomy::decode(&special)
+            .unwrap_or_else(|| panic!("throttle raw 0x{value:02X} must not drop the whole PG"));
         assert_eq!(
             decoded.throttle_position,
             Signal::NotAvailable,
@@ -1331,9 +1331,8 @@ fn powertrain_percentage_fields_reject_reserved_special_values_without_losing_de
     for value in [0xFB, 0xFD, 0xFF] {
         let mut special = encoded_at1;
         special[0] = value;
-        let decoded = Aftertreatment1::decode(&special).unwrap_or_else(|| {
-            panic!("DEF tank raw 0x{value:02X} must not drop the whole PG")
-        });
+        let decoded = Aftertreatment1::decode(&special)
+            .unwrap_or_else(|| panic!("DEF tank raw 0x{value:02X} must not drop the whole PG"));
         assert_eq!(
             decoded.def_tank_level,
             Signal::NotAvailable,

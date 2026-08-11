@@ -32,8 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::thread::sleep;
     use std::time::{Duration, Instant as StdInstant};
 
-    use machbus::isobus::implement::Signal;
     use machbus::Instant;
+    use machbus::isobus::implement::Signal;
     use machbus::net::Name;
     use machbus::session::plugins::Guidance;
     use machbus::session::{EndpointTransport, Event, GuidanceEvent, Session};

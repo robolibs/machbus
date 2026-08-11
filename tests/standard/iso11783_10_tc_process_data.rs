@@ -5,11 +5,10 @@ use machbus::isobus::tc::{
     MeasurementTriggerRuntime, ObjectPoolActivationError, ObjectPoolDeletionErrors,
     ObjectPoolErrorCodes, PeerControlAssignment, PeerControlInterface, PrescriptionMap,
     PrescriptionZone, ProcessDataAcknowledgeErrorCodes, ProcessDataCommands, ServerOptions,
-    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig,
-    TCGEOInterface, TCServerConfig, TCState, TaskControllerClient, TaskControllerServer,
-    TriggerMethod, geo_ddi, prescription_rate_from_engineering,
-    prescription_rate_process_data_payload, prescription_rate_to_engineering, tc_cmd,
-    tc_options_byte_is_valid,
+    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig, TCGEOInterface,
+    TCServerConfig, TCState, TaskControllerClient, TaskControllerServer, TriggerMethod, geo_ddi,
+    prescription_rate_from_engineering, prescription_rate_process_data_payload,
+    prescription_rate_to_engineering, tc_cmd, tc_options_byte_is_valid,
 };
 use machbus::net::constants::{BROADCAST_ADDRESS, NULL_ADDRESS};
 use machbus::net::pgn_defs::{
@@ -1468,8 +1467,8 @@ fn tc_total_trigger_does_not_re_request_on_every_value() {
     // ask again, because a total is not sampled by request.
     let mut emitted = 0;
     for value in [10i32, 10, 25] {
-        let payload =
-            TaskControllerServer::build_set_value(7u16, 0x1234u16, value).expect("a valid Value payload");
+        let payload = TaskControllerServer::build_set_value(7u16, 0x1234u16, value)
+            .expect("a valid Value payload");
         let out = server
             .try_handle_client_message(&Message::new(PGN_ECU_TO_TC, payload.to_vec(), 0x42))
             .unwrap();

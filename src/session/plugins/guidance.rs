@@ -21,6 +21,7 @@
 //! Turning a path + GNSS pose into a curvature each cycle (pure-pursuit / Stanley)
 //! is the application's job; this plugin moves the resulting command on the wire.
 
+use crate::isobus::implement::Signal;
 use crate::isobus::implement::guidance::{
     GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout, curvature_within_range,
 };
@@ -33,7 +34,6 @@ use crate::net::pgn_defs::{
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
-use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::plugins::gnss::GnssHazards;
 use crate::session::plugins::shortcut_button::IsbGuard;
@@ -467,7 +467,9 @@ impl Plugin for Guidance {
             // The preconditions are a continuing contract, not an entry check:
             // re-run them on every broadcast so an operator asserting the
             // mechanical lockout mid-turn actually stops this controller.
-            if self.engaged && let Some(refusal) = Self::machine_violation(info) {
+            if self.engaged
+                && let Some(refusal) = Self::machine_violation(info)
+            {
                 let was_engaged = self.engaged;
                 let trigger = match refusal {
                     AutodriveRefusal::MechanicalLockout => SafeStopTrigger::IsbStop,

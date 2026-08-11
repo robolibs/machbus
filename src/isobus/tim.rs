@@ -215,9 +215,9 @@ impl TimCommand {
     pub const fn safe_mode_kind(self) -> crate::safety::TecuCommandKind {
         use crate::safety::TecuCommandKind as Kind;
         match self {
-            Self::FrontPtoDisengage
-            | Self::RearPtoDisengage
-            | Self::VehicleSpeedStopMotion => Kind::Disengage,
+            Self::FrontPtoDisengage | Self::RearPtoDisengage | Self::VehicleSpeedStopMotion => {
+                Kind::Disengage
+            }
             _ => Kind::Engage,
         }
     }

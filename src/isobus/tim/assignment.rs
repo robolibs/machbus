@@ -10,8 +10,8 @@
 
 use alloc::vec::Vec;
 
-use super::messages::HeartbeatCounter;
 use super::functions::TimFunctionId;
+use super::messages::HeartbeatCounter;
 
 /// Message code shared by request and response (A.2.3).
 pub const MSG_CODE_ASSIGNMENT: u8 = 0xF5;
@@ -516,10 +516,8 @@ mod tests {
 
     #[test]
     fn an_unauthenticated_client_is_refused_every_function() {
-        let mut table = AssignmentTable::new(&[
-            TimFunctionId::ExternalGuidance,
-            TimFunctionId::VehicleSpeed,
-        ]);
+        let mut table =
+            AssignmentTable::new(&[TimFunctionId::ExternalGuidance, TimFunctionId::VehicleSpeed]);
 
         for function in [TimFunctionId::ExternalGuidance, TimFunctionId::VehicleSpeed] {
             let response = table.apply(
@@ -569,10 +567,7 @@ mod tests {
             CLIENT_A,
         );
         table.note_client_status(CLIENT_A);
-        assert_eq!(
-            table.owner(TimFunctionId::ExternalGuidance),
-            Some(CLIENT_A)
-        );
+        assert_eq!(table.owner(TimFunctionId::ExternalGuidance), Some(CLIENT_A));
 
         // While it keeps talking, it keeps its assignments.
         for _ in 0..10 {
@@ -638,7 +633,10 @@ mod tests {
             },
             CLIENT_A,
         );
-        assert_eq!(response.entries[0].1, AssignmentStatus::NotAssignedToRequester);
+        assert_eq!(
+            response.entries[0].1,
+            AssignmentStatus::NotAssignedToRequester
+        );
         assert!(table.owner(TimFunctionId::RearHitch).is_none());
     }
 

@@ -1,45 +1,54 @@
+/// B.7 has room for exactly two capability bits — multiple volumes and
+/// removable volumes — so a client cannot learn which optional commands a
+/// server implements from the properties response. 4.9 has the server answer
+/// error code 12 instead, and the client must send the request to find out.
 #[test]
-fn file_client_gates_requests_by_advertised_server_capabilities_without_allocating_tans() {
+fn optional_commands_are_refused_by_the_server_not_gated_on_the_capability_byte() {
     let properties = FileServerProperties {
-        supports_directories: false,
-        supports_volume_management: false,
-        supports_file_attributes: false,
-        supports_move_file: false,
-        supports_delete_file: false,
+        supports_multiple_volumes: false,
+        supports_removable_volumes: false,
         ..FileServerProperties::default()
     };
 
     let mut client = FileClient::new(FileClientConfig::default());
     connect_file_client_with_properties(&mut client, 0x80, properties);
 
-    for err in [
-        client.try_get_current_directory().unwrap_err(),
-        client.try_change_directory("logs").unwrap_err(),
+    // Every optional command is still emitted; none is refused locally.
+    for request in [
+        client.try_get_current_directory().unwrap(),
+        client.try_change_directory("logs").unwrap(),
         client
             .try_open_file("logs", OpenFlags::OpenDir.bit())
-            .unwrap_err(),
-        client.try_move_file("old.txt", "new.txt").unwrap_err(),
-        client.try_delete_file("old.txt").unwrap_err(),
-        client.try_get_file_attributes("old.txt").unwrap_err(),
+            .unwrap(),
+        client.try_move_file("old.txt", "new.txt").unwrap(),
+        client.try_delete_file("old.txt").unwrap(),
+        client.try_get_file_attributes("old.txt").unwrap(),
         client
             .try_set_file_attributes("old.txt", FileAttributes::Hidden.bit())
-            .unwrap_err(),
-        client.try_initialize_volume("ISOBUS", 0, 0).unwrap_err(),
+            .unwrap(),
+        client.try_initialize_volume("ISOBUS", 0, 0).unwrap(),
     ] {
-        assert_eq!(
-            err.code,
-            ErrorCode::InvalidState,
-            "unsupported operations must fail as local capability-state errors"
-        );
+        assert!(FSFunction::try_from_u8(request.data[0]).is_some());
     }
 
-    let regular_open = client
-        .try_open_file("plain.txt", OpenFlags::Read.bit())
-        .expect("regular file opens remain legal when optional capabilities are disabled");
-    assert_eq!(regular_open.data[0], FSFunction::OpenFile.as_u8());
-    assert_eq!(
-        regular_open.data[1], 1,
-        "capability-gated rejected requests must not allocate or consume TANs"
+    // A server that does not implement them answers B.9 code 12.
+    let mut server = FileServer::new(FileServerConfig {
+        supports_directories: false,
+        supports_file_attributes: false,
+        supports_move_file: false,
+        supports_delete_file: false,
+        supports_volume_management: false,
+        ..FileServerConfig::default()
+    });
+    let refused = server.handle_client_message(&fs_request(
+        vec![FSFunction::ChangeDirectory.as_u8(), 0x10, 1, b'\\'],
+        0x42,
+    ));
+    assert_response(
+        &refused[0].data,
+        FSFunction::ChangeDirectory,
+        0x10,
+        FSError::NotSupported,
     );
 }
 
@@ -140,8 +149,7 @@ fn file_client_explicit_status_and_property_requests_reject_disconnected_state_w
     );
 
     let tan = connect.data[1];
-    let mut properties_response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0x00];
-    properties_response.extend_from_slice(&FileServerProperties::default().encode());
+    let properties_response = FileServerProperties::default().encode_response(tan).to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         properties_response,

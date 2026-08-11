@@ -38,10 +38,10 @@ pub use server::{
     FSOutbound, FileServer, FileServerConfig, OpenFile, ServerClientConnection, encode_ccm,
 };
 pub use types::{
-    CCM_FUNCTION_CODE, CCMMessage, FS_CLASSIC_PROPERTIES_VERSION, FS_STATUS_BUSY_READING,
-    FS_STATUS_BUSY_WRITING, FS_SUPPORTED_COUNT_MAX, FS_VERSION_NUMBER, FSFunction, FileEntry,
-    FileHandle, FileServerProperties, FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN,
-    MAX_VOLUME_NAME_BYTES, RESERVED_FILE_HANDLE_0, TAN, TANResponse, VolumeState, has_wildcards,
-    is_absolute_path, is_valid_fs_path, is_valid_path_component, is_valid_volume_name,
-    pack_dos_date, pack_dos_time, unpack_dos_date, unpack_dos_time,
+    CCM_FUNCTION_CODE, CCMMessage, FS_CAPABILITY_MULTIPLE_VOLUMES, FS_CAPABILITY_REMOVABLE_VOLUMES,
+    FS_STATUS_BUSY_READING, FS_STATUS_BUSY_WRITING, FS_SUPPORTED_COUNT_MAX, FS_VERSION_NUMBER,
+    FSFunction, FileEntry, FileHandle, FileServerProperties, FileServerStatus, INVALID_FILE_HANDLE,
+    INVALID_TAN, MAX_VOLUME_NAME_BYTES, RESERVED_FILE_HANDLE_0, TAN, TANResponse, VolumeState,
+    has_wildcards, is_absolute_path, is_valid_fs_path, is_valid_path_component,
+    is_valid_volume_name, pack_dos_date, pack_dos_time, unpack_dos_date, unpack_dos_time,
 };

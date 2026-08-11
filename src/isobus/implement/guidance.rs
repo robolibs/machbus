@@ -349,7 +349,11 @@ mod tests {
         let frame = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
         let info =
             GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
-        assert!(info.estimated_curvature.value().is_some_and(|k| (k + 7.0).abs() < 0.25));
+        assert!(
+            info.estimated_curvature
+                .value()
+                .is_some_and(|k| (k + 7.0).abs() < 0.25)
+        );
         assert_eq!(info.lockout, MechanicalLockout::NotActive);
         assert_eq!(
             info.guidance_limit_status,
@@ -516,7 +520,11 @@ mod tests {
 
         let info = GuidanceMachineInfo::decode(&data)
             .expect("a not-available curvature must not drop the whole PG");
-        assert_eq!(info.estimated_curvature, Signal::NotAvailable, "reported as absent");
+        assert_eq!(
+            info.estimated_curvature,
+            Signal::NotAvailable,
+            "reported as absent"
+        );
         assert_eq!(info.lockout, MechanicalLockout::try_from_u8(0x01).unwrap());
         assert_eq!(info.guidance_system_command_exit_reason_code, 0x0A);
 

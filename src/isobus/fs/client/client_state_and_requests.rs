@@ -421,15 +421,6 @@ impl FileClient {
             return Err(Error::not_connected());
         }
         let open_dir = get_access_mode(flags) == OpenFlags::OpenDir.bit();
-        if open_dir
-            && self
-                .server_properties
-                .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
         if !path.is_ascii()
             || path.len() > u8::MAX as usize
             || !open_flags_have_no_reserved_bits(flags)
@@ -564,14 +555,6 @@ impl FileClient {
         if !self.is_connected() {
             return Err(Error::not_connected());
         }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
         let mut data = vec![0xFFu8; 8];
         data[0] = FSFunction::GetCurrentDirectory.as_u8();
         let tan = self.allocate_tan();
@@ -589,14 +572,6 @@ impl FileClient {
     pub fn try_change_directory(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         if !self.is_connected() {
             return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
         }
         if !path.is_ascii()
             || path.len() > u8::MAX as usize
@@ -652,14 +627,6 @@ impl FileClient {
         destination_path: &str,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_move_file)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise MoveFile support",
-            ));
-        }
         if !is_valid_one_byte_file_path(source_path)
             || !is_valid_one_byte_file_path(destination_path)
             || source_path == destination_path
@@ -689,14 +656,6 @@ impl FileClient {
     /// Build a `DeleteFile` request with a one-byte path count.
     pub fn try_delete_file(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_delete_file)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise DeleteFile support",
-            ));
-        }
         if !is_valid_one_byte_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS DeleteFile path length {}",
@@ -720,14 +679,6 @@ impl FileClient {
     /// Build a `GetFileAttributes` request with a one-byte path count.
     pub fn try_get_file_attributes(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_file_attributes)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise file-attribute support",
-            ));
-        }
         if !is_valid_one_byte_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS GetFileAttributes path length {}",
@@ -756,14 +707,6 @@ impl FileClient {
         attrs: u8,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_file_attributes)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise file-attribute support",
-            ));
-        }
         if !is_valid_one_byte_file_path(path) || attrs & !FILE_ATTRIBUTES_SET_ALLOWED_MASK != 0 {
             return Err(Error::invalid_data(format!(
                 "invalid FS SetFileAttributes path length {} or attributes 0x{attrs:02X}",
@@ -886,14 +829,6 @@ impl FileClient {
         flags: u8,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_volume_management)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise volume-management support",
-            ));
-        }
         if flags & INITIALIZE_VOLUME_FLAGS_RESERVED_MASK != 0
             || volume_name.len() > u16::MAX as usize
             || (!volume_name.is_empty() && !is_valid_volume_name(volume_name))
@@ -1096,38 +1031,17 @@ impl FileClient {
         true
     }
 
+    /// C.1.5 carries no error-code byte: command, TAN, version, max open
+    /// files, capabilities, three reserved.
     fn handle_properties_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 3 {
-            self.on_properties_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_properties_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_properties_response.emit(&(tan, Err(error)));
-            return;
-        }
-        // Skip the 3-byte response header.
-        if response.len() < 6 {
-            self.on_properties_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        // Capture the reported version (first properties byte) regardless of
-        // whether the detailed v1 block decodes — enables version negotiation.
-        self.server_version = Some(response[3]);
-        let Some(properties) = FileServerProperties::decode(&response[3..]) else {
+        let Some((_, properties)) = FileServerProperties::decode_response(response) else {
             self.on_properties_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         };
+        // B.5 forbids rejecting a peer over its reported version, so this is
+        // recorded for diagnostics and never used as an acceptance test.
+        self.server_version = Some(properties.version_number);
         self.server_properties = Some(properties);
         self.on_properties_response.emit(&(tan, Ok(properties)));
         if self.state == ClientState::WaitingForStatus {

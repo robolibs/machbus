@@ -291,14 +291,16 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
 
 #[test]
 fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
-    let mut server = FileServer::new(FileServerConfig::default());
+    // B.7 has no bits for these, so which optional commands a server offers is
+    // local policy answered with error code 12, not an advertised capability.
+    let mut server = FileServer::new(FileServerConfig {
+        supports_volume_management: false,
+        supports_file_attributes: false,
+        supports_move_file: false,
+        supports_delete_file: false,
+        ..FileServerConfig::default()
+    });
     server.add_file("one.txt", b"one".to_vec(), 0).unwrap();
-    let mut properties = server.get_properties();
-    properties.supports_volume_management = false;
-    properties.supports_file_attributes = false;
-    properties.supports_move_file = false;
-    properties.supports_delete_file = false;
-    server.set_properties(properties);
 
     let source = b"one.txt";
     let destination = b"two.txt";

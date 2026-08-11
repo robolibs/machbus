@@ -10,8 +10,8 @@
 //! Fine control: hold it via `session.get_mut::<Diagnostics>()` and call
 //! [`Diagnostics::raise`] / [`Diagnostics::clear`].
 
-use crate::j1939::diagnostic::{DiagnosticLamps, DmDtcList, Dtc};
 use crate::j1939::acknowledgment::Acknowledgment;
+use crate::j1939::diagnostic::{DiagnosticLamps, DmDtcList, Dtc};
 use crate::net::pgn_defs::{PGN_ACKNOWLEDGMENT, PGN_DM1, PGN_REQUEST};
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};

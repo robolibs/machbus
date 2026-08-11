@@ -596,7 +596,8 @@ impl TimeLogStructure {
         if data.len() < self.record_size() {
             return None;
         }
-        let rd_i32 = |o: usize| i32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+        let rd_i32 =
+            |o: usize| i32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
 
         let mut o = 0usize;
         let (time_ms, date_days) = if self.has_time {

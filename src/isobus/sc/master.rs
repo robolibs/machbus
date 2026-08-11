@@ -1006,10 +1006,7 @@ mod tests {
         // Play Back, not only until the first acknowledgement. This used to
         // assert the timeout was "disarmed" once every required client had
         // acked, so a client that then lost power never halted the sequence.
-        assert!(
-            complete.update(50).is_none(),
-            "no timeout before the limit"
-        );
+        assert!(complete.update(50).is_none(), "no timeout before the limit");
         assert!(complete.is(SCState::Active));
         let halted = complete
             .update(1_000)

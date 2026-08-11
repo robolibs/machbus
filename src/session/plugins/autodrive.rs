@@ -20,6 +20,7 @@
 //! Turning a path and a GNSS pose into a curvature is still the application's
 //! job; [`crate::geo::guidance`] has the geometry for it.
 
+use crate::isobus::implement::Signal;
 use crate::isobus::implement::guidance::{
     GenericSaeBs02SlotValue, GuidanceMachineInfo, MechanicalLockout, curvature_within_range,
 };
@@ -32,7 +33,6 @@ use crate::net::pgn_defs::{
     PGN_SHORTCUT_BUTTON,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
-use crate::isobus::implement::Signal;
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::plugins::gnss::GnssHazards;
 use crate::session::plugins::shortcut_button::IsbGuard;

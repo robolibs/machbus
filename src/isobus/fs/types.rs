@@ -24,7 +24,6 @@ pub const RESERVED_FILE_HANDLE_0: FileHandle = 0x00;
 /// Highest File Server count value this implementation will accept or
 /// advertise for one-byte open-file/client counters.
 pub const FS_SUPPORTED_COUNT_MAX: u8 = 250;
-pub const FS_CLASSIC_PROPERTIES_VERSION: u8 = 1;
 
 #[must_use]
 pub const fn fs_count_is_supported(count: u8) -> bool {
@@ -158,32 +157,42 @@ impl VolumeState {
     }
 }
 
-/// Classic File-Server Properties block (ISO 11783-13 §7.5.2).
+/// Get File Server Properties Response (ISO 11783-13:2022 C.1.5).
 ///
-/// Note: `properties.hpp` defines a v2 `FileServerProperties`
-/// with extra fields. Both layouts coexist; pick the one that
-/// matches your VT version.
+/// Byte 1 command, byte 2 TAN, byte 3 version number (B.5), byte 4 maximum
+/// simultaneously open files (B.6), byte 5 capabilities (B.7), bytes 6-8
+/// reserved 0xFF. There is no error-code byte in this response.
+///
+/// Two things used to be wrong beyond the layout. The decoder rejected any
+/// version but 1, which B.5 forbids in as many words — "shall not reject
+/// communication or the request based on the reported Version Number" — so a
+/// client could not read the properties of any server built against the 2019
+/// or 2022 edition, and since C.1.4 is what a client sends before connecting,
+/// the connection never got started. And the capability byte carried five
+/// invented bits: B.7 defines only bit 0 (multiple volumes) and bit 1
+/// (removable volumes), so a conformant client read "supports directories" as
+/// "supports multiple volumes" and went looking for volumes that did not
+/// exist. Per-command support is signalled with error code 12, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileServerProperties {
     pub version_number: u8,
     pub max_simultaneous_files: u8,
-    pub supports_directories: bool,
-    pub supports_volume_management: bool,
-    pub supports_file_attributes: bool,
-    pub supports_move_file: bool,
-    pub supports_delete_file: bool,
+    pub supports_multiple_volumes: bool,
+    pub supports_removable_volumes: bool,
 }
+
+/// B.7 bit 0.
+pub const FS_CAPABILITY_MULTIPLE_VOLUMES: u8 = 1 << 0;
+/// B.7 bit 1.
+pub const FS_CAPABILITY_REMOVABLE_VOLUMES: u8 = 1 << 1;
 
 impl Default for FileServerProperties {
     fn default() -> Self {
         Self {
-            version_number: 1,
+            version_number: FS_VERSION_NUMBER,
             max_simultaneous_files: 16,
-            supports_directories: true,
-            supports_volume_management: true,
-            supports_file_attributes: true,
-            supports_move_file: true,
-            supports_delete_file: true,
+            supports_multiple_volumes: false,
+            supports_removable_volumes: true,
         }
     }
 }
@@ -191,7 +200,6 @@ impl Default for FileServerProperties {
 impl FileServerProperties {
     #[must_use]
     pub const fn normalized_for_wire(mut self) -> Self {
-        self.version_number = FS_CLASSIC_PROPERTIES_VERSION;
         if self.max_simultaneous_files > FS_SUPPORTED_COUNT_MAX {
             self.max_simultaneous_files = FS_SUPPORTED_COUNT_MAX;
         }
@@ -199,51 +207,49 @@ impl FileServerProperties {
     }
 
     #[must_use]
-    pub fn encode(&self) -> [u8; 8] {
+    pub fn encode_response(&self, tan: TAN) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = self.version_number;
-        data[1] = self.max_simultaneous_files.min(FS_SUPPORTED_COUNT_MAX);
+        data[0] = FSFunction::GetFileServerProperties.as_u8();
+        data[1] = tan;
+        data[2] = self.version_number;
+        data[3] = self.max_simultaneous_files.min(FS_SUPPORTED_COUNT_MAX);
         let mut caps = 0u8;
-        if self.supports_directories {
-            caps |= 1 << 0;
+        if self.supports_multiple_volumes {
+            caps |= FS_CAPABILITY_MULTIPLE_VOLUMES;
         }
-        if self.supports_volume_management {
-            caps |= 1 << 1;
+        if self.supports_removable_volumes {
+            caps |= FS_CAPABILITY_REMOVABLE_VOLUMES;
         }
-        if self.supports_file_attributes {
-            caps |= 1 << 2;
-        }
-        if self.supports_move_file {
-            caps |= 1 << 3;
-        }
-        if self.supports_delete_file {
-            caps |= 1 << 4;
-        }
-        data[2] = caps;
+        data[4] = caps;
         data
     }
 
+    /// Decode a C.1.5 response into `(tan, properties)`.
     #[must_use]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 3 || data.len() > 8 || data[3..].iter().any(|&b| b != 0xFF) {
+    pub fn decode_response(data: &[u8]) -> Option<(TAN, Self)> {
+        if data.len() < 5 || data.len() > 8 || data[5..].iter().any(|&b| b != 0xFF) {
             return None;
         }
-        if data[0] != FS_CLASSIC_PROPERTIES_VERSION || !fs_count_is_supported(data[1]) {
+        if data[0] != FSFunction::GetFileServerProperties.as_u8() {
             return None;
         }
-        let caps = data[2];
-        if caps & !0x1F != 0 {
+        if !fs_count_is_supported(data[3]) {
             return None;
         }
-        Some(Self {
-            version_number: data[0],
-            max_simultaneous_files: data[1],
-            supports_directories: caps & (1 << 0) != 0,
-            supports_volume_management: caps & (1 << 1) != 0,
-            supports_file_attributes: caps & (1 << 2) != 0,
-            supports_move_file: caps & (1 << 3) != 0,
-            supports_delete_file: caps & (1 << 4) != 0,
-        })
+        let caps = data[4];
+        if caps & !(FS_CAPABILITY_MULTIPLE_VOLUMES | FS_CAPABILITY_REMOVABLE_VOLUMES) != 0 {
+            return None;
+        }
+        Some((
+            data[1],
+            Self {
+                // B.5: any version is accepted and reported as-is.
+                version_number: data[2],
+                max_simultaneous_files: data[3],
+                supports_multiple_volumes: caps & FS_CAPABILITY_MULTIPLE_VOLUMES != 0,
+                supports_removable_volumes: caps & FS_CAPABILITY_REMOVABLE_VOLUMES != 0,
+            },
+        ))
     }
 }
 
@@ -619,20 +625,42 @@ mod tests {
         assert_eq!(VolumeState::try_from_u8(4), None);
     }
 
+    /// C.1.5, plus the B.5 rule that a peer's version is never a reason to
+    /// reject it. Decoding used to demand version 1, so no server built to
+    /// the 2019 or 2022 edition could be talked to at all.
     #[test]
-    fn file_server_properties_round_trip() {
+    fn file_server_properties_match_c_1_5_and_accept_any_version() {
         let p = FileServerProperties {
-            version_number: FS_CLASSIC_PROPERTIES_VERSION,
+            version_number: FS_VERSION_NUMBER,
             max_simultaneous_files: 32,
-            supports_directories: true,
-            supports_volume_management: false,
-            supports_file_attributes: true,
-            supports_move_file: false,
-            supports_delete_file: true,
+            supports_multiple_volumes: true,
+            supports_removable_volumes: false,
         };
-        let bytes = p.encode();
-        let d = FileServerProperties::decode(&bytes);
-        assert_eq!(d, Some(p));
+        assert_eq!(
+            p.encode_response(0x07),
+            [0x01, 0x07, 0x04, 32, 0x01, 0xFF, 0xFF, 0xFF]
+        );
+        assert_eq!(
+            FileServerProperties::decode_response(&p.encode_response(0x07)),
+            Some((0x07, p))
+        );
+
+        for version in [0, 1, 2, 3, 4, 200, 0xFF] {
+            let other = FileServerProperties {
+                version_number: version,
+                ..p
+            };
+            assert_eq!(
+                FileServerProperties::decode_response(&other.encode_response(0x07)),
+                Some((0x07, other)),
+                "B.5 forbids rejecting a peer over its reported version"
+            );
+        }
+
+        // B.7 bits 2-7 are reserved and sent as zero.
+        let mut reserved = p.encode_response(0x07);
+        reserved[4] |= 0x04;
+        assert_eq!(FileServerProperties::decode_response(&reserved), None);
     }
 
     #[test]
@@ -651,12 +679,14 @@ mod tests {
 
     #[test]
     fn classic_fixed_size_decoders_reject_short_overlong_and_bad_padding() {
-        let props = FileServerProperties::default().encode();
-        assert!(FileServerProperties::decode(&props[..2]).is_none());
-        assert!(FileServerProperties::decode(&[props.as_slice(), &[0xFF]].concat()).is_none());
+        let props = FileServerProperties::default().encode_response(0x07);
+        assert!(FileServerProperties::decode_response(&props[..4]).is_none());
+        assert!(
+            FileServerProperties::decode_response(&[props.as_slice(), &[0xFF]].concat()).is_none()
+        );
         let mut bad_props = props;
-        bad_props[3] = 0x00;
-        assert!(FileServerProperties::decode(&bad_props).is_none());
+        bad_props[5] = 0x00;
+        assert!(FileServerProperties::decode_response(&bad_props).is_none());
 
         let status = FileServerStatus::default().encode();
         assert!(FileServerStatus::decode(&status[..1]).is_none());
@@ -777,8 +807,8 @@ mod tests {
         fn proptest_fs_classic_decoders_accept_arbitrary_bytes_without_panics(
             data in proptest::collection::vec(any::<u8>(), 0..=64),
         ) {
-            if let Some(props) = FileServerProperties::decode(&data) {
-                let _ = props.encode();
+            if let Some((tan, props)) = FileServerProperties::decode_response(&data) {
+                let _ = props.encode_response(tan);
             }
 
             if let Some(status) = FileServerStatus::decode(&data) {

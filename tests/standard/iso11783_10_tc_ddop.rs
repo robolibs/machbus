@@ -258,7 +258,9 @@ fn tc_ddop_rejects_process_data_reserved_trigger_bits() {
 #[test]
 fn tc_ddop_enforces_the_annex_a_object_hierarchy() {
     // A conformant pool is accepted.
-    minimal_ddop().validate().expect("the corrected fixture is valid");
+    minimal_ddop()
+        .validate()
+        .expect("the corrected fixture is valid");
 
     // Two DeviceObjects.
     let two_devices = minimal_ddop().with_device(

@@ -118,7 +118,9 @@ impl FSError {
             Self::InvalidAccess => {
                 "Invalid access - the path names a file where a directory was expected, or vice versa"
             }
-            Self::TooManyOpen => "Too many files open - the file server's handle ceiling is reached",
+            Self::TooManyOpen => {
+                "Too many files open - the file server's handle ceiling is reached"
+            }
             Self::NotFound => "File, path or volume not found",
             Self::InvalidHandle => "The request names a handle the file server does not know",
             Self::InvalidSourceName => "Invalid given source name",
@@ -150,10 +152,7 @@ impl FSError {
     /// Indicates a retry might succeed.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
-        matches!(
-            self,
-            Self::TooManyOpen | Self::WriteFail | Self::ReadFail
-        )
+        matches!(self, Self::TooManyOpen | Self::WriteFail | Self::ReadFail)
     }
 }
 
@@ -319,7 +318,11 @@ mod tests {
         }
 
         for reserved in [14, 20, 41, 48, 99, 255] {
-            assert_eq!(FSError::try_from_u8(reserved), None, "{reserved} is reserved");
+            assert_eq!(
+                FSError::try_from_u8(reserved),
+                None,
+                "{reserved} is reserved"
+            );
             assert_eq!(FSError::from_u8(reserved), FSError::OtherError);
         }
     }

@@ -10,16 +10,16 @@ use crate::isobus::tim::{
     AuxValveCommand, HitchState, PtoState, TIM_UPDATE_INTERVAL_MS, TimAuthority, TimCommand,
     TimInterlocks, TimOptionSet, TimValidationError,
 };
+use crate::j1939::PowerState;
 use crate::net::pgn_defs::{
     PGN_AUX_VALVE_0_7, PGN_AUX_VALVE_8_15, PGN_AUX_VALVE_16_23, PGN_AUX_VALVE_24_31,
     PGN_FRONT_HITCH, PGN_FRONT_HITCH_CMD, PGN_FRONT_PTO, PGN_FRONT_PTO_CMD, PGN_REAR_HITCH,
     PGN_REAR_HITCH_CMD, PGN_REAR_PTO, PGN_REAR_PTO_CMD,
 };
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
+use crate::safety::SafeStopTrigger;
 use crate::safety::{SafeModeTrigger, TecuSafeMode};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::j1939::PowerState;
-use crate::safety::SafeStopTrigger;
 use crate::session::sys::{Event, Hitch, MaintainPowerEvent, Pto, TimEvent};
 use crate::time::Instant;
 use core::any::Any;

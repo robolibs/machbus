@@ -1,6 +1,6 @@
 use machbus::isobus::file_transfer::{FileOperation, FileTransferError};
 use machbus::isobus::fs::{
-    FS_CLASSIC_PROPERTIES_VERSION, FS_SUPPORTED_COUNT_MAX, FS_V2_PROPERTIES_VERSION, FSError,
+    FS_SUPPORTED_COUNT_MAX, FS_V2_PROPERTIES_VERSION, FS_VERSION_NUMBER, FSError,
     FSFunction, FileAttributes, FileClient, FileClientConfig, FileServer, FileServerConfig,
     FileServerProperties, FileServerPropertiesV2, FileServerStatus, INVALID_FILE_HANDLE,
     INVALID_TAN, OpenFlags, RESERVED_FILE_HANDLE_0, VolumeState, VolumeStateV2, VolumeStatus,
@@ -248,8 +248,7 @@ fn connect_file_client_with_properties(
 ) {
     let request = client.connect_to_server(server).unwrap();
     let tan = request.data[1];
-    let mut properties_response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0x00];
-    properties_response.extend_from_slice(&properties.encode());
+    let properties_response = properties.encode_response(tan).to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         properties_response,
@@ -304,8 +303,7 @@ fn file_server_and_client_reject_wrong_pgn_or_invalid_source_before_state_mutati
     let mut client = FileClient::new(FileClientConfig::default());
     let request = client.connect_to_server(0x80).unwrap();
     let tan = request.data[1];
-    let mut properties_response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0x00];
-    properties_response.extend_from_slice(&FileServerProperties::default().encode());
+    let properties_response = FileServerProperties::default().encode_response(tan).to_vec();
 
     client.handle_server_response(&Message::new(
         PGN_REQUEST,
@@ -507,20 +505,24 @@ fn file_server_non_ccm_requests_do_not_suppress_first_ccm_connection_event() {
 fn file_server_properties_and_paths_reject_malformed_inputs() {
     let properties = FileServerProperties::default();
     assert_eq!(
-        FileServerProperties::decode(&properties.encode()),
-        Some(properties)
+        FileServerProperties::decode_response(&properties.encode_response(0x07)),
+        Some((0x07, properties))
     );
 
-    let mut bad_reserved_caps = properties.encode();
-    bad_reserved_caps[2] |= 0xE0;
-    assert_eq!(FileServerProperties::decode(&bad_reserved_caps), None);
+    // B.7 defines bits 0 and 1 only; 2-7 are sent as zero.
+    let mut bad_reserved_caps = properties.encode_response(0x07);
+    bad_reserved_caps[4] |= 0xE0;
+    assert_eq!(
+        FileServerProperties::decode_response(&bad_reserved_caps),
+        None
+    );
 
-    let mut bad_tail = properties.encode();
+    let mut bad_tail = properties.encode_response(0x07);
     bad_tail[7] = 0;
-    assert_eq!(FileServerProperties::decode(&bad_tail), None);
-    let mut bad_count = properties.encode();
-    bad_count[1] = FS_SUPPORTED_COUNT_MAX + 1;
-    assert_eq!(FileServerProperties::decode(&bad_count), None);
+    assert_eq!(FileServerProperties::decode_response(&bad_tail), None);
+    let mut bad_count = properties.encode_response(0x07);
+    bad_count[3] = FS_SUPPORTED_COUNT_MAX + 1;
+    assert_eq!(FileServerProperties::decode_response(&bad_count), None);
     assert_eq!(VolumeState::try_from_u8(4), None);
 
     let mut bad_status = machbus::isobus::fs::FileServerStatus {
@@ -563,26 +565,29 @@ fn file_server_property_count_ranges_are_validated_before_advertisement_or_conne
     );
     assert_eq!(
         server.get_properties().version_number,
-        FS_CLASSIC_PROPERTIES_VERSION,
-        "server properties must advertise the supported classic properties layout"
+        FS_VERSION_NUMBER,
+        "the server reports the B.5 edition it implements"
     );
 
-    let mut oversized_classic = FileServerProperties::default().encode();
-    oversized_classic[1] = FS_SUPPORTED_COUNT_MAX + 1;
-    assert_eq!(FileServerProperties::decode(&oversized_classic), None);
-    let mut unsupported_classic_version = FileServerProperties::default().encode();
-    unsupported_classic_version[0] = FS_CLASSIC_PROPERTIES_VERSION + 1;
-    assert_eq!(
-        FileServerProperties::decode(&unsupported_classic_version),
-        None
-    );
+    let mut oversized = FileServerProperties::default().encode_response(0x07);
+    oversized[3] = FS_SUPPORTED_COUNT_MAX + 1;
+    assert_eq!(FileServerProperties::decode_response(&oversized), None);
+
+    // B.5: "shall not reject communication or the request based on the
+    // reported Version Number". This used to demand version 1 and so could
+    // not connect to any server built to a published edition.
+    for version in [0, 1, 2, 3, 4, 0xFF] {
+        let mut other = FileServerProperties::default().encode_response(0x07);
+        other[2] = version;
+        assert!(FileServerProperties::decode_response(&other).is_some());
+    }
 
     let mut client = FileClient::new(FileClientConfig::default());
     let request = client.connect_to_server(0x80).unwrap();
     let tan = request.data[1];
     let mut invalid_properties_response =
-        vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0x00];
-    invalid_properties_response.extend_from_slice(&oversized_classic);
+        FileServerProperties::default().encode_response(tan).to_vec();
+    invalid_properties_response[3] = FS_SUPPORTED_COUNT_MAX + 1;
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         invalid_properties_response,
@@ -1457,9 +1462,11 @@ fn file_server_directory_capability_blocks_directory_operations_without_state_mu
         "\\logs\\"
     );
 
-    let mut properties = server.get_properties();
-    properties.supports_directories = false;
-    server.set_properties(properties);
+    let mut server = FileServer::new(FileServerConfig {
+        supports_directories: false,
+        ..FileServerConfig::default()
+    });
+    server.add_directory("logs").unwrap();
 
     let cwd = server.handle_client_message(&fs_request(
         vec![
@@ -1493,7 +1500,7 @@ fn file_server_directory_capability_blocks_directory_operations_without_state_mu
     );
     assert_eq!(
         server.clients().get(&0x42).unwrap().current_directory,
-        "\\logs\\",
+        "\\",
         "unsupported ChangeDirectory must not mutate server-side current directory"
     );
 

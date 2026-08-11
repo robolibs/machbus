@@ -6,8 +6,7 @@ use machbus::isobus::implement::{
     MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg,
     MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus,
     RequestResetCommandStatus, Signal, SpeedExitCode, SpeedSource, TractorControlModeMsg,
-    TractorMode,
-    ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
+    TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
     estimated_flow_pgn, measured_flow_pgn,
 };
 use machbus::j1939::shortcut_button::{self, ShortcutButtonState};
@@ -955,7 +954,12 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     };
     let encoded = info.encode();
     let decoded = GuidanceMachineInfo::decode(&encoded).unwrap();
-    assert!(decoded.estimated_curvature.value().is_some_and(|k| (k + 2.5).abs() < 0.25));
+    assert!(
+        decoded
+            .estimated_curvature
+            .value()
+            .is_some_and(|k| (k + 2.5).abs() < 0.25)
+    );
     assert_eq!(
         decoded.guidance_limit_status,
         GuidanceLimitStatus::LimitedLow
@@ -1316,10 +1320,7 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     };
     let pto_bytes = pto.encode();
     // The indicator bands are reported; only a reserved raw is a decode failure.
-    for (raw, expected) in [
-        (0xFE00_u16, Signal::Error),
-        (0xFFFF, Signal::NotAvailable),
-    ] {
+    for (raw, expected) in [(0xFE00_u16, Signal::Error), (0xFFFF, Signal::NotAvailable)] {
         let mut special = pto_bytes;
         special[0..2].copy_from_slice(&raw.to_le_bytes());
         let decoded = PtoStatus::decode(&special, false)
@@ -1343,10 +1344,7 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     // K1/G4 — the indicator bands are reported, not fatal: only a reserved raw
     // is a decode failure. A tractor with no draft sensor is *required* by
     // ISO 11783-9 §4.4.2.1 to broadcast 0xFFFF here.
-    for (raw, expected) in [
-        (0xFE00_u16, Signal::Error),
-        (0xFFFF, Signal::NotAvailable),
-    ] {
+    for (raw, expected) in [(0xFE00_u16, Signal::Error), (0xFFFF, Signal::NotAvailable)] {
         let mut special = hitch_bytes;
         special[2..4].copy_from_slice(&raw.to_le_bytes());
         let decoded = HitchStatus::decode(&special, true)

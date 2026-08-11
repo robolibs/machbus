@@ -283,8 +283,7 @@ impl TimServerStatus {
         data[0] = MSG_CODE_SERVER_STATUS;
         data[1] = self.counter.as_u8();
         data[2] = ((self.master.as_u8() & 0x0F) << 4) | (self.system_state.as_u8() & 0x0F);
-        data[3] =
-            ((self.server_state.as_u8() & 0x0F) << 4) | (self.operation_state.as_u8() & 0x0F);
+        data[3] = ((self.server_state.as_u8() & 0x0F) << 4) | (self.operation_state.as_u8() & 0x0F);
         data
     }
 
@@ -502,7 +501,11 @@ mod tests {
 
         // 0x4..=0xD are reserved in the operation-state nibble.
         for reserved in 0x4u8..=0xD {
-            assert_eq!(TimSystemOperationState::from_u8(reserved), None, "{reserved:#x}");
+            assert_eq!(
+                TimSystemOperationState::from_u8(reserved),
+                None,
+                "{reserved:#x}"
+            );
         }
 
         // A different message code on the same PGN is a different message.

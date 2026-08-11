@@ -11,8 +11,8 @@
 //!
 //! The C++ `DriveStrategyInterface` is intentionally not ported.
 
-use crate::net::pgn_defs::{PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_REAR_HITCH_ROLL_PITCH_CMD};
 use crate::isobus::implement::Signal;
+use crate::net::pgn_defs::{PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_REAR_HITCH_ROLL_PITCH_CMD};
 use crate::net::types::Pgn;
 
 /// `PGN_DRIVE_STRATEGY_CMD` mode byte.
@@ -537,7 +537,10 @@ mod tests {
         let default_cmd = GuidanceSystemCmd::default();
         let mut reserved_clear = default_cmd.encode();
         reserved_clear[2] &= 0x03;
-        assert_eq!(GuidanceSystemCmd::decode(&reserved_clear), Some(default_cmd));
+        assert_eq!(
+            GuidanceSystemCmd::decode(&reserved_clear),
+            Some(default_cmd)
+        );
 
         let mut combined_bad_control = HitchPtoCombinedCmd {
             hitch_position: 30_000,

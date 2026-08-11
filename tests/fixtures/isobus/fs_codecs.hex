@@ -1,10 +1,10 @@
 # Reviewable ISO 11783-13 File Server payload corpus.
 # Variable-length entries are compact hexadecimal payload bytes.
 
-classic_properties_all_caps=01101FFFFFFFFFFF
-classic_properties_short2=0110
-classic_properties_overlong9=01101FFFFFFFFFFFFF
-classic_properties_bad_padding=01101F00FFFFFFFF
+properties_response_v4=0107041003FFFFFF
+properties_response_short4=01070410
+properties_response_overlong9=0107041003FFFFFFFF
+properties_response_bad_padding=010704100300FFFF
 server_status_busy_two_open=000202FFFFFFFFFF
 server_status_short1=0002
 server_status_overlong9=000202FFFFFFFFFFFF

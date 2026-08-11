@@ -282,7 +282,7 @@ impl MachineSpeedCommandMsg {
         }
         // Undefined bits and bytes are "don't care" on receive (§5.4); the
         // defined two bits of byte 2 are masked out below.
-        
+
         Some(Self {
             target_speed_raw: (data[0] as u16) | ((data[1] as u16) << 8),
             direction_cmd: MachineDirection::try_from_u8(data[2] & 0x03)?,

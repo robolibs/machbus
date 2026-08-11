@@ -550,7 +550,7 @@ impl FileServer {
         }
         let access_mode = get_access_mode(flags);
         let is_dir_listing = access_mode == OpenFlags::OpenDir.bit();
-        if is_dir_listing && !self.properties.supports_directories {
+        if is_dir_listing && !self.config.supports_directories {
             return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::NotSupported);
         }
         if has_flag(flags, OpenFlags::Append)
@@ -1029,17 +1029,7 @@ impl FileServer {
                 FSError::MalformedRequest,
             );
         }
-        let props_data = self.properties.encode();
-        let mut response = vec![0xFFu8; 8];
-        response[0] = FSFunction::GetFileServerProperties.as_u8();
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        for (i, &b) in props_data.iter().enumerate() {
-            if i + 3 < response.len() {
-                response[3 + i] = b;
-            }
-        }
-        response
+        self.properties.encode_response(tan).to_vec()
     }
 
     fn handle_get_current_directory(&self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
@@ -1054,7 +1044,7 @@ impl FileServer {
                 FSError::MalformedRequest,
             );
         }
-        if !self.properties.supports_directories {
+        if !self.config.supports_directories {
             return encode_error_response(
                 FSFunction::GetCurrentDirectory.as_u8(),
                 tan,
@@ -1102,7 +1092,7 @@ impl FileServer {
                 FSError::MalformedRequest,
             );
         }
-        if !self.properties.supports_directories {
+        if !self.config.supports_directories {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
@@ -1184,7 +1174,7 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::MoveFile, tan) {
             return response;
         }
-        if !self.properties.supports_move_file {
+        if !self.config.supports_move_file {
             return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::NotSupported);
         }
         let current_directory = self
@@ -1256,7 +1246,7 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::DeleteFile, tan) {
             return response;
         }
-        if !self.properties.supports_delete_file {
+        if !self.config.supports_delete_file {
             return encode_error_response(
                 FSFunction::DeleteFile.as_u8(),
                 tan,
@@ -1332,7 +1322,7 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFileAttributes, tan) {
             return response;
         }
-        if !self.properties.supports_file_attributes {
+        if !self.config.supports_file_attributes {
             return encode_error_response(
                 FSFunction::GetFileAttributes.as_u8(),
                 tan,
@@ -1370,7 +1360,7 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::SetFileAttributes, tan) {
             return response;
         }
-        if !self.properties.supports_file_attributes {
+        if !self.config.supports_file_attributes {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
@@ -1563,7 +1553,7 @@ impl FileServer {
     }
 
     fn handle_initialize_volume(&mut self, tan: TAN, request: &[u8]) -> Vec<u8> {
-        if !self.properties.supports_volume_management {
+        if !self.config.supports_volume_management {
             return encode_error_response(
                 FSFunction::InitializeVolume.as_u8(),
                 tan,

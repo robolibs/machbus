@@ -150,10 +150,7 @@ mod tests {
         let mut c = FileClient::new(FileClientConfig::default());
         let req = c.connect_to_server(0x80).unwrap();
         let tan = req.data[1];
-        // Build response: [func, tan, error=0, props bytes]
-        let props = FileServerProperties::default();
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
+        let response = FileServerProperties::default().encode_response(tan).to_vec();
         c.handle_server_response(&server_msg(response, 0x80));
         assert!(c.is_connected());
         assert!(c.server_properties().is_some());
@@ -172,9 +169,7 @@ mod tests {
             version_number: 3,
             ..FileServerProperties::default()
         };
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
-        c.handle_server_response(&server_msg(response, 0x80));
+        c.handle_server_response(&server_msg(props.encode_response(tan).to_vec(), 0x80));
 
         assert_eq!(c.server_version(), Some(3));
         assert!(c.server_supports_version(2));
@@ -185,9 +180,7 @@ mod tests {
     fn force_connected(c: &mut FileClient) {
         let req = c.connect_to_server(0x80).unwrap();
         let tan = req.data[1];
-        let props = FileServerProperties::default();
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
+        let response = FileServerProperties::default().encode_response(tan).to_vec();
         c.handle_server_response(&server_msg(response, 0x80));
         assert!(c.is_connected());
     }

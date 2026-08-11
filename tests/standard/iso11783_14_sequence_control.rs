@@ -1,8 +1,7 @@
 use machbus::isobus::sc::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_MIN_SPACING_MS,
-    SCClient, SCClientConfig,
-    SCClientFuncError, SCClientState, SCMaster, SCMasterConfig, SCMasterState, SCSequenceState,
-    SCState, SequenceStep,
+    SCClient, SCClientConfig, SCClientFuncError, SCClientState, SCMaster, SCMasterConfig,
+    SCMasterState, SCSequenceState, SCState, SequenceStep,
 };
 use machbus::net::ErrorCode;
 use machbus::net::constants::{BROADCAST_ADDRESS, NULL_ADDRESS};

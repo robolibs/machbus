@@ -110,6 +110,16 @@ pub struct FileServerConfig {
     pub tan_cache_timeout_ms: u32,
     pub max_open_files_per_client: u8,
     pub max_open_files_total: u8,
+    /// Which optional commands this server implements.
+    ///
+    /// These used to ride the Get File Server Properties capability byte,
+    /// where B.7 has no room for them. The standard signals a command it does
+    /// not implement with error code 12, so they are local policy now.
+    pub supports_directories: bool,
+    pub supports_file_attributes: bool,
+    pub supports_move_file: bool,
+    pub supports_delete_file: bool,
+    pub supports_volume_management: bool,
 }
 
 impl Default for FileServerConfig {
@@ -121,6 +131,11 @@ impl Default for FileServerConfig {
             tan_cache_timeout_ms: 10_000,
             max_open_files_per_client: 8,
             max_open_files_total: 32,
+            supports_directories: true,
+            supports_file_attributes: true,
+            supports_move_file: true,
+            supports_delete_file: true,
+            supports_volume_management: true,
         }
     }
 }

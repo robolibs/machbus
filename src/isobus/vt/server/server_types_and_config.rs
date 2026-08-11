@@ -171,6 +171,11 @@ pub struct VTServerConfig {
     pub small_font_sizes: u8,
     pub large_font_sizes: u8,
     pub font_styles: u8,
+    /// Object-pool memory this VT will accept, in bytes, answered in Annex D.3
+    /// byte 3 of the Get Memory Response (0 = enough, 1 = not enough, do not
+    /// transmit). `0` means "no limit", which is what the server assumed
+    /// implicitly before it decoded the requested size at all.
+    pub max_pool_bytes: u32,
 }
 
 impl Default for VTServerConfig {
@@ -190,6 +195,7 @@ impl Default for VTServerConfig {
             small_font_sizes: 0xFF,
             large_font_sizes: 0xFF,
             font_styles: 0xFF,
+            max_pool_bytes: 0,
         }
     }
 }

@@ -1367,9 +1367,18 @@ impl VTClient {
                     self.timer_ms = 0;
                     return out;
                 };
+                // Annex D.2 Get Memory: "Byte 1: VT function code = 192;
+                // Byte 2: Reserved, set to FF16; Bytes 3-6: Memory required
+                // (bytes); Bytes 7-8: Reserved, set to FF16." The size used to
+                // start at byte 2, one byte early, so a conformant terminal
+                // read a 24-byte pool request as 4 278 190 080 bytes and
+                // answered D.3 status 1 ("not enough memory, do not transmit
+                // Object Pool"). Both halves of this crate carried the same
+                // off-by-one, which is why machbus-to-machbus worked and no
+                // third-party VT ever accepted a pool.
                 let mut data = [0xFFu8; 8];
                 data[0] = cmd::GET_MEMORY;
-                data[1..5].copy_from_slice(&pool_size.to_le_bytes());
+                data[2..6].copy_from_slice(&pool_size.to_le_bytes());
                 out.push(ClientOutbound::to(
                     PGN_ECU_TO_VT,
                     data.to_vec(),

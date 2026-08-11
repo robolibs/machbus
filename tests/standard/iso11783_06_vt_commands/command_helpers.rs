@@ -1743,19 +1743,72 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
         "object-pool transfer before memory negotiation must not create upload state"
     );
 
-    let mut malformed_get_memory = fixed_command(cmd::GET_MEMORY);
-    malformed_get_memory[1..5].copy_from_slice(&16u32.to_le_bytes());
-    malformed_get_memory[5] = 0x00;
-    assert!(
+    // Annex D.2: "Byte 1: VT function code = 192; Byte 2: Reserved, set to
+    // FF16; Bytes 3-6: Memory required (bytes); Bytes 7-8: Reserved, set to
+    // FF16." This case used to assert the opposite — that a request carrying a
+    // real 4-byte size must be *rejected* — because the decoder read the size
+    // one byte early and its tail check landed on the size's top byte. Only a
+    // request declaring at least 0xFF000000 bytes was accepted, so no
+    // conformant working set could ever negotiate memory, and Annex F.1
+    // forbids answering it with nothing at all.
+    let mut conformant_get_memory = fixed_command(cmd::GET_MEMORY);
+    conformant_get_memory[2..6].copy_from_slice(&16u32.to_le_bytes());
+
+    // The limit is chosen so the *offset* is what decides the answer: read at
+    // bytes 3-6 the request is 16 bytes and fits; read one byte early it is
+    // 0x000010FF = 4351 and does not. A status-0 answer therefore proves the
+    // field was read at the Annex D.2 offset, not merely that a reply came out.
+    let mut sized = VTServer::new(VTServerConfig {
+        max_pool_bytes: 100,
+        ..VTServerConfig::default()
+    });
+    sized.start().unwrap();
+    let answered = sized.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        conformant_get_memory.clone(),
+        0x42,
+    ));
+    assert_eq!(
+        answered.len(),
+        1,
+        "a conformant Get Memory must be answered (Annex F.1)"
+    );
+    assert_eq!(answered[0].data[0], cmd::GET_MEMORY_RESPONSE);
+    assert_eq!(
+        answered[0].data[2], 0x00,
+        "D.3 byte 3 status 0 — a 16-byte pool fits in 100 bytes"
+    );
+    assert_eq!(sized.clients().len(), 1);
+
+    // A VT that genuinely cannot fit the pool still answers, with status 1.
+    let mut small = VTServer::new(VTServerConfig {
+        max_pool_bytes: 8,
+        ..VTServerConfig::default()
+    });
+    small.start().unwrap();
+    let refused = small.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        conformant_get_memory.clone(),
+        0x42,
+    ));
+    assert_eq!(refused.len(), 1, "a refusal is still a response (Annex F.1)");
+    assert_eq!(
+        refused[0].data[2], 0x01,
+        "D.3 status 1 — not enough memory, do not transmit the Object Pool"
+    );
+
+    // The unlimited default server accepts it too, and opens the window.
+    assert_eq!(
         server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, malformed_get_memory, 0x42,))
-            .is_empty(),
-        "Get Memory requests with non-canonical reserved tail bytes must not open the upload window"
+            .handle_ecu_message(&Message::new(
+                PGN_ECU_TO_VT,
+                conformant_get_memory.to_vec(),
+                0x42,
+            ))
+            .len(),
+        1
     );
-    assert!(
-        server.clients().is_empty(),
-        "malformed Get Memory must not allocate client upload state"
-    );
+    assert_eq!(server.clients().len(), 1);
 
     let mut get_memory = [0xFFu8; 8];
     get_memory[0] = cmd::GET_MEMORY;

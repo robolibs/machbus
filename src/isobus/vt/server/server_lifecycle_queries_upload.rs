@@ -629,23 +629,37 @@ impl VTServer {
     }
 
     fn handle_get_memory(&mut self, msg: &Message) -> Vec<OutboundFrame> {
-        if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 5) {
+        // Annex D.2: byte 2 reserved, bytes 3-6 Memory Required, bytes 7-8
+        // reserved. The tail check used to start at index 5, which is the top
+        // byte of a conformant request's size field — so any working set
+        // asking for less than 0xFF000000 bytes was dropped with no reply at
+        // all, which Annex F.1 forbids ("The VT shall respond to these commands
+        // even if no object pool of the originating Working Set is loaded").
+        // G3 applies to the reserved bytes themselves: length only.
+        if !is_fixed_vt_payload(&msg.data) {
             return Vec::new();
         }
+        let required = u32::from_le_bytes([msg.data[2], msg.data[3], msg.data[4], msg.data[5]]);
         self.ensure_client(msg.source);
-        if let Some(client) = self.find_client_mut(msg.source) {
-            client.pool_upload_allowed = true;
-            client.pool_activation_pending = false;
-        }
         // Annex D.3: byte 2 is this VT's version of ISO 11783-6, byte 3 the
         // status. Reporting 0 claimed the 2001 Agritechnica limited feature
         // set regardless of what the server is configured to support.
         let mut data = [0xFFu8; 8];
         data[0] = cmd::GET_MEMORY_RESPONSE;
         data[1] = self.config.vt_version as u8;
-        data[2] = 0x00;
-        if matches!(self.state(), VTServerState::WaitForClientStatus) {
-            self.transition(VTServerState::WaitForPoolUpload);
+        // D.3 byte 3 status: 0 = enough memory, 1 = not enough, do not transmit.
+        // A request the VT cannot satisfy still gets an answer (F.1); silence
+        // is what left a conformant working set retrying for 1.5 s at a time.
+        let enough = self.config.max_pool_bytes == 0 || required <= self.config.max_pool_bytes;
+        data[2] = u8::from(!enough);
+        if enough {
+            if let Some(client) = self.find_client_mut(msg.source) {
+                client.pool_upload_allowed = true;
+                client.pool_activation_pending = false;
+            }
+            if matches!(self.state(), VTServerState::WaitForClientStatus) {
+                self.transition(VTServerState::WaitForPoolUpload);
+            }
         }
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }

@@ -1,4 +1,4 @@
-# Guidance (autosteer)
+# Guidance
 
 ISOBUS automatic guidance steers a tractor by **curvature**. You do not stream
 waypoints and you do not command a raw steering angle — you send a desired path
@@ -8,12 +8,17 @@ wheels. This tutorial drives that conversation through the high-level
 `session::plugins::Guidance` plugin.
 
 If you have not read the concept page yet, start with
-[Automatic guidance (autosteer)](../standards/autosteer.md) — it explains the
+[Automatic guidance](../standards/automatic-guidance.md) — it explains the
 points-vs-angles-vs-curvature answer and the two PGNs in full. Here we build.
+
+> **Prefer [`AutoDrive`](autodrive.md) for new work.** It speaks the same two
+> messages with a real automation status, refusals instead of silent clamping,
+> and one engage lifecycle across steering *and* speed. The two plugins are
+> mutually exclusive.
 
 ## Safety first
 
-Autosteer moves a machine with a person on it. Two things stay true no matter what
+Automatic guidance moves a machine with a person on it. Two things stay true no matter what
 your code does:
 
 - **It is operator-supervised, not autonomous.** A human is in the seat and ready
@@ -131,7 +136,7 @@ the tractor's own view:
 - `latest_machine_info()` — the full decoded record when you need more than the two
   headline reads: mechanical lockout, the operator's remote-engage switch, steering
   limit status, and the exit/reason code that explains *why* a system refused or
-  dropped out. See [the signals, in plain terms](../standards/autosteer.md#what-each-signal-means-in-plain-terms).
+  dropped out. See [the signals, in plain terms](../standards/automatic-guidance.md#what-each-signal-means-in-plain-terms).
 
 ```rust,ignore
 {{#include ../../../examples/guidance_autosteer.rs:feedback}}
@@ -209,7 +214,7 @@ certified for steering of any kind.
   status instead of a boolean, refusals instead of silent clamping, and the
   machine's limit status fed back for anti-windup. The two are mutually
   exclusive. That page also answers **"do I need TIM for speed?"**.
-- [Automatic guidance (autosteer)](../standards/autosteer.md) — the curvature model
+- [Automatic guidance](../standards/automatic-guidance.md) — the curvature model
   and the two PGNs, explained.
 - [TIM and automation](tim.md) — steering under granted, revocable authority.
 - [Tractor ECU](tractor-ecu.md) — how a tractor advertises it can be steered.

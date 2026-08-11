@@ -35,7 +35,7 @@
     - [ISO 11783-13: the File Server](standards/iso11783-file-server.md)
     - [ISO 11783-14: sequence control](standards/iso11783-sequence-control.md)
     - [TIM (AEF)](standards/tim.md)
-    - [Automatic guidance (autosteer)](standards/autosteer.md)
+    - [Automatic guidance](standards/automatic-guidance.md)
   - [Positioning: NMEA and GNSS](standards/positioning.md)
 
 # Reading the bus (CAN · J1939 · NMEA 2000)
@@ -95,7 +95,7 @@
     - [Tractor ECU](tutorials/tractor-ecu.md)
     - [Implement ECU](tutorials/implement-ecu.md)
     - [Powertrain](tutorials/powertrain.md)
-    - [Guidance](tutorials/guidance.md)
+    - [Guidance (legacy)](tutorials/guidance.md)
     - [AutoDrive (steering + speed)](tutorials/autodrive.md)
     - [Sequence Control](tutorials/sequence-control.md)
     - [TIM and automation](tutorials/tim.md)

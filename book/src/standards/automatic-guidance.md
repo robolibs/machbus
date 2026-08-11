@@ -1,8 +1,26 @@
-# Automatic guidance (autosteer)
+# Automatic guidance
 
-The first question everyone asks about ISOBUS autosteer is: *do I send points,
+The first question everyone asks about ISOBUS guidance is: *do I send points,
 angles, or velocities?* The answer is **none of those** — you send a desired path
 **curvature**.
+
+> **One capability, several names.** *Automatic guidance*, *agricultural
+> guidance* and *autosteer* all mean the same thing: this page. ISO 11783-7 calls
+> the messages "Agricultural Guidance System Command" and "Agricultural Guidance
+> Machine Info"; "autosteer" is the colloquial name for using them. There is no
+> separate autosteer facility, message or plugin.
+>
+> In machbus there are exactly **two plugins** that speak these messages, and
+> they are mutually exclusive:
+>
+> - [`AutoDrive`](../tutorials/autodrive.md) — steering **and** speed behind one
+>   engage lifecycle. Prefer this.
+> - [`Guidance`](../tutorials/guidance.md) — the older, simpler one.
+>
+> Everything else you may see is supporting code, not another concept:
+> `isobus::implement::guidance` is the wire codecs, `geo::guidance` is pure
+> path-to-curvature maths, and `machbus drive` is a tool subcommand that drives
+> a plugin.
 
 ## Points vs. angles vs. curvature
 
@@ -83,7 +101,7 @@ the [Guidance tutorial](../tutorials/guidance.md).
 
 ## The two messages
 
-Autosteer is a two-way conversation between the **guidance controller** (the thing
+Guidance is a two-way conversation between the **guidance controller** (the thing
 deciding where to go) and the tractor's **steering ECU** (the thing that moves the
 wheels). Two messages carry it, each in one direction.
 
@@ -146,7 +164,7 @@ the first signal that the ECU can be steered.* Inside it:
 | --- | --- | --- |
 | Steering System Readiness State | The headline "am I ready?" flag. | **On / active** = ready and engaged. Off/passive = not ready. |
 | Mechanical Lockout | A physical safety cut-out (e.g. a lockout switch). | **Not active.** If it is Active, you cannot engage at all. |
-| Remote Engage Switch Status | The operator's **arm switch** — most systems need the person in the seat to flip a switch or hold a button before autosteer is allowed to take the wheel. | **On / active** (operator has armed it). |
+| Remote Engage Switch Status | The operator's **arm switch** — most systems need the person in the seat to flip a switch or hold a button before guidance is allowed to take the wheel. | **On / active** (operator has armed it). |
 | Steering Input Position Status | Whether the operator's steering wheel is being moved — the basis for override detection. | _(informational)_ |
 | Guidance Limit Status | Whether your command is being clamped, the system is at a limit, or has a non-recoverable fault. | **Not limited.** |
 | Exit / reason code | *Why* the system is refusing or last dropped out (a diagnostic — see below). | **No reason / all clear.** |

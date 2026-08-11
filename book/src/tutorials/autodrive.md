@@ -4,7 +4,7 @@
 one setpoint, one stop latch** across both axes a moving machine has — where it
 steers and how fast it goes.
 
-If you have read [Guidance (autosteer)](guidance.md) you already know most of the
+If you have read [Guidance](guidance.md) you already know most of the
 wire story, because both plugins speak the same two messages. This page is about
 what `AutoDrive` adds, when to pick it over `Guidance`, and the question that
 trips almost everyone up first: **do I need TIM for this?**
@@ -48,7 +48,7 @@ address and broadcasts.
 That depends on the tractor, and the honest answer is that **machbus cannot tell
 you**:
 
-- A retrofit autosteer system, a test bench, or a machine that implements the
+- A retrofit guidance system, a test bench, or a machine that implements the
   11783-7 messages directly will act on `AutoDrive`'s broadcasts.
 - An **AEF-certified TIM tractor** will very likely ignore a bare 0xFD43 from an
   unauthenticated implement. Speed is the function OEMs guard hardest, and TIM
@@ -276,8 +276,8 @@ system and is not certified.
 
 ## See also
 
-- [Guidance (autosteer)](guidance.md) — the simpler boolean-engage plugin.
-- [Automatic guidance (autosteer)](../standards/autosteer.md) — the curvature
+- [Guidance](guidance.md) — the older, simpler boolean-engage plugin.
+- [Automatic guidance](../standards/automatic-guidance.md) — the curvature
   model and the two PGNs.
 - [TIM and automation](tim.md) — the authority-gated path, for PTO/hitch/aux.
 - [TIM (AEF)](../standards/tim.md) — why authority exists at all.

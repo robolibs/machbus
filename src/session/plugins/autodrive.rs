@@ -79,10 +79,15 @@ pub const LINK_TIMEOUT_MS: u32 = 300;
 /// ISO 11783-7:2022 §5.2.7.2 defines the *form* this cadence takes — "Every
 /// MAXUPDATEPERIOD and on CHANGECRITERA, but no faster than every
 /// MINUPDATEPERIOD" — which is what [`MIN_TX_INTERVAL_MS`] and
-/// [`MAX_TX_INTERVAL_MS`] implement. It does **not** state the numbers: §5.2.7.1
+/// [`MAX_TX_INTERVAL_MS`] implement. It does not state the numbers; §5.2.7.1
 /// puts every actual repetition rate in "the ISO 11783 electronic database"
-/// (isobus.net), which this repository does not vendor. Treat 100/2000 as the
-/// widely-used values for this group rather than as quoted from the text.
+/// (isobus.net), which this repository does not vendor.
+///
+/// The pair used here is the one AEF 023 RIG 2 §D.7.1 states for the equivalent
+/// TIM steering messages — "2000 ms periodic, 100 ms on change" for both
+/// `TIM_ExternalGuidanceRequest` and `TIM_ExternalGuidanceStatus`. That is a
+/// different message family, so read it as corroboration for the cadence rather
+/// than as the native group's quoted rate.
 pub const MIN_TX_INTERVAL_MS: u32 = 100;
 /// The command is a heartbeat, so it keeps going out even when unchanged.
 pub const MAX_TX_INTERVAL_MS: u32 = 2000;

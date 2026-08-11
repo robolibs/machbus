@@ -88,6 +88,94 @@ impl AuxValveFacilities {
     }
 }
 
+/// External-guidance facilities, B.3.2.1.5. One byte: curvature in bits 8-7,
+/// bits 6-1 reserved and set to 1.
+///
+/// The valve function had a typed facility block and a minimum check; the two
+/// functions that actually drive the machine had neither, so a TIM server could
+/// advertise external guidance while reporting `NotSupported` for the only
+/// facility that steers and nothing would notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExternalGuidanceFacilities {
+    pub curvature: Facility,
+}
+
+impl ExternalGuidanceFacilities {
+    #[must_use]
+    pub const fn encode(self) -> u8 {
+        (self.curvature.as_u8() << 6) | 0x3F
+    }
+
+    #[must_use]
+    pub const fn decode(raw: u8) -> Self {
+        Self {
+            curvature: Facility::from_u8(raw >> 6),
+        }
+    }
+
+    /// B.3.2.1.5: "A TIM Server supporting external guidance automation shall
+    /// at minimum support facility 'Curvature'."
+    #[must_use]
+    pub const fn meets_minimum(self) -> bool {
+        self.curvature.is_supported()
+    }
+}
+
+/// Vehicle-speed facilities, B.3.2.1.4. Two bytes, four 2-bit facilities each,
+/// with byte 2 bits 2-1 reserved and set to 1.
+///
+/// The separate `start_motion` and `stop_motion` bits are the point: ISO
+/// 11783-9 §4.4.2.8 makes commanding a stop optional, and B.3.2.1.4 splits
+/// getting into motion from commanding a speed. A server may accept a speed
+/// setpoint and still refuse to start or stop the vehicle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VehicleSpeedFacilities {
+    pub forward_speed: Facility,
+    pub reverse_speed: Facility,
+    pub start_motion: Facility,
+    pub stop_motion: Facility,
+    pub forward_speed_set_by_server: Facility,
+    pub reverse_speed_set_by_server: Facility,
+    pub change_of_direction: Facility,
+}
+
+impl VehicleSpeedFacilities {
+    #[must_use]
+    pub const fn encode(self) -> [u8; 2] {
+        [
+            (self.forward_speed.as_u8() << 6)
+                | (self.reverse_speed.as_u8() << 4)
+                | (self.start_motion.as_u8() << 2)
+                | self.stop_motion.as_u8(),
+            (self.forward_speed_set_by_server.as_u8() << 6)
+                | (self.reverse_speed_set_by_server.as_u8() << 4)
+                | (self.change_of_direction.as_u8() << 2)
+                | 0x03,
+        ]
+    }
+
+    #[must_use]
+    pub const fn decode(raw: [u8; 2]) -> Self {
+        Self {
+            forward_speed: Facility::from_u8(raw[0] >> 6),
+            reverse_speed: Facility::from_u8(raw[0] >> 4),
+            start_motion: Facility::from_u8(raw[0] >> 2),
+            stop_motion: Facility::from_u8(raw[0]),
+            forward_speed_set_by_server: Facility::from_u8(raw[1] >> 6),
+            reverse_speed_set_by_server: Facility::from_u8(raw[1] >> 4),
+            change_of_direction: Facility::from_u8(raw[1] >> 2),
+        }
+    }
+
+    /// B.3.2.1.4: "A TIM server supporting the TIM function 'Vehicle speed'
+    /// shall at minimum support the facility 'Vehicle speed while driving in
+    /// forward direction'."
+    #[must_use]
+    pub const fn meets_minimum(self) -> bool {
+        self.forward_speed.is_supported()
+    }
+}
+
 /// The facility block for one function, kept as raw bytes because the length
 /// and layout are function-specific (B.3.2.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +208,28 @@ impl FunctionFacilities {
             .first()
             .copied()
             .map(AuxValveFacilities::decode)
+    }
+
+    /// Interpret this block as external-guidance facilities (B.3.2.1.5, one
+    /// byte).
+    #[must_use]
+    pub fn as_external_guidance(&self) -> Option<ExternalGuidanceFacilities> {
+        self.facilities
+            .first()
+            .copied()
+            .map(ExternalGuidanceFacilities::decode)
+    }
+
+    /// Interpret this block as vehicle-speed facilities (B.3.2.1.4, two bytes).
+    ///
+    /// `None` for a short block: a one-byte payload here is not a speed
+    /// facility block with a missing half, it is a block that cannot be read.
+    #[must_use]
+    pub fn as_vehicle_speed(&self) -> Option<VehicleSpeedFacilities> {
+        match *self.facilities.as_slice() {
+            [first, second, ..] => Some(VehicleSpeedFacilities::decode([first, second])),
+            _ => None,
+        }
     }
 }
 
@@ -213,6 +323,86 @@ mod tests {
         assert_eq!(raw & 0x0F, 0x0F, "bits 4-1 reserved, set to 1");
         assert_eq!(AuxValveFacilities::decode(raw), facilities);
         assert!(facilities.meets_minimum());
+    }
+
+    /// B.3.2.1.5 — one byte, curvature in bits 8-7, bits 6-1 reserved set to 1.
+    #[test]
+    fn external_guidance_facilities_match_b3215() {
+        let facilities = ExternalGuidanceFacilities {
+            curvature: Facility::Supported,
+        };
+        let raw = facilities.encode();
+        assert_eq!(raw >> 6, 0b01, "curvature in bits 8-7");
+        assert_eq!(raw & 0x3F, 0x3F, "bits 6-1 reserved, set to 1");
+        assert_eq!(ExternalGuidanceFacilities::decode(raw), facilities);
+        assert!(facilities.meets_minimum());
+    }
+
+    /// "A TIM Server supporting external guidance automation shall at minimum
+    /// support facility 'Curvature'." A server that never had the facility is
+    /// not a server that has it — `NotDefinedAtBuild` is not permission.
+    #[test]
+    fn a_guidance_server_without_curvature_fails_the_minimum() {
+        for curvature in [
+            Facility::NotSupported,
+            Facility::Reserved,
+            Facility::NotDefinedAtBuild,
+        ] {
+            assert!(
+                !ExternalGuidanceFacilities { curvature }.meets_minimum(),
+                "{curvature:?} is not permission to steer"
+            );
+        }
+    }
+
+    /// B.3.2.1.4 — two bytes, seven facilities, byte 2 bits 2-1 reserved.
+    #[test]
+    fn vehicle_speed_facilities_match_b3214() {
+        let facilities = VehicleSpeedFacilities {
+            forward_speed: Facility::Supported,
+            reverse_speed: Facility::NotSupported,
+            start_motion: Facility::Reserved,
+            stop_motion: Facility::NotDefinedAtBuild,
+            forward_speed_set_by_server: Facility::Supported,
+            reverse_speed_set_by_server: Facility::NotSupported,
+            change_of_direction: Facility::NotDefinedAtBuild,
+        };
+        let raw = facilities.encode();
+        assert_eq!(raw[0] >> 6, 0b01, "forward speed in byte 1 bits 8-7");
+        assert_eq!((raw[0] >> 4) & 0b11, 0b00, "reverse speed in bits 6-5");
+        assert_eq!((raw[0] >> 2) & 0b11, 0b10, "start motion in bits 4-3");
+        assert_eq!(raw[0] & 0b11, 0b11, "stop motion in bits 2-1");
+        assert_eq!(raw[1] & 0b11, 0b11, "byte 2 bits 2-1 reserved, set to 1");
+        assert_eq!(VehicleSpeedFacilities::decode(raw), facilities);
+        assert!(facilities.meets_minimum());
+    }
+
+    /// Speed and motion are separate facilities: a server may accept a setpoint
+    /// and still refuse to start or stop the vehicle (ISO 11783-9 §4.4.2.8
+    /// makes commanding a stop optional).
+    #[test]
+    fn commanding_a_speed_is_not_permission_to_start_or_stop() {
+        let speed_only = VehicleSpeedFacilities {
+            forward_speed: Facility::Supported,
+            ..VehicleSpeedFacilities::default()
+        };
+        assert!(speed_only.meets_minimum());
+        assert!(!speed_only.start_motion.is_supported());
+        assert!(!speed_only.stop_motion.is_supported());
+    }
+
+    /// A one-byte block is not a speed block with a missing half.
+    #[test]
+    fn a_short_speed_facility_block_is_unreadable() {
+        assert_eq!(
+            FunctionFacilities::new(TimFunctionId::VehicleSpeed, &[0x40]).as_vehicle_speed(),
+            None
+        );
+        assert!(
+            FunctionFacilities::new(TimFunctionId::VehicleSpeed, &[0x40, 0xFF])
+                .as_vehicle_speed()
+                .is_some()
+        );
     }
 
     #[test]

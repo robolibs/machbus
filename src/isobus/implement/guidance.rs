@@ -290,7 +290,13 @@ impl GuidanceMachineInfo {
             | ((self.steering_system_readiness_state.as_u8() & 0x03) << 2)
             | ((self.steering_input_position_status.as_u8() & 0x03) << 4)
             | ((self.request_reset_status.as_u8() & 0x03) << 6);
-        data[3] = (self.guidance_limit_status.as_u8() & 0x07) << 5;
+        // G3 — byte 4 bits 1-5 are reserved and transmitted as ones; this
+        // file's own decoder comment and its captured-frame test (byte 3 =
+        // 0xFF off a real tractor) both say so. Assigning the byte wholesale
+        // wiped them to zero, so `encode()` produced a frame no real ECU sends
+        // and a third-party client applying the pre-round-4 machbus rule
+        // discarded it.
+        data[3] = 0x1F | ((self.guidance_limit_status.as_u8() & 0x07) << 5);
         data[4] = (self.guidance_system_command_exit_reason_code & 0x3F)
             | ((self.remote_engage_switch_status.as_u8() & 0x03) << 6);
         data

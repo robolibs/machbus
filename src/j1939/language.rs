@@ -172,38 +172,47 @@ impl_strict_unit_decoder!(DecimalSymbol, {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LanguageData {
     pub language_code: [u8; 2],
-    pub decimal: DecimalSymbol,
-    pub time_format: TimeFormat,
-    pub date_format: DateFormat,
-    pub distance: DistanceUnit,
-    pub area: AreaUnit,
-    pub volume: VolumeUnit,
-    pub mass: MassUnit,
-    pub temperature: TemperatureUnit,
-    pub pressure: PressureUnit,
-    pub force: ForceUnit,
+    /// `None` when the terminal sent a code this edition does not define —
+    /// including the all-ones "no action / not available" convention this
+    /// struct already documents for the country code.
+    ///
+    /// These used to be plain enums decoded with `?`, so one unrecognised
+    /// 2-bit field discarded the *entire* Language Command: the application
+    /// never learned the operator's language, or any of the units the terminal
+    /// did specify, and kept its defaults. G4 — an unrecognised sub-field says
+    /// nothing about its siblings.
+    pub decimal: Option<DecimalSymbol>,
+    pub time_format: Option<TimeFormat>,
+    pub date_format: Option<DateFormat>,
+    pub distance: Option<DistanceUnit>,
+    pub area: Option<AreaUnit>,
+    pub volume: Option<VolumeUnit>,
+    pub mass: Option<MassUnit>,
+    pub temperature: Option<TemperatureUnit>,
+    pub pressure: Option<PressureUnit>,
+    pub force: Option<ForceUnit>,
     /// ISO 3166 two-character country code. `0xFF 0xFF` means no action /
     /// not available on the wire.
     pub country_code: [u8; 2],
-    pub generic: UnitSystem,
+    pub generic: Option<UnitSystem>,
 }
 
 impl Default for LanguageData {
     fn default() -> Self {
         Self {
             language_code: [b'e', b'n'],
-            decimal: DecimalSymbol::default(),
-            time_format: TimeFormat::default(),
-            date_format: DateFormat::default(),
-            distance: DistanceUnit::default(),
-            area: AreaUnit::default(),
-            volume: VolumeUnit::default(),
-            mass: MassUnit::default(),
-            temperature: TemperatureUnit::default(),
-            pressure: PressureUnit::default(),
-            force: ForceUnit::default(),
+            decimal: Some(DecimalSymbol::default()),
+            time_format: Some(TimeFormat::default()),
+            date_format: Some(DateFormat::default()),
+            distance: Some(DistanceUnit::default()),
+            area: Some(AreaUnit::default()),
+            volume: Some(VolumeUnit::default()),
+            mass: Some(MassUnit::default()),
+            temperature: Some(TemperatureUnit::default()),
+            pressure: Some(PressureUnit::default()),
+            force: Some(ForceUnit::default()),
             country_code: [0xFF, 0xFF],
-            generic: UnitSystem::default(),
+            generic: Some(UnitSystem::default()),
         }
     }
 }
@@ -215,16 +224,22 @@ impl LanguageData {
         let mut data = [0xFFu8; 8];
         data[0] = self.language_code[0];
         data[1] = self.language_code[1];
-        data[2] = 0x0F | ((self.time_format as u8) << 4) | ((self.decimal as u8) << 6);
-        data[3] = self.date_format as u8;
-        data[4] = (self.mass as u8)
-            | ((self.volume as u8) << 2)
-            | ((self.area as u8) << 4)
-            | ((self.distance as u8) << 6);
-        data[5] = (self.generic as u8)
-            | ((self.force as u8) << 2)
-            | ((self.pressure as u8) << 4)
-            | ((self.temperature as u8) << 6);
+        // A field we could not interpret goes back out as the all-ones "no
+        // action / not available" code for its width, never as a fabricated
+        // default.
+        let two_bit = |v: Option<u8>| v.unwrap_or(0x03) & 0x03;
+        data[2] = 0x0F
+            | (two_bit(self.time_format.map(TimeFormat::as_u8)) << 4)
+            | (two_bit(self.decimal.map(DecimalSymbol::as_u8)) << 6);
+        data[3] = self.date_format.map_or(0xFF, DateFormat::as_u8);
+        data[4] = two_bit(self.mass.map(MassUnit::as_u8))
+            | (two_bit(self.volume.map(VolumeUnit::as_u8)) << 2)
+            | (two_bit(self.area.map(AreaUnit::as_u8)) << 4)
+            | (two_bit(self.distance.map(DistanceUnit::as_u8)) << 6);
+        data[5] = two_bit(self.generic.map(UnitSystem::as_u8))
+            | (two_bit(self.force.map(ForceUnit::as_u8)) << 2)
+            | (two_bit(self.pressure.map(PressureUnit::as_u8)) << 4)
+            | (two_bit(self.temperature.map(TemperatureUnit::as_u8)) << 6);
         data[6] = self.country_code[0];
         data[7] = self.country_code[1];
         data
@@ -240,23 +255,24 @@ impl LanguageData {
         if msg.data.len() != 8 {
             return None;
         }
+        // G3 — §5.4: byte 3 bits 1-4 are reserved and ignored on receive.
+        // G4 — a sub-field code this edition does not define is that field's
+        // problem, not the message's: the language code in bytes 1-2 is still
+        // exactly what the operator selected.
         let d = &msg.data;
-        if d[2] & 0x0F != 0x0F {
-            return None;
-        }
         Some(Self {
             language_code: [d[0], d[1]],
-            decimal: DecimalSymbol::try_from_u8((d[2] >> 6) & 0x03)?,
-            time_format: TimeFormat::try_from_u8((d[2] >> 4) & 0x03)?,
-            date_format: DateFormat::try_from_u8(d[3])?,
-            distance: DistanceUnit::try_from_u8((d[4] >> 6) & 0x03)?,
-            area: AreaUnit::try_from_u8((d[4] >> 4) & 0x03)?,
-            volume: VolumeUnit::try_from_u8((d[4] >> 2) & 0x03)?,
-            mass: MassUnit::try_from_u8(d[4] & 0x03)?,
-            temperature: TemperatureUnit::try_from_u8((d[5] >> 6) & 0x03)?,
-            pressure: PressureUnit::try_from_u8((d[5] >> 4) & 0x03)?,
-            force: ForceUnit::try_from_u8((d[5] >> 2) & 0x03)?,
-            generic: UnitSystem::try_from_u8(d[5] & 0x03)?,
+            decimal: DecimalSymbol::try_from_u8((d[2] >> 6) & 0x03),
+            time_format: TimeFormat::try_from_u8((d[2] >> 4) & 0x03),
+            date_format: DateFormat::try_from_u8(d[3]),
+            distance: DistanceUnit::try_from_u8((d[4] >> 6) & 0x03),
+            area: AreaUnit::try_from_u8((d[4] >> 4) & 0x03),
+            volume: VolumeUnit::try_from_u8((d[4] >> 2) & 0x03),
+            mass: MassUnit::try_from_u8(d[4] & 0x03),
+            temperature: TemperatureUnit::try_from_u8((d[5] >> 6) & 0x03),
+            pressure: PressureUnit::try_from_u8((d[5] >> 4) & 0x03),
+            force: ForceUnit::try_from_u8((d[5] >> 2) & 0x03),
+            generic: UnitSystem::try_from_u8(d[5] & 0x03),
             country_code: [d[6], d[7]],
         })
     }
@@ -271,26 +287,26 @@ mod tests {
     fn defaults_are_metric_english() {
         let ld = LanguageData::default();
         assert_eq!(ld.language_code, [b'e', b'n']);
-        assert_eq!(ld.distance, DistanceUnit::Metric);
-        assert_eq!(ld.decimal, DecimalSymbol::Period);
+        assert_eq!(ld.distance, Some(DistanceUnit::Metric));
+        assert_eq!(ld.decimal, Some(DecimalSymbol::Period));
     }
 
     #[test]
     fn round_trip_imperial_us() {
         let ld = LanguageData {
             language_code: [b'd', b'e'],
-            decimal: DecimalSymbol::Comma,
-            time_format: TimeFormat::TwelveHour,
-            date_format: DateFormat::YyyyMmDd,
-            distance: DistanceUnit::Imperial,
-            area: AreaUnit::Us,
-            volume: VolumeUnit::Imperial,
-            mass: MassUnit::Us,
-            temperature: TemperatureUnit::Imperial,
-            pressure: PressureUnit::Imperial,
-            force: ForceUnit::Imperial,
+            decimal: Some(DecimalSymbol::Comma),
+            time_format: Some(TimeFormat::TwelveHour),
+            date_format: Some(DateFormat::YyyyMmDd),
+            distance: Some(DistanceUnit::Imperial),
+            area: Some(AreaUnit::Us),
+            volume: Some(VolumeUnit::Imperial),
+            mass: Some(MassUnit::Us),
+            temperature: Some(TemperatureUnit::Imperial),
+            pressure: Some(PressureUnit::Imperial),
+            force: Some(ForceUnit::Imperial),
             country_code: [b'D', b'E'],
-            generic: UnitSystem::Us,
+            generic: Some(UnitSystem::Us),
         };
         let payload = ld.encode();
         let msg = Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0);
@@ -310,27 +326,36 @@ mod tests {
         assert!(LanguageData::decode(&msg).is_none());
     }
 
+    /// J6 — §5.4 makes byte 3 bits 1-4 reserved and don't-care on receive, and
+    /// G4 says an unrecognised sub-field code is that field's problem, not the
+    /// message's. Rejecting the whole PG meant the application never learned
+    /// the operator's language, or any of the units the terminal *did* specify,
+    /// and kept its defaults — the plugin returns early on `None`, so no event
+    /// was emitted at all.
     #[test]
-    fn decode_rejects_reserved_unit_values_and_tail_bytes() {
+    fn an_unknown_unit_code_still_yields_the_language_code() {
         let mut payload = LanguageData::default().encode();
-        payload[2] &= !0x01;
-        assert!(
-            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0))
-                .is_none()
-        );
+        payload[0] = b'd';
+        payload[1] = b'e';
+        payload[2] &= !0x01; // a reserved bit cleared in byte 3
+        payload[4] |= 0x03; // an undefined mass code
+        payload[5] |= 0x02; // an undefined generic-unit code
 
-        let mut payload = LanguageData::default().encode();
-        payload[4] |= 0x03;
-        assert!(
+        let decoded =
             LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0))
-                .is_none()
+                .expect("the Language Command still decodes");
+        assert_eq!(
+            decoded.language_code,
+            [b'd', b'e'],
+            "the operator's language selection survives an unknown unit code"
         );
-
-        let mut payload = LanguageData::default().encode();
-        payload[5] |= 0x02;
-        assert!(
-            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0))
-                .is_none()
+        assert_eq!(decoded.mass, None, "an undefined code is not a fabricated default");
+        assert_eq!(decoded.generic, None);
+        assert_eq!(
+            decoded.distance,
+            Some(DistanceUnit::Metric),
+            "the fields that did decode are still delivered"
         );
     }
+
 }

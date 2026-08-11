@@ -696,18 +696,18 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
     );
     let mixed_language_data = LanguageData {
         language_code: [b'd', b'e'],
-        decimal: DecimalSymbol::Comma,
-        time_format: TimeFormat::TwelveHour,
-        date_format: DateFormat::YyyyMmDd,
-        distance: DistanceUnit::Imperial,
-        area: AreaUnit::Us,
-        volume: VolumeUnit::Imperial,
-        mass: MassUnit::Us,
-        temperature: TemperatureUnit::Imperial,
-        pressure: PressureUnit::Imperial,
-        force: ForceUnit::Imperial,
+        decimal: Some(DecimalSymbol::Comma),
+        time_format: Some(TimeFormat::TwelveHour),
+        date_format: Some(DateFormat::YyyyMmDd),
+        distance: Some(DistanceUnit::Imperial),
+        area: Some(AreaUnit::Us),
+        volume: Some(VolumeUnit::Imperial),
+        mass: Some(MassUnit::Us),
+        temperature: Some(TemperatureUnit::Imperial),
+        pressure: Some(PressureUnit::Imperial),
+        force: Some(ForceUnit::Imperial),
         country_code: [b'D', b'E'],
-        generic: UnitSystem::Us,
+        generic: Some(UnitSystem::Us),
     };
     assert_eq!(mixed_language_data.encode(), mixed_language);
     assert_eq!(
@@ -734,16 +734,24 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in [
-        "language_bad_reserved_bits",
-        "language_bad_reserved_unit3",
-        "language_bad_reserved_tail",
+    // G3 / G4 — §5.4 makes the reserved nibble don't-care on receive, and an
+    // unrecognised 2-bit unit code says nothing about the language code in
+    // bytes 1-2. Dropping the whole PG meant the plugin emitted no event at
+    // all, so the application never learned the operator's language or any of
+    // the units the terminal *did* specify.
+    for tolerated in [
+        "undefined_bits_language_reserved",
+        "undefined_bits_language_unit3",
+        "undefined_bits_language_tail",
     ] {
-        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, malformed);
-        assert!(
-            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0x80,))
-                .is_none(),
-            "{malformed} must be rejected"
+        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, tolerated);
+        let decoded =
+            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0x80))
+                .unwrap_or_else(|| panic!("{tolerated} must still decode"));
+        assert_eq!(
+            decoded.language_code,
+            [b'e', b'n'],
+            "{tolerated}: the operator's language selection survives"
         );
     }
 

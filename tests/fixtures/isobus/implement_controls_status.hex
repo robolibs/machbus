@@ -14,11 +14,11 @@ pto_status_front_540rpm=E010E1FFFFFFFFFF
 aux_valve_flow_3_extending=C832A5FFFFFFFFFF
 lighting_typical=D1DFF5FCFFFFFFFF
 guidance_curvature_cmd_0_5=827DFFFFFFFFFFFF
-guidance_machine_info_neg2_5=767D45605BFFFFFF
+guidance_machine_info_neg2_5=767D457F5BFFFFFF
 guidance_system_status_1_0=847D22FFFFFFFFFF
 drive_strategy_max_economy=02C896FFFFFFFFFF
 guidance_system_cmd_neg1_5=7A7DFDFFFFFFFFFF
-hitch_pto_combined=3075E01005FFFFFF
+hitch_pto_combined=3075E010F5FFFFFF
 hitch_roll_pitch_front=3930A05BFFFFFFFF
 tractor_facilities_mixed=55AAC9ABEBFFFFFF
 
@@ -33,13 +33,13 @@ guidance_curvature_cmd_zero_default=807DFFFFFFFFFFFF
 # A default-constructed report has no curvature estimate, so bytes 1-2 are the
 # not-available raw (FFFF). This previously read 807D — the raw for a precise
 # 0.00/km — which claimed a measurement the ECU had not made.
-guidance_machine_info_default=FFFFFFE0FFFFFFFF
+guidance_machine_info_default=FFFFFFFFFFFFFFFF
 guidance_system_status_default=807D07FFFFFFFFFF
 drive_strategy_no_action_na=00FFFFFFFFFFFFFF
 # B6 — 0x7D80 is straight-ahead, which is a steering *command*. A default
 # command asks for nothing at all, so the curvature is the not-requested band.
 guidance_system_cmd_default=FFFFFFFFFFFFFFFF
-hitch_pto_combined_default=FFFFFFFF0FFFFFFF
+hitch_pto_combined_default=FFFFFFFFFFFFFFFF
 hitch_roll_pitch_default=FFFFFFFFFFFFFFFF
 wheel_speed_dist_default_na_direction=FFFFFFFFFFFFFFFF
 ground_speed_dist_default_na_direction=FFFFFFFFFFFFFFFF
@@ -65,27 +65,27 @@ lighting_all_off=00000000FFFFFFFF
 lighting_all_error=AAAAAAAAFFFFFFFF
 guidance_curvature_cmd_min_raw=0000FFFFFFFFFFFF
 guidance_curvature_cmd_max_non_na=FFFAFFFFFFFFFFFF
-guidance_machine_info_max_error=FFFAAAE0BEFFFFFF
+guidance_machine_info_max_error=FFFAAAFFBEFFFFFF
 guidance_system_status_max_error=FFFA33FFFFFFFFFF
 drive_strategy_max_speed_limits=03FEFEFFFFFFFFFF
 guidance_system_cmd_max=FFFAFEFFFFFFFFFF
-hitch_pto_combined_max_non_na=FEFFFEFF0AFFFFFF
+hitch_pto_combined_max_non_na=FEFFFEFFFAFFFFFF
 hitch_roll_pitch_rear_max=FEFFFEFFFFFFFFFF
 tractor_facilities_none=00000000C0FFFFFF
 tractor_facilities_all=FFFFFFFFFFFFFFFF
 
 # Malformed/short payload fixtures used to lock down decode rejection.
 malformed_hitch_cmd_short4=0000FF00
-malformed_hitch_cmd_bad_padding=FFFF00FF00FFFFFF
+undefined_bits_hitch_cmd=FFFF00FF00FFFFFF
 malformed_hitch_cmd_reserved_command=FFFFFFFF04FFFFFF
 malformed_pto_cmd_short4=0000FF00
-malformed_pto_cmd_bad_padding=FFFF00FF00FFFFFF
+undefined_bits_pto_cmd=FFFF00FF00FFFFFF
 malformed_pto_cmd_reserved_command=FFFFFFFF04FFFFFF
 malformed_aux_valve_cmd_short3=0FFEFF
-malformed_aux_valve_cmd_bad_padding=00FFFF0000FFFFFF
+undefined_bits_aux_valve_cmd=00FFFF0000FFFFFF
 malformed_aux_valve_cmd_reserved_command=07FA0005FFFFFFFF
 malformed_tractor_control_short1=FF
-malformed_tractor_control_bad_padding=FFFF00FFFFFFFFFF
+undefined_bits_tractor_control=FFFF00FFFFFFFFFF
 malformed_tractor_control_reserved_mode=025AFFFFFFFFFFFF
 malformed_lighting_short3=FFFFFF
 malformed_machine_selected_speed_short4=FFFFFFFF
@@ -101,11 +101,11 @@ malformed_hitch_status_reserved_bit=C895F055FFFFFFFF
 # These were named "malformed" and asserted to be rejected, which is the
 # opposite of what the clause says — they are what a transmitter one revision
 # ahead legitimately puts on the wire, and every one of them must decode.
-undefined_bits_guidance_machine=767D45605B00FFFF
+undefined_bits_guidance_machine=767D457F5B00FFFF
 undefined_bits_drive_strategy=00FFFF00FFFFFFFF
 undefined_bits_guidance_system_cmd=7A7DFD00FFFFFFFF
 undefined_bits_guidance_system_status=847D2200FFFFFFFF
-undefined_bits_hitch_pto=3075E0100500FFFF
+undefined_bits_hitch_pto=3075E010F500FFFF
 undefined_bits_hitch_roll_pitch=3930A05B00FFFFFF
 undefined_bits_lighting=D1DFF5FC00FFFFFF
 undefined_bits_machine_selected_speed_tail=881300FFD4FFFFFF
@@ -126,7 +126,7 @@ malformed_drive_strategy_short2=03FE
 malformed_drive_strategy_reserved_mode=04C896FFFFFFFFFF
 malformed_guidance_system_cmd_short3=FFFFFE
 malformed_hitch_pto_short4=FEFFFEFF
-malformed_hitch_pto_reserved_control_bits=3075E01015FFFFFF
+undefined_bits_hitch_pto_control=3075E01015FFFFFF
 malformed_hitch_roll_pitch_short3=FEFFFE
 malformed_tractor_facilities_short3=FFFFFF
 malformed_fixed8_short7=00000000000000

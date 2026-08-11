@@ -145,18 +145,14 @@ impl SpeedExitCode {
     }
 }
 
+/// Table 1, 2-byte row: valid is `0x0000..=0xFAFF`, `0xFE00..=0xFEFF` is the
+/// error band and `0xFF00..=0xFFFF` is not-available. Clamping to `u16::MAX - 1`
+/// landed on 0xFFFE — inside the not-available band — so any commanded speed at
+/// or above 65.535 m/s was transmitted as "not available" by the autodrive and
+/// guidance controllers that broadcast this every control tick. One saturation
+/// rule, shared with the sibling module.
 fn encode_speed_mps_non_na(mps: f64) -> u16 {
-    if !mps.is_finite() {
-        return 0;
-    }
-    let raw = mps / 0.001;
-    if raw <= 0.0 {
-        0
-    } else if raw >= f64::from(u16::MAX) {
-        u16::MAX - 1
-    } else {
-        raw as u16
-    }
+    super::speed_distance::scaled_u16_non_na(mps, 0.001)
 }
 
 /// A compact speed/direction/source triple retained for C++ parity.
@@ -376,17 +372,22 @@ mod tests {
                 .target_speed_raw,
             0
         );
+        // Table 1, 2-byte row: valid is 0x0000..=0xFAFF, the error band is
+        // 0xFE00..=0xFEFF and 0xFF00..=0xFFFF is not-available. 0xFFFE is
+        // *inside* the not-available band, so clamping there transmitted "not
+        // available" for any setpoint at or above 65.535 m/s — from the
+        // autodrive and guidance controllers that broadcast this every tick.
         assert_eq!(
             MachineSpeedCommandMsg::default()
                 .with_speed_mps(1_000_000.0)
                 .target_speed_raw,
-            0xFFFE
+            0xFAFF
         );
         assert_eq!(
             MachineSpeedCommandMsg::default()
                 .with_speed_mps(65.535)
                 .target_speed_raw,
-            0xFFFE
+            0xFAFF
         );
     }
 

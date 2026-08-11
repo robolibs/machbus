@@ -174,8 +174,15 @@ impl TractorMode {
     }
 }
 
-fn fixed8_with_ff_at(data: &[u8], ff_indices: &[usize]) -> bool {
-    data.len() == 8 && ff_indices.iter().all(|&idx| data[idx] == 0xFF)
+/// G3 — ISO 11783-7:2022 §5.4: reserved bytes are transmitted as ones and
+/// **ignored on receive**. These are the only implement-to-TECU command
+/// decoders with live session wiring, and the B5 sweep that fixed the five
+/// status decoders in this directory never reached them: a peer that zero-pads,
+/// or any transmitter on a revision that assigns one of these bytes, had its
+/// entire hitch-raise, PTO-engage or aux-valve command discarded by
+/// `Implement::on_frame` — no event at all, silence rather than a command.
+fn command_payload_len_is_canonical(data: &[u8]) -> bool {
+    data.len() == 8
 }
 
 /// Hitch position command (front or rear). Position is `0..=40000`
@@ -211,7 +218,7 @@ impl HitchCommandMsg {
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_at(data, &[2, 5, 6, 7]) {
+        if !command_payload_len_is_canonical(data) {
             return None;
         }
         Some(Self {
@@ -254,7 +261,7 @@ impl PtoCommandMsg {
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_at(data, &[2, 5, 6, 7]) {
+        if !command_payload_len_is_canonical(data) {
             return None;
         }
         Some(Self {
@@ -306,7 +313,7 @@ impl AuxValveCommandMsg {
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_at(data, &[4, 5, 6, 7]) {
+        if !command_payload_len_is_canonical(data) {
             return None;
         }
         if data[0] >= MAX_AUX_VALVES {
@@ -379,7 +386,7 @@ impl TractorControlModeMsg {
 
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_at(data, &[2, 3, 4, 5, 6, 7]) {
+        if !command_payload_len_is_canonical(data) {
             return None;
         }
         Some(Self {
@@ -499,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn command_decoders_reject_reserved_bytes_and_bad_padding() {
+    fn command_decoders_reject_reserved_command_values_but_ignore_reserved_bytes() {
         let mut hitch = HitchCommandMsg {
             command: HitchCommand::Raise,
             target_position: 30_000,
@@ -508,9 +515,6 @@ mod tests {
         .encode();
         hitch[4] = 0x04;
         assert!(HitchCommandMsg::decode(&hitch).is_none());
-        let mut hitch_bad_padding = HitchCommandMsg::default().encode();
-        hitch_bad_padding[2] = 0x00;
-        assert!(HitchCommandMsg::decode(&hitch_bad_padding).is_none());
 
         let mut pto = PtoCommandMsg {
             command: PtoCommand::Engage,
@@ -520,9 +524,6 @@ mod tests {
         .encode();
         pto[4] = 0x04;
         assert!(PtoCommandMsg::decode(&pto).is_none());
-        let mut pto_bad_padding = PtoCommandMsg::default().encode();
-        pto_bad_padding[2] = 0x00;
-        assert!(PtoCommandMsg::decode(&pto_bad_padding).is_none());
 
         let mut aux = AuxValveCommandMsg {
             valve_index: 5,
@@ -535,19 +536,51 @@ mod tests {
         let mut aux_bad_index = AuxValveCommandMsg::default().encode();
         aux_bad_index[0] = MAX_AUX_VALVES;
         assert!(AuxValveCommandMsg::decode(&aux_bad_index).is_none());
-        let mut aux_bad_padding = AuxValveCommandMsg::default().encode();
-        aux_bad_padding[4] = 0x00;
-        assert!(AuxValveCommandMsg::decode(&aux_bad_padding).is_none());
-
-        let mut tractor_control_bad_padding = TractorControlModeMsg::default().encode();
-        tractor_control_bad_padding[2] = 0x00;
-        assert!(TractorControlModeMsg::decode(&tractor_control_bad_padding).is_none());
 
         for bad_mode in [0x02, 0x08, 0x20, 0x80] {
             let mut tractor_control_reserved_mode = TractorControlModeMsg::default().encode();
             tractor_control_reserved_mode[0] = bad_mode;
             assert!(TractorControlModeMsg::decode(&tractor_control_reserved_mode).is_none());
         }
+
+        // G3 — §5.4: reserved bytes are transmitted as ones and ignored on
+        // receive. These four used to be dropped whole, so a peer that
+        // zero-padded had its hitch-raise, PTO-engage or aux-valve command
+        // discarded with no event at all — silence rather than a command.
+        let hitch_msg = HitchCommandMsg {
+            command: HitchCommand::Raise,
+            target_position: 30_000,
+            rate: 100,
+        };
+        let mut zero_padded = hitch_msg.encode();
+        zero_padded[2] = 0x00;
+        assert_eq!(HitchCommandMsg::decode(&zero_padded), Some(hitch_msg));
+
+        let pto_msg = PtoCommandMsg {
+            command: PtoCommand::Engage,
+            target_speed_rpm: 4320,
+            ramp_rate: 50,
+        };
+        let mut zero_padded = pto_msg.encode();
+        zero_padded[2] = 0x00;
+        assert_eq!(PtoCommandMsg::decode(&zero_padded), Some(pto_msg));
+
+        let aux_msg = AuxValveCommandMsg {
+            valve_index: 5,
+            command: ValveCommand::Extend,
+            flow_rate: 250,
+        };
+        let mut zero_padded = aux_msg.encode();
+        zero_padded[4] = 0x00;
+        assert_eq!(AuxValveCommandMsg::decode(&zero_padded), Some(aux_msg));
+
+        let control_msg = TractorControlModeMsg::default();
+        let mut zero_padded = control_msg.encode();
+        zero_padded[2] = 0x00;
+        assert_eq!(
+            TractorControlModeMsg::decode(&zero_padded),
+            Some(control_msg)
+        );
     }
 
     #[test]

@@ -1219,17 +1219,17 @@ fn task_controller_server_process_data_commands_match_agisostack_examples() {
 fn language_command_layout_matches_agisostack_transmit_packing() {
     let en_us = LanguageData {
         language_code: *b"en",
-        decimal: DecimalSymbol::Comma,
-        time_format: TimeFormat::TwelveHour,
-        date_format: DateFormat::YyyyMmDd,
-        distance: DistanceUnit::Imperial,
-        area: AreaUnit::Imperial,
-        volume: VolumeUnit::Us,
-        mass: MassUnit::Us,
-        temperature: TemperatureUnit::Imperial,
-        pressure: PressureUnit::Imperial,
-        force: ForceUnit::Imperial,
-        generic: UnitSystem::Us,
+        decimal: Some(DecimalSymbol::Comma),
+        time_format: Some(TimeFormat::TwelveHour),
+        date_format: Some(DateFormat::YyyyMmDd),
+        distance: Some(DistanceUnit::Imperial),
+        area: Some(AreaUnit::Imperial),
+        volume: Some(VolumeUnit::Us),
+        mass: Some(MassUnit::Us),
+        temperature: Some(TemperatureUnit::Imperial),
+        pressure: Some(PressureUnit::Imperial),
+        force: Some(ForceUnit::Imperial),
+        generic: Some(UnitSystem::Us),
         country_code: *b"US",
     };
     let bytes = en_us.encode();
@@ -1245,17 +1245,17 @@ fn language_command_decodes_agisostack_message_content_samples() {
     let sample = [b'e', b'n', 0x0F, 0x04, 0x5A, 0x04, b'U', b'S'];
     let decoded = LanguageData::decode(&Message::new(0xFE0F, sample.to_vec(), 0x80)).unwrap();
     assert_eq!(decoded.language_code, *b"en");
-    assert_eq!(decoded.decimal, DecimalSymbol::Comma);
-    assert_eq!(decoded.time_format, TimeFormat::TwentyFourHour);
-    assert_eq!(decoded.date_format, DateFormat::YyyyMmDd);
-    assert_eq!(decoded.distance, DistanceUnit::Imperial);
-    assert_eq!(decoded.area, AreaUnit::Imperial);
-    assert_eq!(decoded.volume, VolumeUnit::Us);
-    assert_eq!(decoded.mass, MassUnit::Us);
-    assert_eq!(decoded.temperature, TemperatureUnit::Metric);
-    assert_eq!(decoded.pressure, PressureUnit::Metric);
-    assert_eq!(decoded.force, ForceUnit::Imperial);
-    assert_eq!(decoded.generic, UnitSystem::Metric);
+    assert_eq!(decoded.decimal, Some(DecimalSymbol::Comma));
+    assert_eq!(decoded.time_format, Some(TimeFormat::TwentyFourHour));
+    assert_eq!(decoded.date_format, Some(DateFormat::YyyyMmDd));
+    assert_eq!(decoded.distance, Some(DistanceUnit::Imperial));
+    assert_eq!(decoded.area, Some(AreaUnit::Imperial));
+    assert_eq!(decoded.volume, Some(VolumeUnit::Us));
+    assert_eq!(decoded.mass, Some(MassUnit::Us));
+    assert_eq!(decoded.temperature, Some(TemperatureUnit::Metric));
+    assert_eq!(decoded.pressure, Some(PressureUnit::Metric));
+    assert_eq!(decoded.force, Some(ForceUnit::Imperial));
+    assert_eq!(decoded.generic, Some(UnitSystem::Metric));
     assert_eq!(decoded.country_code, *b"US");
 }
 
@@ -1437,10 +1437,14 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
         remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
     };
     let machine_bytes = machine.encode();
+    // G3 — byte 4 bits 1-5 are reserved and transmitted as ones, which is what
+    // this crate's own captured-frame test shows off a real tractor (byte 3 =
+    // 0xFF). Zeroing them produced a frame no real ECU sends.
     assert_eq!(
         machine_bytes,
-        [0xA8, 0x7D, 0x04, 0x60, 0x5B, 0xFF, 0xFF, 0xFF]
+        [0xA8, 0x7D, 0x04, 0x7F, 0x5B, 0xFF, 0xFF, 0xFF]
     );
+    assert_eq!(machine_bytes[3] & 0x1F, 0x1F);
     let decoded_machine = GuidanceMachineInfo::decode(&machine_bytes).unwrap();
     assert!(decoded_machine.estimated_curvature.value().is_some_and(|k| (k - 10.0).abs() < 0.25));
     assert_eq!(

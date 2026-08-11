@@ -235,8 +235,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
 
     let aux_flow = AuxValveFlowMsg {
         valve_index: 3,
-        extend_flow_percent: 200,
-        retract_flow_percent: 50,
+        extend_flow: Signal::Value(80.0),
+        retract_flow: Signal::Value(20.0),
         state: ValveState::Extending,
         limit_status: ValveLimitStatus::OperatorLimited,
         fail_safe: ValveFailSafe::Float,
@@ -1136,7 +1136,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
 
     for name in [
         "malformed_hitch_cmd_short4",
-        "malformed_hitch_cmd_bad_padding",
         "malformed_hitch_cmd_reserved_command",
     ] {
         assert!(
@@ -1150,7 +1149,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_pto_cmd_short4",
-        "malformed_pto_cmd_bad_padding",
         "malformed_pto_cmd_reserved_command",
     ] {
         assert!(
@@ -1164,7 +1162,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_aux_valve_cmd_short3",
-        "malformed_aux_valve_cmd_bad_padding",
         "malformed_aux_valve_cmd_reserved_command",
     ] {
         assert!(
@@ -1178,7 +1175,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_tractor_control_short1",
-        "malformed_tractor_control_bad_padding",
         "malformed_tractor_control_reserved_mode",
     ] {
         assert!(
@@ -1190,6 +1186,39 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
+    // G3 — §5.4: reserved bytes go out as ones and are ignored on receive.
+    // These four used to be dropped whole, so a peer that zero-padded had its
+    // hitch, PTO, aux-valve or control-mode command discarded with no event at
+    // all — silence rather than a command.
+    assert!(
+        HitchCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        PtoCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_pto_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        AuxValveCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_aux_valve_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        TractorControlModeMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_tractor_control",
+        ))
+        .is_some()
+    );
+
     assert!(
         LightingState::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
@@ -1389,19 +1418,24 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         .is_some(),
         "undefined trailing bytes are don't-care on receive (§5.4)"
     );
-    for name in [
-        "malformed_hitch_pto_short4",
-        "malformed_hitch_pto_reserved_control_bits",
-    ] {
-        assert!(
-            HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+    // G3 — byte 5 bits 5-8 are undefined and ignored on receive, exactly as
+    // the decoder already treats bits 3-4 by masking them out of `pto_cmd`.
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_pto_control",
+        ))
+        .is_some(),
+        "undefined byte-5 bits must not drop the combined command"
+    );
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "malformed_hitch_pto_short4",
+        ))
+        .is_none(),
+        "malformed_hitch_pto_short4 must be rejected"
+    );
     assert!(
         HitchRollPitchCmd::decode(
             &parse_named_hex_bytes(

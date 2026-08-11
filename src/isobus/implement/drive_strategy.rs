@@ -320,7 +320,10 @@ impl HitchPtoCombinedCmd {
         data[1] = ((self.hitch_position >> 8) & 0xFF) as u8;
         data[2] = (self.pto_speed_raw & 0xFF) as u8;
         data[3] = ((self.pto_speed_raw >> 8) & 0xFF) as u8;
-        data[4] = (self.hitch_cmd & 0x03) | ((self.pto_cmd & 0x03) << 2);
+        // G3 — bits 5-8 of byte 5 are undefined and go out as ones, the way
+        // `GuidanceSystemCmd::encode` already does. Emitting zeros made every
+        // combined command this stack sent non-conformant.
+        data[4] = 0xF0 | (self.hitch_cmd & 0x03) | ((self.pto_cmd & 0x03) << 2);
         data
     }
 
@@ -329,9 +332,10 @@ impl HitchPtoCombinedCmd {
         if !fixed8_with_ff_tail(data, 5) {
             return None;
         }
-        if data[4] & 0xF0 != 0 {
-            return None;
-        }
+        // The decoder already masks bits 3-4 out of `pto_cmd`; rejecting the
+        // frame on bits 5-8 was the same construct in the opposite direction,
+        // so a conformant transmitter's 1-filled byte 5 (0xF5 for
+        // hitch=lower/pto=engage) had its combined command dropped.
         Some(Self {
             hitch_position: (data[0] as u16) | ((data[1] as u16) << 8),
             pto_speed_raw: (data[2] as u16) | ((data[3] as u16) << 8),
@@ -542,15 +546,27 @@ mod tests {
             Some(default_cmd)
         );
 
-        let mut combined_bad_control = HitchPtoCombinedCmd {
+        // G3 — bits 5-8 of byte 5 are undefined and ignored on receive, the
+        // same treatment the decoder already gave bits 3-4 by masking them out
+        // of `pto_cmd`. Rejecting the frame meant a conformant transmitter's
+        // 1-filled byte 5 had its combined command dropped.
+        let combined_cmd = HitchPtoCombinedCmd {
             hitch_position: 30_000,
             pto_speed_raw: 4320,
             hitch_cmd: 1,
             pto_cmd: 1,
-        }
-        .encode();
-        combined_bad_control[4] |= 0x10;
-        assert!(HitchPtoCombinedCmd::decode(&combined_bad_control).is_none());
+        };
+        let mut undefined_bits = combined_cmd.encode();
+        assert_eq!(
+            undefined_bits[4] & 0xF0,
+            0xF0,
+            "undefined bits are transmitted as ones"
+        );
+        undefined_bits[4] &= !0x10;
+        assert_eq!(
+            HitchPtoCombinedCmd::decode(&undefined_bits),
+            Some(combined_cmd)
+        );
 
         let combined = HitchPtoCombinedCmd::default();
         let mut combined_future_tail = combined.encode();

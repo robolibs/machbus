@@ -32,6 +32,13 @@ No signature or layout changed; the **error contract** of two functions did.
 The Python `autodrive_clear_stop` / `guidance_clear_stop` raise `RuntimeError`
 in the same case.
 
+- **`MachbusLanguageData` unit fields now carry `0xFF` for an unrecognised
+  code** instead of silently substituting the metric/English default. A
+  Language Command whose unit codes this edition does not define is no longer
+  discarded whole either, so a caller now receives the operator's language code
+  with `0xFF` in the fields it could not interpret. Treat `0xFF` as "not
+  specified" rather than as a unit value.
+
 - **`MachbusEventKind` gained `TcServerClientDisconnected` (100).** Additive:
   existing discriminants are unchanged. It fires when the TC server drops a
   client after six seconds without a Client Task message (ISO 11783-10 §6.6.3);

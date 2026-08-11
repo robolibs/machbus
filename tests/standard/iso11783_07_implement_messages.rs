@@ -525,7 +525,11 @@ fn implement_machine_speed_command_rejects_noncanonical_shape_without_losing_sen
         .with_speed_mps(65.535)
         .with_direction(MachineDirection::Forward);
     let encoded = command.encode();
-    assert_eq!(command.target_speed_raw, 0xFFFE);
+    // Table 1, 2-byte row: valid is 0x0000..=0xFAFF and 0xFF00..=0xFFFF is
+    // not-available. 0xFFFE is inside that band, so the old clamp transmitted
+    // "not available" for any setpoint at or above 65.535 m/s — the test name
+    // stated the opposite of what the code did.
+    assert_eq!(command.target_speed_raw, 0xFAFF);
     assert_eq!(
         MachineSpeedCommandMsg::decode(&encoded),
         Some(command),
@@ -556,8 +560,8 @@ fn implement_machine_speed_command_rejects_noncanonical_shape_without_losing_sen
 fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
     let flow = AuxValveFlowMsg {
         valve_index: 3,
-        extend_flow_percent: 125,
-        retract_flow_percent: 250,
+        extend_flow: Signal::Value(50.0),
+        retract_flow: Signal::Value(100.0),
         state: ValveState::Extending,
         limit_status: ValveLimitStatus::SystemLimited,
         fail_safe: ValveFailSafe::Float,
@@ -590,8 +594,8 @@ fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
 fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
     let flow = AuxValveFlowMsg {
         valve_index: 0,
-        extend_flow_percent: 250,
-        retract_flow_percent: 0xFF,
+        extend_flow: Signal::Value(100.0),
+        retract_flow: Signal::NotAvailable,
         state: ValveState::Blocked,
         limit_status: ValveLimitStatus::NotAvailable,
         fail_safe: ValveFailSafe::Block,
@@ -599,7 +603,9 @@ fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
     let encoded = flow.encode();
     assert_eq!(AuxValveFlowMsg::decode(&encoded, 0), Some(flow));
 
-    for reserved_flow in 251..=254 {
+    // Table 1, 8-bit row: only 0xFB..=0xFD are reserved and a genuine decode
+    // failure.
+    for reserved_flow in 251..=253 {
         let mut bad_extend = encoded;
         bad_extend[0] = reserved_flow;
         assert_eq!(
@@ -616,6 +622,20 @@ fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
             "reserved retract-flow value {reserved_flow} must not decode as a percentage"
         );
     }
+
+    // 0xFE is the *required* report of a failed flow transducer, and 0xFF is
+    // "valve not fitted". Rejecting them discarded `state`, `limit_status` and
+    // `fail_safe` — the fields that say the valve has gone to its fail-safe
+    // position — and reported a missing valve as zero flow.
+    let mut transducer_failed = encoded;
+    transducer_failed[0] = 0xFE;
+    let decoded =
+        AuxValveFlowMsg::decode(&transducer_failed, 0).expect("an error report still decodes");
+    assert_eq!(decoded.extend_flow, Signal::Error);
+    assert_eq!(decoded.retract_flow, Signal::NotAvailable);
+    assert_eq!(decoded.fail_safe, flow.fail_safe);
+    assert_eq!(decoded.limit_status, flow.limit_status);
+    assert_eq!(decoded.state, flow.state);
 }
 
 #[test]
@@ -647,8 +667,8 @@ fn implement_aux_valve_public_state_decoders_reject_noncanonical_bytes() {
 
     let flow = AuxValveFlowMsg {
         valve_index: 7,
-        extend_flow_percent: 80,
-        retract_flow_percent: 40,
+        extend_flow: Signal::Value(32.0),
+        retract_flow: Signal::Value(16.0),
         state: ValveState::Retracting,
         limit_status: ValveLimitStatus::Error,
         fail_safe: ValveFailSafe::Extend,
@@ -780,7 +800,7 @@ fn implement_guidance_command_public_status_decoder_rejects_noncanonical_bytes()
 }
 
 #[test]
-fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls_and_padding() {
+fn implement_hitch_pto_combined_and_roll_pitch_commands_ignore_undefined_bits() {
     let combined = HitchPtoCombinedCmd {
         hitch_position: 40_000,
         pto_speed_raw: 4_320,
@@ -791,9 +811,21 @@ fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls
     assert_eq!(HitchPtoCombinedCmd::decode(&combined_bytes), Some(combined));
     assert!((combined.pto_speed_rpm() - 540.0).abs() < 0.125);
 
-    let mut bad_combined_controls = combined_bytes;
-    bad_combined_controls[4] |= 0x10;
-    assert_eq!(HitchPtoCombinedCmd::decode(&bad_combined_controls), None);
+    // G3 — byte 5 bits 5-8 are undefined: transmitted as ones, ignored on
+    // receive. The decoder already masked bits 3-4 out of `pto_cmd` while
+    // rejecting the frame on 5-8, so a conformant 1-filled byte 5 dropped the
+    // whole combined command.
+    assert_eq!(
+        combined_bytes[4] & 0xF0,
+        0xF0,
+        "undefined bits are transmitted as ones"
+    );
+    let mut undefined_control_bits = combined_bytes;
+    undefined_control_bits[4] &= !0x10;
+    assert_eq!(
+        HitchPtoCombinedCmd::decode(&undefined_control_bits),
+        Some(combined)
+    );
 
     // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
     let mut combined_future_tail = combined_bytes;
@@ -1377,7 +1409,7 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
 }
 
 #[test]
-fn implement_tractor_control_mode_rejects_reserved_modes_and_non_ff_tail() {
+fn implement_tractor_control_mode_rejects_reserved_modes_but_ignores_the_tail() {
     let control = TractorControlModeMsg {
         hitch_mode: TractorMode::Manual,
         pto_mode: TractorMode::Automatic,
@@ -1395,7 +1427,12 @@ fn implement_tractor_control_mode_rejects_reserved_modes_and_non_ff_tail() {
         assert_eq!(TractorControlModeMsg::decode(&reserved_slot), None);
     }
 
-    let mut bad_tail = encoded;
-    bad_tail[2] = 0x00;
-    assert_eq!(TractorControlModeMsg::decode(&bad_tail), None);
+    // G3 — §5.4: the reserved tail goes out as ones and is ignored on receive.
+    // Rejecting a zero-padded frame dropped the whole control-mode command.
+    let mut zero_padded_tail = encoded;
+    zero_padded_tail[2] = 0x00;
+    assert_eq!(
+        TractorControlModeMsg::decode(&zero_padded_tail),
+        Some(control)
+    );
 }

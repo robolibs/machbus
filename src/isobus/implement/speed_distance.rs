@@ -34,7 +34,7 @@ use crate::net::types::Pgn;
 const VALID_MAX_U16_SIGNAL_RAW: u16 = 0xFAFF;
 const VALID_MAX_U32_SIGNAL_RAW: u32 = 0xFAFF_FFFF;
 
-fn scaled_u16_non_na(value: f64, resolution: f64) -> u16 {
+pub(super) fn scaled_u16_non_na(value: f64, resolution: f64) -> u16 {
     if !value.is_finite() {
         return 0;
     }
@@ -118,7 +118,7 @@ fn u16_signal(raw: u16, resolution: f64) -> Option<Signal<f64>> {
 /// reserved and are the only genuine decode failure. Treating `0xFE` as one
 /// meant a hitch reporting a failed position sensor dropped the whole PG,
 /// including the limit status and exit code that say *why* it failed.
-fn u8_signal(raw: u8, resolution: f64) -> Option<Signal<f64>> {
+pub(super) fn u8_signal(raw: u8, resolution: f64) -> Option<Signal<f64>> {
     match raw {
         0..=250 => Some(Signal::Value(f64::from(raw) * resolution)),
         0xFE => Some(Signal::Error),
@@ -127,7 +127,7 @@ fn u8_signal(raw: u8, resolution: f64) -> Option<Signal<f64>> {
     }
 }
 
-fn encode_u8_signal(signal: Signal<f64>, resolution: f64) -> u8 {
+pub(super) fn encode_u8_signal(signal: Signal<f64>, resolution: f64) -> u8 {
     match signal {
         Signal::Value(v) => scaled_u8_bounded(v, resolution),
         Signal::Error => 0xFE,
@@ -139,13 +139,16 @@ fn scaled_u8_bounded(value: f64, resolution: f64) -> u8 {
     if !value.is_finite() {
         return 0;
     }
+    // Round rather than truncate: `value / resolution` on a value that came
+    // from `raw * resolution` lands just under the integer (16.8 / 0.4 is
+    // 41.999…), so truncating made decode-then-encode lose a bit.
     let raw = value / resolution;
     if raw <= 0.0 {
         0
     } else if raw >= 250.0 {
         250
     } else {
-        raw as u8
+        (raw + 0.5) as u8
     }
 }
 

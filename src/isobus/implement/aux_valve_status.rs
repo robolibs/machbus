@@ -8,21 +8,11 @@
 //!
 //! The C++ `AuxValveStatusInterface` (IsoNet-coupled) is not ported.
 
+use super::speed_distance::{Signal, encode_u8_signal, u8_signal};
 use crate::net::pgn_defs::{PGN_AUX_VALVE_ESTIMATED_FLOW_BASE, PGN_AUX_VALVE_MEASURED_FLOW_BASE};
 use crate::net::types::Pgn;
 
 pub const MAX_AUX_VALVES: u8 = 16;
-
-/// Convert a flow percentage (`0..=100`) to the `0.4 %`-per-bit raw byte
-/// (`0..=250`), clamping out-of-range and mapping non-finite input to `0`.
-#[must_use]
-fn flow_percent_to_raw(percent: f64) -> u8 {
-    if !percent.is_finite() {
-        return 0;
-    }
-    let scaled = percent.clamp(0.0, 100.0) / 0.4;
-    (scaled + 0.5) as u8
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -158,11 +148,21 @@ impl ValveFailSafe {
 /// - byte 2: bits 0–1 state, bits 2–4 limit, bits 5–6 fail-safe,
 ///   bit 7 reserved (= `1` on encode for parity with C++).
 /// - bytes 3–7: reserved (`0xFF`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AuxValveFlowMsg {
     pub valve_index: u8,
-    pub extend_flow_percent: u8,
-    pub retract_flow_percent: u8,
+    /// Table 1, 8-bit row: `0..=250` is the value at 0.4 % per bit, `0xFE` is
+    /// the error indicator and `0xFF` not-available; only `0xFB..=0xFD` are
+    /// reserved and a genuine decode failure.
+    ///
+    /// These used to be raw bytes with the whole PG rejected on `251..=254`, so
+    /// a Class 2 TECU that had lost a flow transducer — which is *required* to
+    /// report `0xFE` — had its entire message discarded, losing `state`,
+    /// `limit_status` and `fail_safe`: exactly the fields that say the valve
+    /// has gone to its fail-safe position. `0xFF` (valve not fitted) was
+    /// reported as `0.0`, indistinguishable from a fitted valve at zero flow.
+    pub extend_flow: Signal<f64>,
+    pub retract_flow: Signal<f64>,
     pub state: ValveState,
     pub limit_status: ValveLimitStatus,
     pub fail_safe: ValveFailSafe,
@@ -172,8 +172,8 @@ impl Default for AuxValveFlowMsg {
     fn default() -> Self {
         Self {
             valve_index: 0,
-            extend_flow_percent: 0xFF,
-            retract_flow_percent: 0xFF,
+            extend_flow: Signal::NotAvailable,
+            retract_flow: Signal::NotAvailable,
             state: ValveState::Blocked,
             limit_status: ValveLimitStatus::NotAvailable,
             fail_safe: ValveFailSafe::Block,
@@ -182,32 +182,11 @@ impl Default for AuxValveFlowMsg {
 }
 
 impl AuxValveFlowMsg {
-    /// Extend flow as percent (`0.0..=100.0`). Returns `0.0` for the
-    /// `0xFF` "not available" sentinel.
-    #[must_use]
-    pub fn extend_flow(&self) -> f64 {
-        if self.extend_flow_percent == 0xFF {
-            0.0
-        } else {
-            self.extend_flow_percent as f64 * 0.4
-        }
-    }
-
-    #[must_use]
-    pub fn retract_flow(&self) -> f64 {
-        if self.retract_flow_percent == 0xFF {
-            0.0
-        } else {
-            self.retract_flow_percent as f64 * 0.4
-        }
-    }
-
-    /// Set the extend flow from a percentage (`0.0..=100.0`), converting to the
-    /// `0.4 %`-per-bit raw byte and clamping out-of-range/non-finite input. The
-    /// inverse of [`extend_flow`](Self::extend_flow).
+    /// Set the extend flow from a percentage (`0.0..=100.0`), clamping
+    /// out-of-range and non-finite input.
     #[must_use]
     pub fn with_extend_flow_percent(mut self, percent: f64) -> Self {
-        self.extend_flow_percent = flow_percent_to_raw(percent);
+        self.extend_flow = Signal::Value(percent.clamp(0.0, 100.0));
         self
     }
 
@@ -215,15 +194,15 @@ impl AuxValveFlowMsg {
     /// [`with_extend_flow_percent`](Self::with_extend_flow_percent).
     #[must_use]
     pub fn with_retract_flow_percent(mut self, percent: f64) -> Self {
-        self.retract_flow_percent = flow_percent_to_raw(percent);
+        self.retract_flow = Signal::Value(percent.clamp(0.0, 100.0));
         self
     }
 
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        data[0] = self.extend_flow_percent;
-        data[1] = self.retract_flow_percent;
+        data[0] = encode_u8_signal(self.extend_flow, 0.4);
+        data[1] = encode_u8_signal(self.retract_flow, 0.4);
         // bit 7 reserved (= 1) preserves parity with C++ encoding.
         data[2] = (self.state.as_u8() & 0x03)
             | ((self.limit_status.as_u8() & 0x07) << 2)
@@ -245,13 +224,10 @@ impl AuxValveFlowMsg {
             return None;
         }
         let limit_status = ValveLimitStatus::try_from_u8((data[2] >> 2) & 0x07)?;
-        if matches!(data[0], 251..=254) || matches!(data[1], 251..=254) {
-            return None;
-        }
         Some(Self {
             valve_index,
-            extend_flow_percent: data[0],
-            retract_flow_percent: data[1],
+            extend_flow: u8_signal(data[0], 0.4)?,
+            retract_flow: u8_signal(data[1], 0.4)?,
             state: ValveState::try_from_u8(data[2] & 0x03)?,
             limit_status,
             fail_safe: ValveFailSafe::try_from_u8((data[2] >> 5) & 0x03)?,
@@ -290,8 +266,8 @@ mod tests {
     fn round_trip_typical_flow() {
         let m = AuxValveFlowMsg {
             valve_index: 3,
-            extend_flow_percent: 200,
-            retract_flow_percent: 50,
+            extend_flow: Signal::Value(80.0),
+            retract_flow: Signal::Value(20.0),
             state: ValveState::Extending,
             limit_status: ValveLimitStatus::OperatorLimited,
             fail_safe: ValveFailSafe::Float,
@@ -301,51 +277,74 @@ mod tests {
         assert_eq!(decoded, m);
     }
 
+    /// J2 — Table 1, 8-bit row: `0xFE` is the error indicator and `0xFF`
+    /// not-available; only `0xFB..=0xFD` are a genuine decode failure. The
+    /// decoder used to reject `251..=254`, so a Class 2 TECU that had lost a
+    /// flow transducer — which is *required* to report `0xFE` — had its whole
+    /// message discarded, losing `state`, `limit_status` and `fail_safe`:
+    /// exactly the fields that say the valve has gone to its fail-safe
+    /// position. And `0xFF` decoded as `0.0`, indistinguishable from a fitted
+    /// valve at zero flow.
     #[test]
-    fn flow_helpers_handle_not_available() {
-        let m = AuxValveFlowMsg::default();
-        assert_eq!(m.extend_flow(), 0.0);
-        assert_eq!(m.retract_flow(), 0.0);
-    }
+    fn a_failed_transducer_does_not_discard_the_valve_state() {
+        let mut data = [0xFFu8; 8];
+        data[0] = 0xFE;
+        data[1] = 0xFF;
+        data[2] = (ValveState::Extending.as_u8())
+            | ((ValveLimitStatus::OperatorLimited.as_u8()) << 2)
+            | ((ValveFailSafe::Float.as_u8()) << 5)
+            | (1 << 7);
 
-    #[test]
-    fn flow_helpers_compute_percent() {
-        let m = AuxValveFlowMsg {
-            extend_flow_percent: 100,  // 100 × 0.4% = 40%
-            retract_flow_percent: 250, // 250 × 0.4% = 100%
-            ..Default::default()
-        };
-        assert!((m.extend_flow() - 40.0).abs() < 1e-9);
-        assert!((m.retract_flow() - 100.0).abs() < 1e-9);
+        let decoded = AuxValveFlowMsg::decode(&data, 3).expect("an error report still decodes");
+        assert_eq!(decoded.extend_flow, Signal::Error);
+        assert_eq!(
+            decoded.retract_flow,
+            Signal::NotAvailable,
+            "a valve that is not fitted is not a valve at zero flow"
+        );
+        assert_eq!(decoded.state, ValveState::Extending);
+        assert_eq!(decoded.limit_status, ValveLimitStatus::OperatorLimited);
+        assert_eq!(decoded.fail_safe, ValveFailSafe::Float);
+
+        // Only 0xFB..=0xFD are reserved.
+        for reserved in 251..=253u8 {
+            let mut bad = data;
+            bad[0] = reserved;
+            assert!(AuxValveFlowMsg::decode(&bad, 3).is_none());
+        }
+
+        assert_eq!(AuxValveFlowMsg::default().extend_flow, Signal::NotAvailable);
     }
 
     #[test]
     fn with_flow_percent_round_trips_and_clamps() {
-        // 40% → raw 100; 100% → raw 250 (round-trips through the accessors).
         let m = AuxValveFlowMsg::default()
             .with_extend_flow_percent(40.0)
             .with_retract_flow_percent(100.0);
-        assert_eq!(m.extend_flow_percent, 100);
-        assert_eq!(m.retract_flow_percent, 250);
-        assert!((m.extend_flow() - 40.0).abs() < 1e-9);
+        assert_eq!(m.encode()[0], 100);
+        assert_eq!(m.encode()[1], 250);
+        assert_eq!(
+            AuxValveFlowMsg::decode(&m.encode(), 0).unwrap().extend_flow,
+            Signal::Value(40.0)
+        );
 
-        // Out-of-range clamps to the 0..=100% band; non-finite maps to 0.
+        // Out-of-range clamps to the 0..=100 % band; non-finite maps to 0.
         assert_eq!(
             AuxValveFlowMsg::default()
                 .with_extend_flow_percent(150.0)
-                .extend_flow_percent,
+                .encode()[0],
             250
         );
         assert_eq!(
             AuxValveFlowMsg::default()
                 .with_extend_flow_percent(-5.0)
-                .extend_flow_percent,
+                .encode()[0],
             0
         );
         assert_eq!(
             AuxValveFlowMsg::default()
                 .with_extend_flow_percent(f64::NAN)
-                .extend_flow_percent,
+                .encode()[0],
             0
         );
     }

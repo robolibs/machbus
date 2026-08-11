@@ -385,14 +385,17 @@ impl FileServer {
             .entry(msg.source)
             .or_insert_with(|| ServerClientConnection::new(msg.source));
 
-        // TAN cache hit → resend cached response. Per ISO 11783-13 a duplicate
-        // TAN is a retransmission and is replayed idempotently regardless of the
-        // request body (enforced by the standard test
-        // `file_server_replays_cached_tan_even_when_reused_for_different_operation`).
+        // TAN cache hit → resend the cached response, but only for a genuine
+        // retransmission: the same request, byte for byte. A TAN that has come
+        // back round to a *different* request is a new transaction, and
+        // replaying the old answer breaks Annex C's rule that a response
+        // carries the same command byte as its request — the client drops the
+        // mismatched reply and the operation is never performed.
         if let Some(cached) = self
             .clients
             .get(&msg.source)
             .and_then(|c| c.tan_cache.get(&tan))
+            .filter(|cached| cached.request_data == msg.data)
             .cloned()
         {
             return vec![FSOutbound::to(cached.response_data, msg.source)];
@@ -407,6 +410,7 @@ impl FileServer {
                     tan,
                     TANResponse {
                         tan,
+                        request_data: msg.data.clone(),
                         response_data: first.data.clone(),
                         timestamp_ms: self.current_time_ms,
                     },
@@ -422,6 +426,7 @@ impl FileServer {
                 tan,
                 TANResponse {
                     tan,
+                    request_data: msg.data.clone(),
                     response_data: response.clone(),
                     timestamp_ms: self.current_time_ms,
                 },

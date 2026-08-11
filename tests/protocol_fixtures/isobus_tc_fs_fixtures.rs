@@ -911,11 +911,7 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         FileServerProperties::decode_response(&classic_bytes),
         Some((0x07, classic))
     );
-    for malformed in [
-        "properties_response_short4",
-        "properties_response_overlong9",
-        "properties_response_bad_padding",
-    ] {
+    for malformed in ["properties_response_short4", "properties_response_overlong9"] {
         assert!(
             FileServerProperties::decode_response(&parse_named_hex_bytes(
                 ISOBUS_FS_CODECS_HEX,
@@ -934,11 +930,7 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     let status_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "server_status_busy_two_open");
     assert_eq!(status.encode(), status_bytes);
     assert_eq!(FileServerStatus::decode(&status_bytes), Some(status));
-    for malformed in [
-        "server_status_short1",
-        "server_status_overlong9",
-        "server_status_bad_padding",
-    ] {
+    for malformed in ["server_status_short1", "server_status_overlong9"] {
         assert!(
             FileServerStatus::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed))
                 .is_none(),
@@ -949,11 +941,45 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     let ccm = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "ccm_version4");
     assert_eq!(encode_ccm(4), ccm);
     assert_eq!(CCMMessage::decode(&ccm), Some(CCMMessage { version: 4 }));
-    for malformed in ["ccm_short1", "ccm_overlong9", "ccm_bad_padding"] {
+    for malformed in ["ccm_short1", "ccm_overlong9"] {
         assert!(
             CCMMessage::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed)).is_none(),
             "{malformed} must be rejected"
         );
+    }
+
+    // G3 — a zero-padded reserved tail is not a malformed frame. Each of these
+    // used to be discarded whole: the properties response left the client stuck
+    // in `WaitingForStatus` past the 6 s timeout, forever, and the CCM meant our
+    // server never registered that client and purged its open handles six
+    // seconds later, mid-transfer.
+    for (name, accepted) in [
+        (
+            "properties_response_bad_padding",
+            FileServerProperties::decode_response(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "properties_response_bad_padding",
+            ))
+            .is_some(),
+        ),
+        (
+            "server_status_bad_padding",
+            FileServerStatus::decode(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "server_status_bad_padding",
+            ))
+            .is_some(),
+        ),
+        (
+            "ccm_bad_padding",
+            CCMMessage::decode(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "ccm_bad_padding",
+            ))
+            .is_some(),
+        ),
+    ] {
+        assert!(accepted, "{name} differs only in reserved bytes (G3)");
     }
 
     let props_v2 = FileServerPropertiesV2 {
@@ -1205,15 +1231,18 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         FSError::MalformedRequest.as_u8()
     );
 
+    // G3 — the CCM's reserved tail is ignored on receive. Dropping this client
+    // registered nothing and sent no error either way, so
+    // `cleanup_disconnected_clients` purged its open handles six seconds later.
     let mut ccm_server = IsoFileServer::new(IsoFileServerConfig::default());
-    let malformed_ccm = parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, "malformed_ccm_bad_tail");
-    let malformed_ccm_resp = ccm_server.handle_client_message(&Message::new(
+    let zero_padded_ccm = parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, "malformed_ccm_bad_tail");
+    let ccm_resp = ccm_server.handle_client_message(&Message::new(
         PGN_FILE_CLIENT_TO_SERVER,
-        malformed_ccm,
+        zero_padded_ccm,
         0x20,
     ));
-    assert!(malformed_ccm_resp.is_empty());
-    assert!(ccm_server.clients().is_empty());
+    assert!(ccm_resp.is_empty(), "a CCM is not answered with a frame");
+    assert!(ccm_server.clients().contains_key(&0x20));
 
     let mut strict_client = FileClient::new(FileClientConfig::default());
     let connect = strict_client.connect_to_server(0x10).unwrap();

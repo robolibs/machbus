@@ -226,26 +226,29 @@ impl FileServerProperties {
 
     /// Decode a C.1.5 response into `(tan, properties)`.
     #[must_use]
+    /// G3 — reserved bytes and undefined capability bits are ignored on
+    /// receive. Each of these used to reject the whole response, and
+    /// `handle_properties_response` returns before `state = Connected`, so a
+    /// server that zero-filled bytes 6-8, set an unknown B.7 bit, or reported a
+    /// B.6 count above 250 left the client in `WaitingForStatus` until the 6 s
+    /// timeout, forever. The B.5 forward-compatibility guarantee this decoder
+    /// implements one field up is void if the same response is discarded over a
+    /// bit in the next byte.
     pub fn decode_response(data: &[u8]) -> Option<(TAN, Self)> {
-        if data.len() < 5 || data.len() > 8 || data[5..].iter().any(|&b| b != 0xFF) {
+        if data.len() < 5 || data.len() > 8 {
             return None;
         }
         if data[0] != FSFunction::GetFileServerProperties.as_u8() {
             return None;
         }
-        if !fs_count_is_supported(data[3]) {
-            return None;
-        }
         let caps = data[4];
-        if caps & !(FS_CAPABILITY_MULTIPLE_VOLUMES | FS_CAPABILITY_REMOVABLE_VOLUMES) != 0 {
-            return None;
-        }
         Some((
             data[1],
             Self {
                 // B.5: any version is accepted and reported as-is.
                 version_number: data[2],
-                max_simultaneous_files: data[3],
+                // B.6 caps the count we can honour; clamp rather than reject.
+                max_simultaneous_files: data[3].min(FS_SUPPORTED_COUNT_MAX),
                 supports_multiple_volumes: caps & FS_CAPABILITY_MULTIPLE_VOLUMES != 0,
                 supports_removable_volumes: caps & FS_CAPABILITY_REMOVABLE_VOLUMES != 0,
             },
@@ -294,6 +297,15 @@ impl FileEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TANResponse {
     pub tan: TAN,
+    /// The request this answers. A cached TAN is only a *retransmission* if the
+    /// request is the same one; Annex C requires a response to carry the same
+    /// command byte as its request, and our own client walks 0..0xFE and wraps,
+    /// so a client issuing 255 requests inside the 10 s cache window — trivial
+    /// while enumerating a directory — reuses a live TAN. Replaying on the TAN
+    /// alone answered a new Write File with a stale Open File frame and never
+    /// performed the write; the client dropped the mismatched reply and hung
+    /// until timeout, with the bytes reported neither written nor failed.
+    pub request_data: Vec<u8>,
     pub response_data: Vec<u8>,
     pub timestamp_ms: u32,
 }
@@ -302,6 +314,7 @@ impl Default for TANResponse {
     fn default() -> Self {
         Self {
             tan: INVALID_TAN,
+            request_data: Vec::new(),
             response_data: Vec::new(),
             timestamp_ms: 0,
         }
@@ -363,23 +376,23 @@ impl FileServerStatus {
     }
 
     #[must_use]
+    /// G3 — the same reasoning as the properties response, on the message the
+    /// client's whole connection watchdog is fed from. A server that zero-pads
+    /// bytes 4-8, sets an undefined B.3 bit, or reports more than 250 open
+    /// files had *every* broadcast dropped, which is the 600 ms request death
+    /// this crate has already fixed once one layer up.
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 3 || data.len() > 8 || data[3..].iter().any(|&b| b != 0xFF) {
+        if data.len() < 3 || data.len() > 8 {
             return None;
         }
         if data[0] != FSFunction::FileServerStatus.as_u8() {
             return None;
         }
         let status = data[1];
-        if status & !(FS_STATUS_BUSY_READING | FS_STATUS_BUSY_WRITING) != 0
-            || !fs_count_is_supported(data[2])
-        {
-            return None;
-        }
         Some(Self {
             busy_reading: status & FS_STATUS_BUSY_READING != 0,
             busy_writing: status & FS_STATUS_BUSY_WRITING != 0,
-            number_of_open_files: data[2],
+            number_of_open_files: data[2].min(FS_SUPPORTED_COUNT_MAX),
         })
     }
 }
@@ -410,8 +423,12 @@ impl CCMMessage {
     }
 
     #[must_use]
+    /// G3 — bytes 3-8 are reserved and ignored. Rejecting a zero-padded CCM
+    /// meant our server never registered that client and sent it no error
+    /// either; six seconds later `cleanup_disconnected_clients` purged it and
+    /// discarded its open handles mid-transfer.
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 2 || data.len() > 8 || data[2..].iter().any(|&b| b != 0xFF) {
+        if data.len() < 2 || data.len() > 8 {
             return None;
         }
         if data[0] != CCM_FUNCTION_CODE {
@@ -675,10 +692,15 @@ mod tests {
             );
         }
 
-        // B.7 bits 2-7 are reserved and sent as zero.
-        let mut reserved = p.encode_response(0x07);
-        reserved[4] |= 0x04;
-        assert_eq!(FileServerProperties::decode_response(&reserved), None);
+        // G3 — B.7 bits 2-7 are unallocated: we send them as zero and ignore
+        // them on receive. Rejecting the response over one meant a server built
+        // against a later edition could never be connected to at all.
+        let mut undefined_capability = p.encode_response(0x07);
+        undefined_capability[4] |= 0x04;
+        assert_eq!(
+            FileServerProperties::decode_response(&undefined_capability),
+            Some((0x07, p))
+        );
     }
 
     #[test]
@@ -696,29 +718,49 @@ mod tests {
     }
 
     #[test]
-    fn classic_fixed_size_decoders_reject_short_overlong_and_bad_padding() {
+    fn classic_fixed_size_decoders_reject_short_and_overlong_payloads() {
         let props = FileServerProperties::default().encode_response(0x07);
         assert!(FileServerProperties::decode_response(&props[..4]).is_none());
         assert!(
             FileServerProperties::decode_response(&[props.as_slice(), &[0xFF]].concat()).is_none()
         );
-        let mut bad_props = props;
-        bad_props[5] = 0x00;
-        assert!(FileServerProperties::decode_response(&bad_props).is_none());
 
         let status = FileServerStatus::default().encode();
         assert!(FileServerStatus::decode(&status[..1]).is_none());
         assert!(FileServerStatus::decode(&[status.as_slice(), &[0xFF]].concat()).is_none());
-        let mut bad_status = status;
-        bad_status[3] = 0x00;
-        assert!(FileServerStatus::decode(&bad_status).is_none());
 
         let ccm = CCMMessage { version: 4 }.encode();
         assert!(CCMMessage::decode(&ccm[..1]).is_none());
         assert!(CCMMessage::decode(&[ccm.as_slice(), &[0xFF]].concat()).is_none());
-        let mut bad_ccm = ccm;
-        bad_ccm[2] = 0x00;
-        assert!(CCMMessage::decode(&bad_ccm).is_none());
+    }
+
+    /// G3 — reserved bytes, undefined flag bits and out-of-range counts are
+    /// ignored on receive, not grounds to discard the message. Each of these
+    /// used to return `None`: the properties response left the client stuck in
+    /// `WaitingForStatus` until the 6 s timeout, forever, and the status
+    /// broadcast is what feeds the connection watchdog.
+    #[test]
+    fn undefined_bits_and_reserved_bytes_do_not_discard_a_file_server_message() {
+        let mut props = FileServerProperties::default().encode_response(0x07);
+        props[5] = 0x00;
+        props[4] |= 0x80;
+        props[3] = 0xFF;
+        let (tan, decoded) = FileServerProperties::decode_response(&props).expect("G3: accepted");
+        assert_eq!(tan, 0x07);
+        assert!(decoded.supports_removable_volumes);
+        assert_eq!(
+            decoded.max_simultaneous_files, FS_SUPPORTED_COUNT_MAX,
+            "B.6 caps what we can honour; clamp rather than reject"
+        );
+
+        let mut status = FileServerStatus::default().encode();
+        status[3] = 0x00;
+        status[1] |= 0x80;
+        assert!(FileServerStatus::decode(&status).is_some());
+
+        let mut ccm = CCMMessage { version: 4 }.encode();
+        ccm[2] = 0x00;
+        assert_eq!(CCMMessage::decode(&ccm), Some(CCMMessage { version: 4 }));
     }
 
     #[test]
@@ -811,6 +853,7 @@ mod tests {
     fn tan_response_expiry() {
         let r = TANResponse {
             tan: 1,
+            request_data: vec![],
             response_data: vec![],
             timestamp_ms: 100,
         };

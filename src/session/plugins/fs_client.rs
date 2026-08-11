@@ -259,13 +259,6 @@ fn wire_events(client: &mut FileClient, sink: &Rc<RefCell<Vec<FsEvent>>>) {
             });
         });
     let s = sink.clone();
-    client.on_status_response.subscribe(move |(tan, result)| {
-        s.borrow_mut().push(FsEvent::StatusResponse {
-            tan: *tan,
-            result: *result,
-        });
-    });
-    let s = sink.clone();
     client.on_close_response.subscribe(move |(tan, result)| {
         s.borrow_mut().push(FsEvent::CloseResponse {
             tan: *tan,

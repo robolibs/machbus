@@ -624,4 +624,47 @@ mod tests {
         c.update(700);
         assert!(!c.pending_requests().contains_key(&tan));
     }
+
+    /// E2 — the C.1.2 status broadcast carries no TAN: its byte 2 is the B.3
+    /// bitfield. Demultiplexing on byte 2 as a TAN made busy-reading (1),
+    /// busy-writing (2) and both (3) alias the first three TANs a client
+    /// issues, and a busy server rebroadcasts every 200 ms with the same
+    /// colliding byte — so every broadcast was dropped for the whole busy
+    /// period and the request died at 600 ms. The test above escapes it only
+    /// because busy-writing (2) does not collide with its pending TAN.
+    #[test]
+    fn a_busy_reading_broadcast_does_not_collide_with_the_matching_tan() {
+        let mut c = FileClient::new(FileClientConfig::default().with_request_timeout(600));
+        force_connected(&mut c);
+
+        // Drive the TAN allocator to 1, the value busy-reading takes on the
+        // wire. TANs start at 0 and the connect handshake burns one, so this is
+        // the ordinary state of a client a moment after connecting.
+        let tan = loop {
+            let request = c.open_file("slow.bin", OpenFlags::Read.bit()).unwrap();
+            if request.data[1] == 1 {
+                break request.data[1];
+            }
+        };
+        assert!(c.pending_requests().contains_key(&tan));
+
+        let busy_reading = FileServerStatus {
+            busy_reading: true,
+            busy_writing: false,
+            number_of_open_files: 1,
+        };
+        for _ in 0..5 {
+            c.update(400);
+            c.handle_server_response(&server_msg(busy_reading.encode().to_vec(), 0x80));
+        }
+        assert_eq!(
+            c.server_status().map(|s| s.busy_reading),
+            Some(true),
+            "the broadcast must reach the status cache, not the TAN table"
+        );
+        assert!(
+            c.pending_requests().contains_key(&tan),
+            "a busy server must not have its client give up on the request"
+        );
+    }
 }

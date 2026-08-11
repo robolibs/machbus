@@ -26,6 +26,27 @@ use crate::net::types::{Address, Pgn};
 const READ_FILE_REQUEST_LEN: usize = 8;
 const SEEK_FILE_RESPONSE_LEN: usize = 8;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
+
+/// Walk `count` B.14 directory entries and return the byte offset just past the
+/// last one, or `None` if the payload does not hold exactly that many.
+///
+/// Entry layout: one length byte, that many name bytes, one attribute byte,
+/// two date bytes, two time bytes and four size bytes — so 11 bytes plus the
+/// name, and never fewer than 12 in practice.
+fn directory_entries_end(payload: &[u8], count: usize) -> Option<usize> {
+    let mut offset = 0usize;
+    for _ in 0..count {
+        let name_len = usize::from(*payload.get(offset)?);
+        if name_len == 0 {
+            return None;
+        }
+        offset = offset.checked_add(1 + name_len + 9)?;
+        if offset > payload.len() {
+            return None;
+        }
+    }
+    Some(offset)
+}
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;
 const VOLUME_MODE_PREPARE_REMOVAL: u8 = 0x02;
@@ -227,8 +248,6 @@ pub struct FileClient {
     /// `(tan, Ok(properties))` — fired when a
     /// `GetFileServerProperties` response arrives.
     pub on_properties_response: Event<(TAN, Result<FileServerProperties, FSError>)>,
-    /// `(tan, Ok(status))` — fired when a `FileServerStatus` response arrives.
-    pub on_status_response: Event<(TAN, Result<FileServerStatus, FSError>)>,
     pub on_close_response: Event<(TAN, Result<FileHandle, FSError>)>,
     /// `(tan, Ok(bytes_read_into))` — payload owned by the event,
     /// callers should clone if they need it past the dispatch frame.
@@ -274,7 +293,6 @@ impl FileClient {
             on_file_closed: Event::new(),
             on_open_response: Event::new(),
             on_properties_response: Event::new(),
-            on_status_response: Event::new(),
             on_close_response: Event::new(),
             on_read_response: Event::new(),
             on_write_response: Event::new(),
@@ -434,18 +452,6 @@ impl FileClient {
             return Err(Error::not_connected());
         }
         Ok(self.build_fixed_server_request(FSFunction::GetFileServerProperties))
-    }
-
-    pub fn request_server_status(&mut self) -> FSClientOutbound {
-        self.build_fixed_server_request(FSFunction::FileServerStatus)
-    }
-
-    /// Build a `FileServerStatus` request only once the File Client is
-    /// connected. Invalid local state does not allocate a TAN.
-    pub fn try_request_server_status(&mut self) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        self.ensure_server_address_for_request()?;
-        Ok(self.build_fixed_server_request(FSFunction::FileServerStatus))
     }
 
     fn build_fixed_server_request(&mut self, function: FSFunction) -> FSClientOutbound {
@@ -973,10 +979,18 @@ impl FileClient {
         if msg.data.len() < 2 {
             return;
         }
-        let _function = msg.data[0];
+        let function = msg.data[0];
         let tan = msg.data[1];
 
-        if tan == 0xFF {
+        // The C.1.2 status broadcast has no TAN: its byte 2 is the B.3 status
+        // bitfield. Demultiplexing on byte 2 as a TAN made status values 1, 2
+        // and 3 (busy reading / writing / both) alias the first three TANs a
+        // client issues after connecting, and a busy server rebroadcasts every
+        // 200 ms with the same colliding byte — so *every* broadcast was
+        // dropped for the whole busy period and the outstanding request died at
+        // 600 ms. Dispatch on the command byte first; a server never answers a
+        // request with 0x00.
+        if function == FSFunction::FileServerStatus.as_u8() || tan == 0xFF {
             if self.handle_status_broadcast(&msg.data) {
                 self.server_status_timer_ms = 0;
             }
@@ -990,6 +1004,12 @@ impl FileClient {
             return;
         };
         if msg.data[0] != pending.function.as_u8() {
+            // Belt and braces: a frame whose command byte does not match the
+            // request this TAN belongs to is not that response, so give the
+            // broadcast handler a chance at it rather than dropping it.
+            if self.handle_status_broadcast(&msg.data) {
+                self.server_status_timer_ms = 0;
+            }
             return;
         }
         if pending.function == FSFunction::VolumeStatus {
@@ -1004,8 +1024,13 @@ impl FileClient {
         };
         self.server_status_timer_ms = 0;
         match pending.function {
+            // A client never requests the status: C.1.2 is a server broadcast
+            // and the 0x00 byte from a client is a CCM (C.1.3). The frame this
+            // arm used to build was read by a conformant server as a CCM with a
+            // rolling 0..0xFE version number, and no server in or out of this
+            // crate answers it, so the request sat until timeout.
+            FSFunction::FileServerStatus => {}
             FSFunction::GetFileServerProperties => self.handle_properties_response(tan, &msg.data),
-            FSFunction::FileServerStatus => self.handle_status_response(tan, &msg.data),
             FSFunction::OpenFile => {
                 self.handle_open_response(tan, &pending.request_data, &msg.data)
             }
@@ -1118,33 +1143,6 @@ impl FileClient {
         if self.state == ClientState::WaitingForStatus {
             self.state = ClientState::Connected;
             self.on_connected.emit(&());
-        }
-    }
-
-    fn handle_status_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 5 {
-            self.on_status_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_status_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_status_response.emit(&(tan, Err(error)));
-            return;
-        }
-        if let Some(status) = FileServerStatus::decode(&response[3..]) {
-            self.server_status = Some(status);
-            self.on_status_response.emit(&(tan, Ok(status)));
-        } else {
-            self.on_status_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
         }
     }
 
@@ -1279,7 +1277,28 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let end = READ_FILE_RESPONSE_HEADER_LEN + count;
+        // C.3.4: on a directory handle the Count field is an *entry* count, not
+        // a byte count — which is what our own server encodes and its own test
+        // asserts. Reading it as bytes meant `5 + count` could never equal the
+        // frame length for any count ≥ 1, since every B.14 entry is at least 11
+        // bytes: enumerating a volume failed totally, with `MalformedRequest`,
+        // and a TC walking the stick for `\TASKDATA\TASKDATA.XML` reported a
+        // corrupt file server. Nothing pinned the client side.
+        let opened_as_directory = self
+            .open_files
+            .get(&handle)
+            .is_some_and(|info| get_access_mode(info.flags) == OpenFlags::OpenDir.bit());
+        let (end, advance) = if opened_as_directory {
+            let Some(end) = directory_entries_end(&response[READ_FILE_RESPONSE_HEADER_LEN..], count)
+            else {
+                self.on_read_response
+                    .emit(&(tan, Err(FSError::MalformedRequest)));
+                return;
+            };
+            (READ_FILE_RESPONSE_HEADER_LEN + end, count as u32)
+        } else {
+            (READ_FILE_RESPONSE_HEADER_LEN + count, count as u32)
+        };
         if !fs_payload_len_is_canonical(response, end) {
             self.on_read_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
@@ -1287,7 +1306,7 @@ impl FileClient {
         }
         let data = response[READ_FILE_RESPONSE_HEADER_LEN..end].to_vec();
         if let Some(info) = self.open_files.get_mut(&handle) {
-            info.position = info.position.saturating_add(data.len() as u32);
+            info.position = info.position.saturating_add(advance);
         }
         self.on_read_response.emit(&(tan, Ok(data)));
     }
@@ -1378,11 +1397,13 @@ impl FileClient {
     /// The response used to end after a one-byte length at byte 4, so the two
     /// space fields were read out of the path text.
     fn handle_get_directory_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 13 {
-            self.on_current_directory_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
+        // C.2.2.3's Total / Free / Path fields exist only in a Success
+        // response; an error response is the 8-byte error frame, which the
+        // crate's own server sends for this command. Requiring 13 bytes first
+        // turned every one of them into `MalformedRequest`, so pulling the USB
+        // stick reported a corrupt frame rather than `MediaNotPresent` — one of
+        // the three codes `FSError::is_fatal` recognises — and the fatal-media
+        // path never fired.
         let error = match decode_response_error(response) {
             Ok(error) => error,
             Err(error) => {
@@ -1390,14 +1411,19 @@ impl FileClient {
                 return;
             }
         };
-        self.volume_total_blocks =
-            u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
-        self.volume_free_blocks =
-            u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
         if error != FSError::Success {
             self.on_current_directory_response.emit(&(tan, Err(error)));
             return;
         }
+        if response.len() < 13 {
+            self.on_current_directory_response
+                .emit(&(tan, Err(FSError::MalformedRequest)));
+            return;
+        }
+        self.volume_total_blocks =
+            u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
+        self.volume_free_blocks =
+            u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
         let path_len = u16::from_le_bytes([response[11], response[12]]) as usize;
         let end = 13 + path_len;
         if !fs_payload_len_is_canonical(response, end) {

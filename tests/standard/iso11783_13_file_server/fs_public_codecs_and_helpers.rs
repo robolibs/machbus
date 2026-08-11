@@ -416,40 +416,44 @@ fn file_server_volume_state_decoders_reject_noncanonical_bytes() {
 }
 
 #[test]
-fn file_server_ccm_requires_canonical_keepalive_payload_before_connection() {
+fn file_server_ccm_connects_a_client_despite_its_reserved_bytes() {
     let mut server = FileServer::new(FileServerConfig::default());
 
-    // C.1.3: command byte 0, version, six reserved 0xFF. Byte 3 is not 0xFF.
-    let malformed_ccm = vec![0x00, 0x04, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    // G3 — C.1.3 bytes 3-8 are reserved and ignored on receive. Rejecting a
+    // zero-padded CCM registered nothing and sent no error either way, so
+    // `cleanup_disconnected_clients` purged this client's open handles six
+    // seconds later, mid-transfer.
+    let zero_padded_ccm = vec![0x00, 0x04, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         server
-            .handle_client_message(&fs_request(malformed_ccm, 0x42))
+            .handle_client_message(&fs_request(zero_padded_ccm, 0x42))
             .is_empty(),
-        "malformed CCM keepalive frames must not get an error response"
+        "a CCM is never answered with a frame"
     );
     assert!(
-        server.clients().is_empty(),
-        "malformed CCM keepalive frames must not establish a client connection"
+        server.clients().contains_key(&0x42),
+        "a CCM that differs only in reserved bytes still connects its client"
     );
 
     // 0xFF is no longer a command byte at all, so it is not a CCM and does not
     // connect anyone. The CCM has no TAN field for a reserved TAN to sit in, so
     // this is just a request with an unusable TAN and gets B.9 code 46.
-    let reserved_tan = server.handle_client_message(&fs_request(vec![0xFF, INVALID_TAN], 0x42));
+    let mut fresh = FileServer::new(FileServerConfig::default());
+    let reserved_tan = fresh.handle_client_message(&fs_request(vec![0xFF, INVALID_TAN], 0x42));
     assert_eq!(reserved_tan[0].data[2], FSError::TANError.as_u8());
     assert!(
-        server.clients().is_empty(),
+        fresh.clients().is_empty(),
         "an undefined command must not create a connection"
     );
 
     let valid_ccm = vec![0x00, 0x04, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
-        server
+        fresh
             .handle_client_message(&fs_request(valid_ccm, 0x42))
             .is_empty()
     );
-    assert_eq!(server.clients().len(), 1);
-    assert_eq!(server.clients().get(&0x42).unwrap().client_address, 0x42);
+    assert_eq!(fresh.clients().len(), 1);
+    assert_eq!(fresh.clients().get(&0x42).unwrap().client_address, 0x42);
 }
 
 #[test]
@@ -511,43 +515,56 @@ fn file_server_properties_and_paths_reject_malformed_inputs() {
         Some((0x07, properties))
     );
 
-    // B.7 defines bits 0 and 1 only; 2-7 are sent as zero.
-    let mut bad_reserved_caps = properties.encode_response(0x07);
-    bad_reserved_caps[4] |= 0xE0;
+    // G3 — B.7 bits 2-7 are unallocated, byte 8 is reserved, and a B.6 count
+    // above the supported maximum is clamped. Each of these used to discard the
+    // response, and the client returns before `state = Connected`, so the FS
+    // connection never came up against a server built to a later edition.
+    let mut undefined_caps = properties.encode_response(0x07);
+    undefined_caps[4] |= 0xE0;
     assert_eq!(
-        FileServerProperties::decode_response(&bad_reserved_caps),
-        None
+        FileServerProperties::decode_response(&undefined_caps),
+        Some((0x07, properties))
     );
 
-    let mut bad_tail = properties.encode_response(0x07);
-    bad_tail[7] = 0;
-    assert_eq!(FileServerProperties::decode_response(&bad_tail), None);
-    let mut bad_count = properties.encode_response(0x07);
-    bad_count[3] = FS_SUPPORTED_COUNT_MAX + 1;
-    assert_eq!(FileServerProperties::decode_response(&bad_count), None);
+    let mut zero_padded_tail = properties.encode_response(0x07);
+    zero_padded_tail[7] = 0;
+    assert_eq!(
+        FileServerProperties::decode_response(&zero_padded_tail),
+        Some((0x07, properties))
+    );
+    let mut oversized_count = properties.encode_response(0x07);
+    oversized_count[3] = FS_SUPPORTED_COUNT_MAX + 1;
+    assert_eq!(
+        FileServerProperties::decode_response(&oversized_count)
+            .map(|(_, p)| p.max_simultaneous_files),
+        Some(FS_SUPPORTED_COUNT_MAX)
+    );
     assert_eq!(VolumeState::try_from_u8(4), None);
 
-    let mut bad_status = machbus::isobus::fs::FileServerStatus {
+    let mut undefined_status_bits = machbus::isobus::fs::FileServerStatus {
         busy_reading: true,
         busy_writing: false,
         number_of_open_files: 1,
     }
     .encode();
-    // B.3 bits 2-7 are reserved and sent as zero.
-    bad_status[1] |= 0xFC;
+    undefined_status_bits[1] |= 0xFC;
     assert_eq!(
-        machbus::isobus::fs::FileServerStatus::decode(&bad_status),
-        None
+        machbus::isobus::fs::FileServerStatus::decode(&undefined_status_bits)
+            .map(|s| s.busy_reading),
+        Some(true)
     );
-    let mut bad_status_count = FileServerStatus {
+    let mut oversized_status_count = FileServerStatus {
         busy_reading: false,
         busy_writing: true,
         number_of_open_files: FS_SUPPORTED_COUNT_MAX,
     }
     .encode();
-    assert!(FileServerStatus::decode(&bad_status_count).is_some());
-    bad_status_count[2] = FS_SUPPORTED_COUNT_MAX + 1;
-    assert_eq!(FileServerStatus::decode(&bad_status_count), None);
+    assert!(FileServerStatus::decode(&oversized_status_count).is_some());
+    oversized_status_count[2] = FS_SUPPORTED_COUNT_MAX + 1;
+    assert_eq!(
+        FileServerStatus::decode(&oversized_status_count).map(|s| s.number_of_open_files),
+        Some(FS_SUPPORTED_COUNT_MAX)
+    );
 
     assert!(is_valid_fs_path("\\TASKDATA\\XML", true, false));
     assert!(!is_valid_fs_path("../TASKDATA", true, false));
@@ -573,7 +590,11 @@ fn file_server_property_count_ranges_are_validated_before_advertisement_or_conne
 
     let mut oversized = FileServerProperties::default().encode_response(0x07);
     oversized[3] = FS_SUPPORTED_COUNT_MAX + 1;
-    assert_eq!(FileServerProperties::decode_response(&oversized), None);
+    assert_eq!(
+        FileServerProperties::decode_response(&oversized).map(|(_, p)| p.max_simultaneous_files),
+        Some(FS_SUPPORTED_COUNT_MAX),
+        "G3: clamp a count we cannot honour rather than discarding the response"
+    );
 
     // B.5: "shall not reject communication or the request based on the
     // reported Version Number". This used to demand version 1 and so could
@@ -596,10 +617,13 @@ fn file_server_property_count_ranges_are_validated_before_advertisement_or_conne
         0x80,
     ));
     assert!(
-        !client.is_connected(),
-        "invalid advertised property counts must not complete the FS client handshake"
+        client.is_connected(),
+        "an out-of-range advertised count is clamped, not a reason to never connect"
     );
-    assert!(client.server_properties().is_none());
+    assert_eq!(
+        client.server_properties().map(|p| p.max_simultaneous_files),
+        Some(FS_SUPPORTED_COUNT_MAX)
+    );
 
     let mut v2 = FileServerPropertiesV2::default().encode();
     v2[2] = FS_SUPPORTED_COUNT_MAX + 1;
@@ -938,7 +962,7 @@ fn file_server_replays_same_tan_without_reexecuting_side_effects() {
 }
 
 #[test]
-fn file_server_replays_cached_tan_even_when_reused_for_different_operation() {
+fn file_server_executes_a_reused_tan_as_a_new_transaction() {
     let mut server = FileServer::new(FileServerConfig {
         tan_cache_timeout_ms: 10,
         ..FileServerConfig::default()
@@ -963,40 +987,42 @@ fn file_server_replays_cached_tan_even_when_reused_for_different_operation() {
         0xFF,
         0xFF,
     ];
-    let replay = server.handle_client_message(&fs_request(conflicting_close_same_tan, 0x42));
-    assert_eq!(
-        replay[0].data, open[0].data,
-        "a live TAN cache entry must be replayed instead of executing a different operation"
-    );
-    assert_eq!(
-        server.open_files().len(),
-        1,
-        "same-TAN operation mismatch must not close or mutate the cached open handle"
-    );
-
-    server.update(11);
-    let close_after_expiry = server.handle_client_message(&fs_request(
-        vec![
-            FSFunction::CloseFile.as_u8(),
-            0x24,
-            handle,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-        ],
-        0x42,
-    ));
+    // E5 — Annex C: "A response carries the same byte as its request." A TAN
+    // that has wrapped round to a *different* request is a new transaction, not
+    // a retransmission. Replaying the Open File frame here answered the Close
+    // with the wrong command byte, so the client dropped the reply and hung
+    // until timeout while the operation was never performed.
+    let executed = server.handle_client_message(&fs_request(conflicting_close_same_tan, 0x42));
     assert_response(
-        &close_after_expiry[0].data,
+        &executed[0].data,
         FSFunction::CloseFile,
         0x24,
         FSError::Success,
     );
     assert!(
         server.open_files().is_empty(),
-        "after the TAN cache expires, the new operation may execute normally"
+        "a reused TAN carrying a different request must execute it"
+    );
+
+    // A genuine retransmission — the same request, byte for byte — is still
+    // replayed idempotently from the cache.
+    let reopen = server.handle_client_message(&fs_request(
+        open_request(0x25, "cached.txt", OpenFlags::Read.bit()),
+        0x42,
+    ));
+    assert_eq!(server.open_files().len(), 1);
+    let retransmission = server.handle_client_message(&fs_request(
+        open_request(0x25, "cached.txt", OpenFlags::Read.bit()),
+        0x42,
+    ));
+    assert_eq!(
+        retransmission[0].data, reopen[0].data,
+        "an identical request on a live TAN is a retransmission"
+    );
+    assert_eq!(
+        server.open_files().len(),
+        1,
+        "a retransmission must not open a second handle"
     );
 }
 

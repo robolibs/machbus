@@ -103,12 +103,17 @@ fn file_client_transaction_numbers_wrap_without_using_reserved_tan() {
     let mut client = FileClient::new(FileClientConfig::default());
     connect_file_client(&mut client, 0x80);
 
+    // C.2.2.3 Get Current Directory — a request that exists. This used to walk
+    // the TAN space with a phantom "status request" whose 0x00 command byte a
+    // conformant server reads as a CCM.
     let tans: Vec<u8> = (0..260)
         .map(|_| {
-            let outbound = client.request_server_status();
+            let outbound = client
+                .try_get_current_directory()
+                .expect("a connected client can ask where it is");
             assert_eq!(outbound.pgn, PGN_FILE_CLIENT_TO_SERVER);
             assert_eq!(outbound.dest, Some(0x80));
-            assert_eq!(outbound.data[0], FSFunction::FileServerStatus.as_u8());
+            assert_eq!(outbound.data[0], FSFunction::GetCurrentDirectory.as_u8());
             outbound.data[1]
         })
         .collect();
@@ -127,18 +132,21 @@ fn file_client_transaction_numbers_wrap_without_using_reserved_tan() {
 }
 
 #[test]
-fn file_client_explicit_status_and_property_requests_reject_disconnected_state_without_tan() {
-    let mut client = FileClient::new(FileClientConfig::default());
+fn a_client_never_emits_the_status_command_byte_except_as_a_ccm() {
+    let mut client = FileClient::new(
+        FileClientConfig {
+            server_status_timeout_ms: 1_000_000,
+            ..FileClientConfig::default()
+        },
+    );
 
-    for err in [
-        client.try_request_server_properties().unwrap_err(),
-        client.try_request_server_status().unwrap_err(),
-    ] {
-        assert!(
-            matches!(err.code, ErrorCode::InvalidState | ErrorCode::NotConnected),
-            "disconnected explicit server requests must fail before wire emission"
-        );
-    }
+    assert!(
+        matches!(
+            client.try_request_server_properties().unwrap_err().code,
+            ErrorCode::InvalidState | ErrorCode::NotConnected
+        ),
+        "disconnected explicit server requests must fail before wire emission"
+    );
 
     let connect = client
         .connect_to_server(0x80)
@@ -157,15 +165,35 @@ fn file_client_explicit_status_and_property_requests_reject_disconnected_state_w
     ));
     assert!(client.is_connected());
 
-    let status = client
-        .try_request_server_status()
-        .expect("connected client can explicitly request FileServerStatus");
-    assert_eq!(status.dest, Some(0x80));
-    assert_eq!(status.data[0], FSFunction::FileServerStatus.as_u8());
-    assert_eq!(
-        status.data[1], 1,
-        "first connected refresh after handshake should receive the next TAN"
-    );
+    // C.1.3: the only client-to-server frame with command byte 0x00 is the
+    // Client Connection Maintenance message, whose byte 2 is a *version*. The
+    // deleted `request_server_status` emitted `[0x00, TAN, FF x6]`, which a
+    // conformant server decodes as a CCM announcing a rolling 0..0xFE version;
+    // C.1.2 is a server broadcast and there is no client status request at all.
+    let mut emitted: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..8 {
+        emitted.push(
+            client
+                .try_get_current_directory()
+                .expect("connected")
+                .data
+                .clone(),
+        );
+        emitted.extend(client.update(2_500).into_iter().map(|out| out.data));
+    }
+    let ccms = emitted
+        .iter()
+        .filter(|frame| frame[0] == FSFunction::FileServerStatus.as_u8())
+        .count();
+    assert!(ccms > 0, "the client keepalive must have fired");
+    for frame in &emitted {
+        if frame[0] == FSFunction::FileServerStatus.as_u8() {
+            assert_eq!(
+                frame[1], FS_VERSION_NUMBER,
+                "a 0x00 command byte from a client is a CCM, and byte 2 is its version"
+            );
+        }
+    }
 }
 
 #[test]
@@ -327,7 +355,7 @@ fn file_client_request_timeout_keeps_boundary_and_drops_late_successes() {
 }
 
 #[test]
-fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_update() {
+fn a_status_broadcast_with_undefined_bits_still_feeds_the_connection_watchdog() {
     let mut client = FileClient::new(
         FileClientConfig::default()
             .with_ccm_interval(10_000)
@@ -336,42 +364,46 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     connect_file_client(&mut client, 0x80);
     assert!(client.server_status().is_none());
 
-    let mut malformed_busy = FileServerStatus {
+    // G3 — undefined B.3 bits, a zero-padded reserved tail and an out-of-range
+    // open-file count are all ignored on receive. Each used to discard the whole
+    // broadcast, and this message is what feeds the connection watchdog: a
+    // server that differed in any of them was declared gone at 6 s.
+    let mut undefined_busy_bit = FileServerStatus {
         busy_reading: false,
         busy_writing: true,
         number_of_open_files: 2,
     }
     .encode()
     .to_vec();
-    // B.3 bits 2-7 are reserved and sent as zero.
-    malformed_busy[1] = 0x04;
+    undefined_busy_bit[1] |= 0x04;
     client.update(500);
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
-        malformed_busy,
+        undefined_busy_bit,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "malformed busy bits must not update the File Server status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.busy_writing),
+        Some(true),
+        "bits 3-8 of B.3 say nothing about the two that are defined"
     );
 
-    let mut malformed_tail = FileServerStatus {
+    let mut zero_padded_tail = FileServerStatus {
         busy_reading: false,
         busy_writing: false,
         number_of_open_files: 1,
     }
     .encode()
     .to_vec();
-    malformed_tail[3] = 0x00;
+    zero_padded_tail[3] = 0x00;
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
-        malformed_tail,
+        zero_padded_tail,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "non-canonical reserved tail bytes must not update the status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.number_of_open_files),
+        Some(1)
     );
 
     let out_of_range_open_count = FileServerStatus {
@@ -386,15 +418,16 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
         out_of_range_open_count,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "out-of-range open-file counts must not update the status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.number_of_open_files),
+        Some(250),
+        "B.6 caps what we can honour; clamp rather than discard"
     );
 
     client.update(5_500);
     assert!(
-        !client.is_connected(),
-        "malformed status broadcasts must not refresh the server-status timeout"
+        client.is_connected(),
+        "the broadcasts were understood, so the server-status timeout is fed"
     );
 
     let mut client = FileClient::new(
@@ -425,6 +458,54 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
         client.is_connected(),
         "valid status broadcasts should refresh the server-status timeout"
     );
+}
+
+/// E6 — the C.2.2.3 Total / Free / Path fields exist only in a Success
+/// response; an error response is the 8-byte error frame the crate's own server
+/// sends for this command. Requiring 13 bytes before reading the error byte
+/// turned every one of them into `MalformedRequest`, so pulling the USB stick
+/// reported a corrupt frame instead of `MediaNotPresent` — one of the three
+/// codes `FSError::is_fatal` recognises — and fatal-media handling never fired.
+#[test]
+fn a_short_error_response_to_getcwd_reports_the_real_error_code() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    for code in [FSError::MediaNotPresent, FSError::NotSupported] {
+        let mut client = FileClient::new(FileClientConfig::default());
+        connect_file_client(&mut client, 0x80);
+
+        let seen: Rc<RefCell<Vec<FSError>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        client
+            .on_current_directory_response
+            .subscribe(move |(_, result)| {
+                if let Err(error) = result {
+                    log.borrow_mut().push(*error);
+                }
+            });
+
+        let request = client.get_current_directory().unwrap();
+        let tan = request.data[1];
+        let mut error_frame = vec![FSFunction::GetCurrentDirectory.as_u8(), tan, code.as_u8()];
+        error_frame.resize(8, 0xFF);
+        client.handle_server_response(&Message::new(
+            PGN_FILE_SERVER_TO_CLIENT,
+            error_frame,
+            0x80,
+        ));
+
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[code],
+            "an error response must reach the application as its B.9 code"
+        );
+        assert_eq!(
+            client.current_directory(),
+            "\\",
+            "an error response must not move the cached directory"
+        );
+    }
 }
 
 #[test]
@@ -1763,3 +1844,76 @@ fn file_server_enforces_advertised_open_file_capacity_before_creation() {
     );
 }
 
+
+/// E1 — C.3.4's Count field is an *entry* count on a directory handle. The
+/// client read it as a byte count, and since every B.14 entry is at least 11
+/// bytes, `5 + count` could never equal the frame length for any count ≥ 1:
+/// enumerating a volume failed totally with `MalformedRequest`, and a TC
+/// walking the stick for `\TASKDATA\TASKDATA.XML` reported a corrupt file
+/// server. The two halves of the crate disagreed and nothing pinned the client
+/// side, so the suite stayed green — this drives both against each other.
+#[test]
+fn a_client_and_server_agree_on_the_directory_read_count() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut server = FileServer::new(FileServerConfig::default());
+    server.add_directory("jobs").unwrap();
+    server.add_file("visible.txt", b"hello".to_vec(), 0).unwrap();
+
+    let mut client = FileClient::new(FileClientConfig::default());
+    connect_file_client(&mut client, 0x80);
+
+    type ReadLog = Rc<RefCell<Vec<Result<Vec<u8>, FSError>>>>;
+    let reads: ReadLog = Rc::new(RefCell::new(Vec::new()));
+    let log = reads.clone();
+    client
+        .on_read_response
+        .subscribe(move |(_, result)| log.borrow_mut().push(result.clone()));
+
+    // Open the root as a directory, through the real server.
+    let open = client
+        .try_open_file("\\", OpenFlags::OpenDir.bit())
+        .expect("connected");
+    let open_response = server.handle_client_message(&fs_request(open.data.clone(), 0x42));
+    client.handle_server_response(&Message::new(
+        PGN_FILE_SERVER_TO_CLIENT,
+        open_response[0].data.clone(),
+        0x80,
+    ));
+    let handle = client
+        .open_files()
+        .keys()
+        .copied()
+        .next()
+        .expect("the server granted a directory handle");
+
+    let read = client.try_read_file(handle, 2).expect("connected");
+    let read_response = server.handle_client_message(&fs_request(read.data.clone(), 0x42));
+    let encoded = read_response[0].data.clone();
+    assert_eq!(
+        u16::from_le_bytes([encoded[3], encoded[4]]) as usize,
+        2,
+        "the server encodes Count as an entry count"
+    );
+    assert!(
+        encoded.len() > 5 + 2,
+        "two B.14 entries are far longer than two bytes"
+    );
+    client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, encoded, 0x80));
+
+    let entries = reads.borrow();
+    let payload = entries
+        .last()
+        .expect("a read response arrived")
+        .as_ref()
+        .expect("the directory listing must not be MalformedRequest");
+    let text = String::from_utf8_lossy(payload);
+    assert!(text.contains("visible.txt"), "got {text:?}");
+    assert!(text.contains("jobs"), "got {text:?}");
+    assert_eq!(
+        client.open_files().get(&handle).map(|info| info.position),
+        Some(2),
+        "a directory handle's position advances by entries, not encoded bytes"
+    );
+}

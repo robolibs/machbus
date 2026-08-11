@@ -625,10 +625,18 @@ mod tests {
     #[test]
     fn malformed_ccm_does_not_connect_client() {
         let mut s = FileServer::new(FileServerConfig::default());
-        let bad_ccm = vec![CCM_FUNCTION_CODE, 0x22, 0x00];
-        let out = s.handle_client_message(&req_msg(bad_ccm, 0x42));
+        let too_short = vec![CCM_FUNCTION_CODE];
+        let out = s.handle_client_message(&req_msg(too_short, 0x42));
         assert!(out.is_empty());
         assert!(!s.clients().contains_key(&0x42));
+
+        // G3 — bytes 3-8 are reserved and ignored. A zero-padded CCM used to be
+        // dropped with no error frame either way, so the client was never
+        // registered and `cleanup_disconnected_clients` purged its open handles
+        // six seconds later, mid-transfer.
+        let zero_padded = vec![CCM_FUNCTION_CODE, 0x22, 0x00];
+        s.handle_client_message(&req_msg(zero_padded, 0x43));
+        assert!(s.clients().contains_key(&0x43));
     }
 
     /// C.3.2.2 — a directory is created through Open File with the directory

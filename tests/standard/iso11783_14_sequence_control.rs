@@ -1,7 +1,7 @@
 use machbus::isobus::sc::{
-    SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_MIN_SPACING_MS,
-    SCClient, SCClientConfig, SCClientFuncError, SCClientState, SCMaster, SCMasterConfig,
-    SCMasterState, SCSequenceState, SCState, SequenceStep,
+    SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_IDLE_RATE_MS,
+    SC_STATUS_MIN_SPACING_MS, SCClient, SCClientConfig, SCClientFuncError, SCClientState, SCMaster,
+    SCMasterConfig, SCMasterState, SCSequenceState, SCState, SequenceStep,
 };
 use machbus::net::ErrorCode;
 use machbus::net::constants::{BROADCAST_ADDRESS, NULL_ADDRESS};
@@ -475,12 +475,19 @@ fn sequence_control_master_halts_when_an_acknowledged_client_goes_silent() {
     assert_eq!(halted[3], SCSequenceState::Abort.as_u8());
 }
 
-/// G3 — ISO 11783-14 §4.4.7.3: the master returns to Ready once every enabled
-/// SCC has confirmed the abort. `SCState::Error` was a terminal sink, so an
-/// aborted master could never run another sequence.
+/// §4.4.7.3 — the master returns to Ready once every enabled SCC has confirmed
+/// the abort. `SCState::Error` was a terminal sink, so an aborted master could
+/// never run another sequence.
+///
+/// D2 — confirmation is the *trailing* edge. This test used to assert the
+/// leading one: it credited any Abort status, including the very frame that had
+/// driven the master into Abort a call earlier. The master then flipped
+/// Error → Ready → Error once per inbound status at the client's 5 Hz cadence,
+/// and because rearming resets the step index, a second healthy SCC answering
+/// one of the Ready frames re-dispatched step 1 to the machine over and over.
 #[test]
 fn sequence_control_master_returns_to_ready_after_every_client_confirms_the_abort() {
-    let mut master = SCMaster::new(SCMasterConfig::default().with_required_client_count(2));
+    let mut master = SCMaster::new(SCMasterConfig::default());
     master.add_step(sc_step(7)).unwrap();
     master.add_step(sc_step(8)).unwrap();
     master.start().unwrap();
@@ -495,24 +502,31 @@ fn sequence_control_master_returns_to_ready_after_every_client_confirms_the_abor
     master.abort().unwrap();
     assert!(master.is(SCState::Error));
 
-    // One confirmation is not enough while a second client is enabled.
-    master
-        .try_handle_client_status(&client_status(0x20, client_abort(7)))
-        .unwrap();
-    assert!(master.is(SCState::Error));
+    // A client asserting Abort is reporting the fault, not confirming it is
+    // over. However many of these arrive, the master stays in Abort.
+    for _ in 0..5 {
+        for addr in [0x20, 0x21] {
+            master
+                .try_handle_client_status(&client_status(addr, client_abort(7)))
+                .unwrap();
+        }
+        assert!(
+            master.is(SCState::Error),
+            "a client still asserting Abort cannot confirm its own abort"
+        );
+    }
 
-    // A client that falls back out of Abort withdraws its confirmation, so the
-    // set has to be simultaneous, not cumulative.
+    // Leaving Abort is the confirmation — and it takes every enabled client.
     master
         .try_handle_client_status(&client_status(0x20, client_ready()))
         .unwrap();
-    master
-        .try_handle_client_status(&client_status(0x21, client_abort(7)))
-        .unwrap();
-    assert!(master.is(SCState::Error));
+    assert!(
+        master.is(SCState::Error),
+        "one confirmation is not enough while a second client is enabled"
+    );
 
     master
-        .try_handle_client_status(&client_status(0x20, client_abort(7)))
+        .try_handle_client_status(&client_status(0x21, client_ready()))
         .unwrap();
     assert!(
         master.is(SCState::Ready),
@@ -526,6 +540,152 @@ fn sequence_control_master_returns_to_ready_after_every_client_confirms_the_abor
         .expect("the return to Ready is protocol-visible");
     assert_eq!(status[1], SCMasterState::Active.as_u8());
     assert_eq!(status[3], SCSequenceState::Ready.as_u8());
+}
+
+/// D1 — F.3 gives a client two cadences: "once per second during the 'Ready'
+/// state or if SCC is disabled, and 5 messages per second during the active
+/// ... states". The master's reception timeout has to match the cadence the
+/// *reporting client* is using. Holding every enrolled address to the 600 ms
+/// active limit while the master was in Play Back aged out any SCC that was
+/// simply not part of this sequence — and since an idle machbus client emits
+/// its disabled status at exactly 1 Hz, two machbus SCCs on one bus aborted
+/// every sequence after 600 ms.
+#[test]
+fn sequence_control_a_disabled_client_does_not_abort_a_running_sequence() {
+    let mut master = SCMaster::new(SCMasterConfig::default());
+    master.add_step(sc_step(7)).unwrap();
+    master.start().unwrap();
+
+    master
+        .try_handle_client_status(&client_status(0x20, client_ready()))
+        .unwrap();
+    master
+        .try_handle_client_status(&client_status(0x20, client_playback(7)))
+        .unwrap();
+    assert!(master.is(SCState::Active));
+
+    // 0x21 is a disabled SCC on the same bus, transmitting the conformant 1 Hz
+    // disabled status. The participating client keeps its 5 Hz cadence.
+    for _ in 0..5 {
+        master
+            .try_handle_client_status(&client_status(0x21, client_disabled()))
+            .unwrap();
+        for _ in 0..5 {
+            master.update(200);
+            master
+                .try_handle_client_status(&client_status(0x20, client_playback(7)))
+                .unwrap();
+        }
+        assert!(
+            master.is(SCState::Active),
+            "a disabled SCC on its own cadence must not abort the sequence"
+        );
+    }
+
+    // The same holds for an *enabled* SCC that is simply still in Ready: F.3
+    // puts it on the 1 Hz cadence, so it must be held to the 3 s Ready limit
+    // and not the 600 ms active one. This is the half that survives even if
+    // disabled clients are dropped from the roster entirely.
+    for _ in 0..4 {
+        master
+            .try_handle_client_status(&client_status(0x22, client_ready()))
+            .unwrap();
+        for _ in 0..5 {
+            master.update(200);
+            master
+                .try_handle_client_status(&client_status(0x20, client_playback(7)))
+                .unwrap();
+        }
+        assert!(
+            master.is(SCState::Active),
+            "an enabled SCC reporting Ready is on the 1 Hz cadence (F.3)"
+        );
+    }
+
+    // The participating client going silent still halts it.
+    let halted = master
+        .update(600)
+        .expect("a silent participating client must produce an abort status");
+    assert!(master.is(SCState::Error));
+    assert_eq!(halted[3], SCSequenceState::Abort.as_u8());
+}
+
+/// D3 — F.2 byte 4 defines "FF16 When byte 2 is set to inactive", which only
+/// has a purpose if an inactive master is still on the wire, and F.3 makes the
+/// parallel case explicit for a disabled client. The master used to return from
+/// `update` immediately in Idle and Complete, so it went silent the moment a
+/// sequence finished; every client then hit its own F.2 reception timeout and
+/// latched Abort. A *successful* sequence ended with a permanent fault
+/// indication on every SCC on the bus.
+#[test]
+fn sequence_control_master_keeps_announcing_itself_after_completion() {
+    let mut master = SCMaster::new(SCMasterConfig::default());
+    master.add_step(sc_step(7)).unwrap();
+    master.start().unwrap();
+    master
+        .try_handle_client_status(&client_status(0x20, client_ready()))
+        .unwrap();
+    assert!(master.is(SCState::Active));
+    master.step_completed(7).unwrap();
+    assert!(master.is(SCState::Complete));
+
+    let status = master
+        .update(SC_STATUS_IDLE_RATE_MS)
+        .expect("a completed master keeps announcing itself");
+    assert_eq!(status[1], SCMasterState::Inactive.as_u8());
+    assert_eq!(
+        status[3],
+        SCSequenceState::NotApplicable.as_u8(),
+        "F.2 byte 4 sentinel — this branch had never reached a wire"
+    );
+
+    // And a client hearing it returns to Idle rather than timing out.
+    let mut client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+    client
+        .try_handle_master_status(&master_status(0x10, master_ready()))
+        .unwrap();
+    assert!(client.is(SCState::Ready));
+    client
+        .try_handle_master_status(&master_status(0x10, status))
+        .unwrap();
+    assert!(
+        !client.is(SCState::Error),
+        "a completed sequence must not read as a communication fault"
+    );
+}
+
+/// D4 — §4.4.7.3 ends an abort with a return to Ready. The master half landed
+/// in 27f1c4a and the client half did not: `SCState::Error` was reachable from
+/// four states and left by exactly one, so a single abort latched the client
+/// for the life of the object — out of service until power cycle, still
+/// occupying the bus at 5 Hz, with no operator recovery.
+#[test]
+fn sequence_control_client_returns_to_ready_after_an_abort() {
+    let mut client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+    client
+        .try_handle_master_status(&master_status(0x10, master_ready()))
+        .unwrap();
+    client
+        .try_handle_master_status(&master_status(0x10, master_playback(7)))
+        .unwrap();
+    assert!(client.is(SCState::Active));
+
+    // The master goes silent past the F.2 active window.
+    client.update(700);
+    assert!(client.is(SCState::Error));
+
+    // A healthy master comes back. The client must rejoin, not stay latched.
+    client
+        .try_handle_master_status(&master_status(0x10, master_ready()))
+        .unwrap();
+    assert!(
+        client.is(SCState::Ready),
+        "§4.4.7.3 — a client returns to Ready once the master does"
+    );
+    client
+        .try_handle_master_status(&master_status(0x10, master_playback(7)))
+        .unwrap();
+    assert!(client.is(SCState::Active), "and can run another sequence");
 }
 
 /// G2 — ISO 11783-14 F.2: "A timeout of 600 ms for the SCMasterStatus message

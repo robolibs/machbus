@@ -324,7 +324,19 @@ impl SCClient {
         let mut to_send: Option<[u8; 8]> = None;
         match master_state {
             SCState::Ready => {
-                if self.state_machine.is(SCState::Idle) {
+                // D4 — §4.4.7.3 ends an abort with a return to Ready once every
+                // enabled SCC has confirmed. The master half of that landed in
+                // 27f1c4a; this half did not, so `SCState::Error` was reachable
+                // from four states and left by exactly one — an Inactive master
+                // status. Combined with D3 (the master never transmitted one)
+                // that made a single abort latch the client for the life of the
+                // object: out of service until power cycle, still occupying
+                // PGN_SC_CLIENT_STATUS at 5 Hz, with no operator recovery.
+                if matches!(
+                    self.state_machine.state(),
+                    SCState::Idle | SCState::Error | SCState::Complete
+                ) {
+                    self.clear_sequence_session();
                     self.transition(SCState::Ready);
                     self.on_sequence_start.emit(&());
                     to_send = self.request_status_send_inline();

@@ -21,7 +21,7 @@ pub use scd::{SCD_LABEL_NONE, ScdAction, ScdLabel, scd_action};
 pub use tan::{SC_TAN_MAX, SC_TAN_MIN, SC_TAN_NOT_AVAILABLE, SC_TAN_REPEAT_MS, SequenceTanTracker};
 pub use types::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_ACTIVE_RATE_MS,
-    SC_STATUS_MIN_SPACING_MS, SC_STATUS_TIMEOUT_ACTIVE_MS, SC_STATUS_TIMEOUT_READY_MS,
-    SCClientConfig, SCClientFuncError, SCClientState, SCCommand, SCMasterConfig, SCMasterState,
-    SCSequenceState, SCState, SequenceStep,
+    SC_STATUS_IDLE_RATE_MS, SC_STATUS_MIN_SPACING_MS, SC_STATUS_TIMEOUT_ACTIVE_MS,
+    SC_STATUS_TIMEOUT_READY_MS, SCClientConfig, SCClientFuncError, SCClientState, SCCommand,
+    SCMasterConfig, SCMasterState, SCSequenceState, SCState, SequenceStep,
 };

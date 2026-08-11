@@ -25,17 +25,29 @@ use alloc::{
 
 use super::types::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER,
-    SC_SEQUENCE_NUMBER_NOT_AVAILABLE, SC_STATUS_PAYLOAD_LEN, SCMasterConfig, SCMasterState,
-    SCSequenceState, SCState, SequenceStep, sc_client_func_error_byte_is_valid,
-    sc_client_state_byte_is_valid, sc_inactive_status_sequence_fields_are_valid,
-    sc_sequence_state_byte_is_valid, sc_status_reserved_tail_is_valid,
-    sc_status_sequence_number_is_valid, sc_status_sequence_state_is_supported,
+    SC_SEQUENCE_NUMBER_NOT_AVAILABLE, SC_STATUS_IDLE_RATE_MS, SC_STATUS_PAYLOAD_LEN,
+    SCMasterConfig, SCMasterState, SCSequenceState, SCState, SequenceStep,
+    sc_client_func_error_byte_is_valid, sc_client_state_byte_is_valid,
+    sc_inactive_status_sequence_fields_are_valid, sc_sequence_state_byte_is_valid,
+    sc_status_reserved_tail_is_valid, sc_status_sequence_number_is_valid,
+    sc_status_sequence_state_is_supported,
 };
 use crate::net::error::{Error, Result};
 use crate::net::event::Event;
 use crate::net::message::Message;
 use crate::net::pgn_defs::PGN_SC_CLIENT_STATUS;
 use crate::net::state_machine::StateMachine;
+
+/// How long ago an enrolled client last reported, and what it reported.
+///
+/// The sequence state matters because F.3 gives a client two cadences — 1 Hz in
+/// Ready or when disabled, 5 Hz in the active states — and the master's timeout
+/// has to match the cadence the *client* is using, not the one the master is in.
+#[derive(Debug, Clone, Copy)]
+struct ClientLiveness {
+    age_ms: u32,
+    reported: SCSequenceState,
+}
 
 /// ISO 11783-14 Sequence Control Master.
 pub struct SCMaster {
@@ -56,7 +68,7 @@ pub struct SCMaster {
     /// required clients had acknowledged a step it stopped watching them
     /// entirely: a client that then lost power, dropped off the bus, or hung
     /// never halted the sequence.
-    client_seen: BTreeMap<u8, u32>,
+    client_seen: BTreeMap<u8, ClientLiveness>,
     ready_clients: HashSet<u8>,
     active_ack_clients: HashSet<u8>,
     /// Clients that have reported the Abort sequence state while the master is
@@ -66,6 +78,10 @@ pub struct SCMaster {
     /// confirmed the abort. `SCState::Error` used to be a terminal sink, so the
     /// only way to run another sequence was to build a new `SCMaster`.
     abort_confirmed: HashSet<u8>,
+    /// Clients observed reporting Abort since the master entered it. A
+    /// confirmation is only credited to a client that appears here first, so
+    /// the frame that *caused* the abort cannot also confirm it (D2).
+    abort_seen: HashSet<u8>,
     busy_nv_memory: bool,
     busy_parsing_scd: bool,
 
@@ -100,6 +116,7 @@ impl SCMaster {
             ready_clients: HashSet::new(),
             active_ack_clients: HashSet::new(),
             abort_confirmed: HashSet::new(),
+            abort_seen: HashSet::new(),
             busy_nv_memory: false,
             busy_parsing_scd: false,
             on_state_change: Event::new(),
@@ -232,16 +249,28 @@ impl SCMaster {
     /// otherwise `None`. Also drives Ready/Active timeouts.
     pub fn update(&mut self, elapsed_ms: u32) -> Option<[u8; 8]> {
         let s = self.state_machine.state();
-        if matches!(s, SCState::Idle | SCState::Complete) {
-            return None;
-        }
 
         let mut to_send: Option<[u8; 8]> = None;
 
+        // D3 — the master used to return here in Idle and Complete, so it went
+        // silent the moment a sequence finished. Every client then hit its own
+        // F.2 reception timeout and latched Abort: a *successful* sequence
+        // ended with a permanent fault indication on every SCC on the bus. F.2
+        // byte 4's "FF16 When byte 2 is set to inactive" only has a purpose if
+        // an inactive master is still transmitting, and F.3 makes the parallel
+        // case explicit for a disabled client.
         self.status_timer_ms = self.status_timer_ms.saturating_add(elapsed_ms);
-        if self.status_timer_ms >= self.config.status_interval_ms {
-            self.status_timer_ms -= self.config.status_interval_ms;
+        let interval = if matches!(s, SCState::Idle | SCState::Complete) {
+            SC_STATUS_IDLE_RATE_MS
+        } else {
+            self.config.status_interval_ms
+        };
+        if self.status_timer_ms >= interval {
+            self.status_timer_ms -= interval;
             to_send = Some(self.encode_master_status());
+        }
+        if matches!(s, SCState::Idle | SCState::Complete) {
+            return to_send;
         }
 
         match s {
@@ -272,19 +301,25 @@ impl SCMaster {
         // applied in the 'Recording', 'Play Back' or 'Abort' state. A timeout of
         // 3 s shall be applied in the 'Ready' state." This runs for the whole
         // time a client is enrolled, not only until it first acknowledges.
+        //
+        // D1 — the limit belongs to the *reporting client's* state, not the
+        // master's. F.3's cadence sentence has a client transmit "once per
+        // second during the 'Ready' state or if SCC is disabled, and 5 messages
+        // per second during the active states", so holding an enrolled-but-Ready
+        // SCC to the 600 ms active limit while the master is in Play Back aged
+        // it out every cycle. Two machbus SCCs on one bus self-aborted every
+        // sequence after 600 ms, because 431df01 makes an idle client emit its
+        // disabled status at exactly 1 Hz.
         if matches!(s, SCState::Ready | SCState::Active | SCState::Paused) {
-            let limit = if matches!(s, SCState::Ready) {
-                self.config.ready_timeout_ms
-            } else {
-                self.config.active_timeout_ms
-            };
             let mut expired = false;
-            for age in self.client_seen.values_mut() {
-                *age = age.saturating_add(elapsed_ms);
-                expired |= *age >= limit;
+            for seen in self.client_seen.values_mut() {
+                seen.age_ms = seen.age_ms.saturating_add(elapsed_ms);
+                expired |= seen.age_ms >= self.config.limit_for(seen.reported);
             }
             if expired && !matches!(self.state_machine.state(), SCState::Error) {
-                self.client_seen.retain(|_, age| *age < limit);
+                let config = self.config;
+                self.client_seen
+                    .retain(|_, seen| seen.age_ms < config.limit_for(seen.reported));
                 self.transition(SCState::Error);
                 self.on_timeout.emit(&"client status timeout");
                 self.status_timer_ms = 0;
@@ -403,8 +438,22 @@ impl SCMaster {
             ));
         }
         let client_addr = msg.source;
-        // Any well-formed status is evidence the client is still there.
-        self.client_seen.insert(client_addr, 0);
+        // Any well-formed status is evidence the client is still there — but a
+        // *disabled* SCC is not part of this sequence at all, so enrolling it
+        // only creates something for the watchdog to trip over (D1). Drop it
+        // instead, and remember what an enabled one reported so its timeout
+        // matches the cadence it is actually transmitting on.
+        if matches!(client_state, super::types::SCClientState::Enabled) {
+            self.client_seen.insert(
+                client_addr,
+                ClientLiveness {
+                    age_ms: 0,
+                    reported: seq_state,
+                },
+            );
+        } else {
+            self.client_seen.remove(&client_addr);
+        }
 
         let mapped_state = match client_state {
             super::types::SCClientState::Enabled => match seq_state {
@@ -429,17 +478,32 @@ impl SCMaster {
             return Ok(());
         }
 
-        // G3 — collect the abort confirmations §4.4.7.3 asks for. A client that
-        // falls back out of Abort withdraws its confirmation, so the master only
-        // leaves the fault state on a complete, simultaneous set. A client that
-        // goes silent simply keeps the master in Abort, which is the safe end.
+        // §4.4.7.3 — the master leaves Abort once every enabled SCC has
+        // confirmed it.
+        //
+        // D2 — "confirmed" is the *trailing* edge, not the leading one. The
+        // first version credited any Abort status, including the very frame
+        // that had just driven the master into Abort one call earlier: frame 1
+        // took the branch above (Active -> Error), frame 2 was identical and
+        // counted as its own confirmation, `rearm_after_abort` returned the
+        // master to Ready, frame 3 aborted it again. That oscillated at the
+        // client's 5 Hz cadence, and because rearming resets the step index a
+        // second healthy SCC answering one of the Ready frames re-dispatched
+        // step 1 to the machine, over and over, for as long as the faulted
+        // client held Abort.
+        //
+        // So: a client has to be *seen* in Abort and then leave it. Only
+        // clients enrolled when the abort began can confirm, and the bar is
+        // every enabled client rather than a static configured count.
         if self.state_machine.is(SCState::Error) {
             if mapped_state == SCState::Error {
-                self.abort_confirmed.insert(client_addr);
-            } else {
+                self.abort_seen.insert(client_addr);
                 self.abort_confirmed.remove(&client_addr);
+            } else if self.abort_seen.contains(&client_addr) {
+                self.abort_confirmed.insert(client_addr);
             }
-            if self.abort_confirmed.len() >= self.config.required_client_count() {
+            let enabled = self.client_seen.len().max(1);
+            if self.abort_confirmed.len() >= enabled {
                 self.rearm_after_abort();
             }
             return Ok(());
@@ -496,6 +560,7 @@ impl SCMaster {
         }
         if matches!(new_state, SCState::Error) {
             self.abort_confirmed.clear();
+            self.abort_seen.clear();
         }
         self.state_machine.transition(new_state);
         self.on_state_change.emit(&(old, new_state));
@@ -507,6 +572,7 @@ impl SCMaster {
     /// abort already invalidated.
     fn rearm_after_abort(&mut self) {
         self.abort_confirmed.clear();
+        self.abort_seen.clear();
         self.ready_clients.clear();
         self.active_ack_clients.clear();
         self.client_ack_received = false;

@@ -363,6 +363,23 @@ impl Default for SCMasterConfig {
 }
 
 impl SCMasterConfig {
+    /// The F.3 reception timeout that applies to a client reporting `state`.
+    ///
+    /// "A timeout of 600 ms for the SCClientStatus message shall be applied in
+    /// the 'Recording', 'Play Back' or 'Abort' state. A timeout of 3 s shall be
+    /// applied in the 'Ready' state." A disabled client transmits on the Ready
+    /// cadence, so it gets the Ready limit; it is `NotApplicable` on the wire.
+    #[must_use]
+    pub const fn limit_for(&self, state: SCSequenceState) -> u32 {
+        match state {
+            SCSequenceState::Recording
+            | SCSequenceState::RecordingCompletion
+            | SCSequenceState::PlayBack
+            | SCSequenceState::Abort => self.active_timeout_ms,
+            _ => self.ready_timeout_ms,
+        }
+    }
+
     #[must_use]
     pub const fn with_ready_timeout(mut self, ms: u32) -> Self {
         self.ready_timeout_ms = ms;

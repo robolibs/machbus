@@ -26,11 +26,12 @@ use crate::isobus::implement::guidance::{
 };
 use crate::isobus::implement::{
     CurvatureCommandStatus, GuidanceSystemCmd, MachineDirection, MachineSpeedCommandMsg,
+    TractorFacilities,
 };
 use crate::j1939::shortcut_button::decode_message;
 use crate::net::pgn_defs::{
     PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD,
-    PGN_SHORTCUT_BUTTON,
+    PGN_REQUIRED_TRACTOR_FACILITIES, PGN_SHORTCUT_BUTTON, PGN_TRACTOR_FACILITIES_RESPONSE,
 };
 use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority};
 use crate::session::plugin::{Plugin, PluginCtx};
@@ -43,11 +44,33 @@ use crate::session::sys::{
 use crate::time::Instant;
 use core::any::Any;
 
-const INTERESTS: &[Pgn] = &[PGN_GUIDANCE_MACHINE_INFO, PGN_SHORTCUT_BUTTON];
+const INTERESTS: &[Pgn] = &[
+    PGN_GUIDANCE_MACHINE_INFO,
+    PGN_SHORTCUT_BUTTON,
+    PGN_TRACTOR_FACILITIES_RESPONSE,
+];
 
 /// The PGNs this controller commands the machine with. A refused send on either
 /// means the command never reached the bus.
 const COMMAND_PGNS: &[Pgn] = &[PGN_GUIDANCE_SYSTEM_CMD, PGN_MACHINE_SELECTED_SPEED_CMD];
+
+/// Everything this plugin authors: the two command PGNs plus the facility
+/// request that keeps the TECU broadcasting the feedback they depend on.
+const TRANSMITS: &[Pgn] = &[
+    PGN_GUIDANCE_SYSTEM_CMD,
+    PGN_MACHINE_SELECTED_SPEED_CMD,
+    PGN_REQUIRED_TRACTOR_FACILITIES,
+];
+
+/// How often the Required Tractor Facilities request is repeated.
+///
+/// ISO 11783-9:2012 §4.4.2 makes this request the thing that *enables* the
+/// TECU's guidance and speed broadcasts: "A facility is not required if its
+/// corresponding bits are set to 0 in the implement CF required tractor
+/// facilities message. The Tractor ECU can then stop the transmission of this
+/// implement message to reduce bandwidth." Repeating it covers a TECU that
+/// boots after this node, or that was power-cycled mid-session.
+pub const REQUIRED_FACILITIES_INTERVAL_MS: u32 = 1000;
 
 /// Three missed 100 ms Machine Info broadcasts (AEF 023 loss of communication).
 pub const LINK_TIMEOUT_MS: u32 = 300;
@@ -99,6 +122,10 @@ pub struct AutoDrive {
     /// Live GNSS hazards, so `clear_stop()` cannot re-arm autonomy against a
     /// receiver that is still stale or a fix that still cannot be steered on.
     gnss: GnssHazards,
+    /// What the TECU last said it actually has installed (PGN 0xFE09), and when
+    /// this node last asked for the facilities it needs (PGN 0xFE0A).
+    facilities: Option<TractorFacilities>,
+    last_required_at: Option<Instant>,
 }
 
 impl Default for AutoDrive {
@@ -129,7 +156,32 @@ impl AutoDrive {
             stale_ms: COMMAND_STALE_MS,
             isb: IsbGuard::new(),
             gnss: GnssHazards::default(),
+            facilities: None,
+            last_required_at: None,
         }
+    }
+
+    /// The facilities this node asks the TECU to keep transmitting: guidance
+    /// (ISO 11783-9 §4.4.2.7 class "G") and machine selected speed plus its
+    /// command (§4.4.2.8 class "P") — exactly the two axes [`DriveCommand`]
+    /// drives, and nothing else, so an unrelated broadcast is not kept alive
+    /// on this node's account.
+    fn required_facilities() -> TractorFacilities {
+        TractorFacilities {
+            guidance: true,
+            machine_selected_speed: true,
+            machine_selected_speed_command: true,
+            ..TractorFacilities::default()
+        }
+    }
+
+    /// What the TECU last reported it has installed, if it has answered.
+    ///
+    /// `None` means no Tractor Facilities Response has arrived — which is not
+    /// the same as "supports nothing", so it is not treated as a refusal.
+    #[must_use]
+    pub const fn tractor_facilities(&self) -> Option<TractorFacilities> {
+        self.facilities
     }
 
     /// Override how long an unrefreshed setpoint is re-transmitted before the
@@ -268,6 +320,17 @@ impl AutoDrive {
         {
             return Err(AutodriveRefusal::SpeedNotFinite);
         }
+        // Speed is a separate tractor class from steering: ISO 11783-9 §4.4.2.8
+        // gives it the "P" addendum, and a class xG tractor need not have it.
+        // Commanding an axis the TECU never advertised is an unanswered command,
+        // not a slow one, so it is refused rather than sent and hoped for.
+        if cmd.speed_mps.is_some()
+            && self
+                .facilities
+                .is_some_and(|f| !f.machine_selected_speed_command)
+        {
+            return Err(AutodriveRefusal::FacilityNotAdvertised);
+        }
         if let (Some(speed), Some(curvature)) = (cmd.speed_mps, cmd.curvature_km_inv)
             && curvature != 0.0
             && speed.abs() <= self.min_speed_mps
@@ -314,6 +377,13 @@ impl AutoDrive {
     fn check_preconditions(&self) -> Result<(), AutodriveRefusal> {
         if self.stop.is_latched() || self.isb.is_asserted() || self.gnss.is_live() {
             return Err(AutodriveRefusal::StopLatched);
+        }
+        // A TECU that has answered and did not set the guidance bit has told us
+        // it cannot be steered over the bus at all (ISO 11783-9 §4.4.2.7: only a
+        // class "xG" tractor "shall support the external control of the guidance
+        // system"). Silence stays permissive — no response is not a denial.
+        if self.facilities.is_some_and(|f| !f.guidance) {
+            return Err(AutodriveRefusal::FacilityNotAdvertised);
         }
         if !self.link_alive {
             return Err(AutodriveRefusal::LinkDown);
@@ -377,7 +447,7 @@ impl Plugin for AutoDrive {
     }
 
     fn transmits(&self) -> &'static [Pgn] {
-        COMMAND_PGNS
+        TRANSMITS
     }
 
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
@@ -390,6 +460,25 @@ impl Plugin for AutoDrive {
                 self.enter_safe_state();
                 ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
                     trigger: SafeStopTrigger::IsbStop,
+                }));
+            }
+            return;
+        }
+
+        if msg.pgn == PGN_TRACTOR_FACILITIES_RESPONSE
+            && let Some(facilities) = TractorFacilities::decode(&msg.data)
+        {
+            self.facilities = Some(facilities);
+            // A tractor that just told us it has no guidance cannot be steered,
+            // and this node may already be steering it. Stopping here is what
+            // makes the response load-bearing rather than advisory.
+            if !facilities.guidance
+                && self.status.is_active()
+                && self.stop.trip(SafeStopTrigger::GuidanceLinkTimeout)
+            {
+                self.enter_safe_state();
+                ctx.emit(Event::Autodrive(AutodriveEvent::SafeStop {
+                    trigger: SafeStopTrigger::GuidanceLinkTimeout,
                 }));
             }
             return;
@@ -557,6 +646,23 @@ impl Plugin for AutoDrive {
             return Some(now.add_millis(u64::from(self.min_tx_ms)));
         }
 
+        // Ask the TECU to keep the guidance and speed broadcasts running. Until
+        // this goes out, a conforming TECU may prune Machine Info to save
+        // bandwidth (ISO 11783-9 §4.4.2) — and this plugin refuses to engage
+        // without it, so an unasked-for facility reads here as `link_down`.
+        if self
+            .last_required_at
+            .is_none_or(|t| now.millis_since(t) >= REQUIRED_FACILITIES_INTERVAL_MS)
+        {
+            ctx.send(
+                PGN_REQUIRED_TRACTOR_FACILITIES,
+                Self::required_facilities().encode().to_vec(),
+                BROADCAST_ADDRESS,
+                Priority::Normal,
+            );
+            self.last_required_at = Some(now);
+        }
+
         let due = match self.last_tx_at {
             None => true,
             Some(last) => {
@@ -660,6 +766,112 @@ mod tests {
             8,
         );
         s.feed(0, &frame, at);
+    }
+
+    fn feed_facilities(s: &mut Session, facilities: TractorFacilities, at: Instant) {
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_TRACTOR_FACILITIES_RESPONSE,
+                0xF0,
+                BROADCAST_ADDRESS,
+            ),
+            facilities.encode(),
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
+
+    /// ISO 11783-9:2012 §4.4.2 — the Required Tractor Facilities message is what
+    /// *enables* the TECU's guidance broadcast: "A facility is not required if
+    /// its corresponding bits are set to 0 ... The Tractor ECU can then stop the
+    /// transmission of this implement message to reduce bandwidth."
+    ///
+    /// AutoDrive refuses to engage without Machine Info, but never asked for it,
+    /// so against a conforming TECU that prunes unrequested facilities it would
+    /// sit at `link_down` forever with no way for the operator to tell why.
+    #[test]
+    fn autodrive_asks_the_tecu_for_the_facilities_it_depends_on() {
+        let mut s = node();
+        s.tick(Instant::ZERO.add_millis(4_100));
+
+        let mut asked = None;
+        while let Some((_, frame)) = s.poll_transmit() {
+            if frame.id.pgn() == PGN_REQUIRED_TRACTOR_FACILITIES {
+                asked = TractorFacilities::decode(&frame.data);
+            }
+        }
+
+        let asked = asked.expect("required tractor facilities is transmitted");
+        assert!(asked.guidance, "the steering facility must be requested");
+        assert!(asked.machine_selected_speed_command);
+    }
+
+    /// §4.4.2.7 — only a class "xG" tractor "shall support the external control
+    /// of the guidance system". A TECU that answered without the guidance bit
+    /// has said it cannot be steered over the bus; engaging anyway commands a
+    /// wheel nothing is listening for.
+    #[test]
+    fn engage_is_refused_when_the_tractor_advertises_no_guidance() {
+        let mut s = node();
+        let at = Instant::ZERO.add_millis(4_100);
+        feed_info(&mut s, 0x07, at);
+
+        let without_guidance = TractorFacilities {
+            machine_selected_speed_command: true,
+            ..TractorFacilities::default()
+        };
+        feed_facilities(&mut s, without_guidance, at);
+        s.tick(at);
+
+        let d = s.get_mut::<AutoDrive>().unwrap();
+        assert_eq!(d.arm(), Err(AutodriveRefusal::FacilityNotAdvertised));
+        assert_eq!(d.engage(), Err(AutodriveRefusal::FacilityNotAdvertised));
+    }
+
+    /// §4.4.2.8 — speed is the separate "P" addendum, so a steering-capable
+    /// tractor need not accept a speed command at all. Sending one anyway is an
+    /// unanswered command rather than a slow one.
+    #[test]
+    fn a_speed_command_is_refused_when_only_steering_is_advertised() {
+        let mut s = node();
+        let at = Instant::ZERO.add_millis(4_100);
+        feed_info(&mut s, 0x07, at);
+
+        let steering_only = TractorFacilities {
+            guidance: true,
+            ..TractorFacilities::default()
+        };
+        feed_facilities(&mut s, steering_only, at);
+        s.tick(at);
+
+        let d = s.get_mut::<AutoDrive>().unwrap();
+        d.arm().expect("guidance is advertised");
+        d.engage().expect("guidance is advertised");
+
+        assert_eq!(
+            d.command(DriveCommand {
+                speed_mps: Some(2.0),
+                curvature_km_inv: None,
+            }),
+            Err(AutodriveRefusal::FacilityNotAdvertised),
+        );
+        // Steering alone is exactly what this tractor advertised.
+        assert_eq!(d.command(DriveCommand::steer(10.0)), Ok(()));
+    }
+
+    /// A TECU that has said nothing is not a TECU that has said "no". Refusing
+    /// on silence would make every bench and replay setup undriveable.
+    #[test]
+    fn silence_from_the_tecu_is_not_a_refusal() {
+        let mut s = node();
+        let at = Instant::ZERO.add_millis(4_100);
+        feed_info(&mut s, 0x07, at);
+        s.tick(at);
+
+        let d = s.get_mut::<AutoDrive>().unwrap();
+        assert_eq!(d.tractor_facilities(), None);
+        assert_eq!(d.arm(), Ok(()));
     }
 
     fn last_command(s: &mut Session) -> Option<GuidanceSystemCmd> {

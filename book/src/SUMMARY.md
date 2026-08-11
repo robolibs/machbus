@@ -113,6 +113,7 @@
   - [Minimal](examples/minimal.md)
   - [Tractor](examples/tractor.md)
   - [Implement](examples/implement.md)
+  - [AutoDrive](examples/autodrive.md)
   - [VT server](examples/vt-server.md)
   - [TC server](examples/tc-server.md)
   - [File Server](examples/file-server.md)

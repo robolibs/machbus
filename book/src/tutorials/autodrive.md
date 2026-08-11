@@ -149,21 +149,18 @@ overwrite the other's safe stop.
 
 ## The lifecycle
 
+Plug it and claim, exactly like any other plugin:
+
 ```rust,ignore
-let mut d = AutoDrive::new();
+{{#include ../../../examples/autodrive_keyboard.rs:build}}
+```
 
-d.arm()?;                   // preconditions met, commanding nothing yet
-d.engage()?;                // setpoint reaches the bus on the next tick
+Then arm, then engage. Both report the **first unmet precondition** rather than
+failing silently, because an autonomy client that asks to steer and is ignored
+cannot tell "commanded" from "declined":
 
-loop {
-    // Every cycle. See "the command is a heartbeat" below.
-    d.command(DriveCommand {
-        speed_mps: Some(2.0),
-        curvature_km_inv: Some(tracker.curvature()),
-    })?;
-}
-
-d.disengage(SafeStopTrigger::OperatorOverride);   // infallible, idempotent
+```rust,ignore
+{{#include ../../../examples/autodrive_keyboard.rs:arm}}
 ```
 
 `arm()` and `engage()` check, in order: no latched stop, no held shortcut button,
@@ -195,6 +192,26 @@ keep the machine steering at the last curvature forever. So:
 
 Tune with `with_command_stale_ms(ms)`; `0` disables the watchdog, which is only
 appropriate when something else guarantees liveness.
+
+The driving loop, then, refreshes the setpoint every cycle:
+
+```rust,ignore
+{{#include ../../../examples/autodrive_keyboard.rs:heartbeat}}
+```
+
+Releasing the dead-man disengages. `disengage()` is infallible and falls back to
+`DriveCommand::halt()` — and **losing** the dead-man has to land here too, not
+leave the last setpoint running:
+
+```rust,ignore
+{{#include ../../../examples/autodrive_keyboard.rs:deadman}}
+```
+
+The stop is latching, so re-engaging is refused until it is explicitly cleared:
+
+```rust,ignore
+{{#include ../../../examples/autodrive_keyboard.rs:clear}}
+```
 
 ## Cadence and tuning
 
@@ -267,6 +284,18 @@ In C, `machbus_session_autodrive_stop_reason` returns a
 `MachbusSafeStopTrigger` enum. Note that **codes 2 and 3 are permanently
 retired** — reusing them would shift every value above for callers built against
 an older header. See [ABI stability](../bindings/abi-stability.md).
+
+## Validate locally
+
+```sh
+cargo run --example autodrive_keyboard
+make test
+```
+
+The example claims an address, shows an engage refused before any ECU answers,
+drives for 500 ms at the 100 ms cadence, releases the dead-man into a latched
+stop, and clears it. See the [AutoDrive example](../examples/autodrive.md) for a
+line-by-line reading of the output.
 
 ## What this proves / does not prove
 

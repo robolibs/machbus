@@ -17,6 +17,21 @@ to the bus. They differ only in **what the operator holds**.
 > is not certified. The model below is defence in depth against the obvious
 > failure modes, not a substitute for a rated interlock.
 
+The shape of that defence is not arbitrary. ISO 11783-1 §6.13 ("Safe mode
+operation") defers to ISO 11783-9 §4.7, whose eight clauses this page and the
+[AutoDrive plugin](autodrive.md) between them try to honour:
+
+| Clause | Requirement | Where |
+| --- | --- | --- |
+| §4.7.1 | fail-safe on loss of power or communication | link timeout, bus-off → safe stop |
+| §4.7.2 | "The implement shall not start unexpectedly." | arm latch, latching stop, deliberate clear |
+| §4.7.3 | not "prevented from stopping once the command has been given" | `disengage` is infallible and idempotent |
+| §4.7.7 | stop automatically when a failure prevents remote control | dead-man, lost-controller handling below |
+| §4.7.8 | "The operator shall have the ability to override" | emergency stop, ISB, operator engage switch |
+
+Honouring the wording is not the same as being certified against it — §4.7.4,
+§4.7.5 and §4.7.6 are about the physical machine and are not machbus's to meet.
+
 ## Three layers
 
 Nothing reaches the wire unless all three agree.
@@ -62,7 +77,14 @@ holding R2 cannot silently re-arm the instant the latch clears — the UI says
 
 ## Losing the controller counts as releasing it
 
-This is the failure that motivated most of the model.
+This is the failure that motivated most of the model, and it is a normative
+requirement rather than a design preference. ISO 11783-9:2012 §4.7.7:
+
+> "Implements remotely controlled by an operator shall be designed and
+> constructed to stop automatically in the event a detectable failure prevents
+> the operator from remotely controlling the implement."
+
+A gamepad that has been unplugged is exactly that detectable failure.
 
 **Joystick.** gilrs emits no button-release events when a pad disconnects. The
 tool therefore treats a disconnect — unplugged cable, flat battery, dropped

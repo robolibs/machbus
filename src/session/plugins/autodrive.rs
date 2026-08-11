@@ -302,6 +302,11 @@ impl AutoDrive {
 
     /// Stop commanding and fall back to the safe state. Idempotent and
     /// infallible: a disengage must never be refused.
+    ///
+    /// That signature is a requirement, not a convenience. ISO 11783-9:2012
+    /// §4.7.3: "The implement shall not be prevented from stopping once the
+    /// command has been given." A `Result` here would let a caller's `?` turn a
+    /// stop into a no-op.
     pub fn disengage(&mut self, reason: SafeStopTrigger) {
         self.stop.trip(reason);
         self.enter_safe_state();

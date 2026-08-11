@@ -3,6 +3,19 @@
 //!
 //! Mirrors the C++ `machbus::net::pgn_defs`. Values **must remain
 //! bit-identical** to the C++ source for cross-stack interoperability.
+//!
+//! None of these values can be checked against the ISO 11783 documents, and
+//! that is by the series' own design rather than an omission here. ISO
+//! 11783-1:2017 §7: "The electronic database with the ISO 11783-1 parameter
+//! group, address and identity assignments is accessible at: www.isobus.net",
+//! listing the PGN assignments, industry groups, preferred addresses, NAMEs and
+//! manufacturer codes as living there. ISO 11783-7:2022 §4.2 says the same of
+//! the part 7 PGN and SPN assignments, and ISO 11783-11:2011 §4.1 of the DDIs.
+//!
+//! So the standard PDFs evidence the *message definitions* — field order,
+//! widths, ranges, reserved-bit rules — while the numbers below come from the
+//! C++ stack and the online database. Treat a citation next to a constant as
+//! naming the clause that defines the message, not one that states its PGN.
 
 use super::types::Pgn;
 

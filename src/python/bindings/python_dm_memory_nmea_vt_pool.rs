@@ -569,9 +569,31 @@ impl PySpeedAndDistance {
             distance_m,
         }
     }
+    /// Strict decode: requires bytes 7-8 to be `0xFF` padding.
+    ///
+    /// Real wheel-based, ground-based and machine-selected speed frames put
+    /// key switch state and maximum time of tractor power there, so this
+    /// returns `None` for them — use `decode_measurement_prefix`.
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::SpeedAndDistance::decode(&data).map(|m| Self {
+            speed_mps: m.speed_mps,
+            distance_m: m.distance_m,
+        })
+    }
+
+    /// Decode just the speed/distance prefix, ignoring the PGN-specific
+    /// status bytes 7-8.
+    ///
+    /// This is the one to use for the three PGNs this type covers. ISO
+    /// 11783-8 §4.2 gives the ISO 11783-7 definition precedence over the
+    /// J1939-71 one where both define a parameter, and under part 7 those
+    /// trailing bytes carry data rather than padding — so only the strict
+    /// decoder was reachable from Python and it rejected every conformant
+    /// frame.
+    #[staticmethod]
+    fn decode_measurement_prefix(data: Vec<u8>) -> Option<Self> {
+        crate::j1939::SpeedAndDistance::decode_measurement_prefix(&data).map(|m| Self {
             speed_mps: m.speed_mps,
             distance_m: m.distance_m,
         })

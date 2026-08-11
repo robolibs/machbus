@@ -1,4 +1,21 @@
-//! Wheel / Ground / Machine speed and distance — J1939-71.
+//! Wheel / Ground / Machine speed and distance.
+//!
+//! The payload shape is J1939-71's, but these three PGNs are also ISO 11783-7
+//! parameters — ISO 11783-9 §4.4.2 lists wheel-based and ground-based speed,
+//! distance and direction among the facilities a TECU classifies on — and ISO
+//! 11783-8 §4.2 settles which definition wins: "Any parameters defined in
+//! SAE J 1939/71 that are also given in ISO 11783-7 shall use the parameter
+//! definitions according to ISO 11783-7." §4.3 says the same for the parameter
+//! groups. Part 8 is three pages and that precedence rule is essentially all
+//! of it.
+//!
+//! That matters for the tail. Under part 7 these messages carry PGN-specific
+//! status in bytes 7-8 — key switch state and maximum time of tractor power,
+//! which ISO 11783-9's power-management sequence depends on — where the plain
+//! J1939 reading would leave padding. [`SpeedAndDistance::decode`] therefore
+//! demands an `0xFF` tail and is the wrong entry point for real tractor
+//! traffic; use [`SpeedAndDistance::decode_measurement_prefix`] when the PGN
+//! is one of these three.
 //!
 //! Mirrors the C++ `machbus::j1939::speed_distance.hpp`. Three PGNs
 //! share the same payload shape (`speed_raw u16` LE @ 0..2,
@@ -158,6 +175,34 @@ impl SpeedAndDistance {
 mod tests {
     use super::*;
     use crate::net::pgn_defs::{PGN_GROUND_SPEED, PGN_MACHINE_SPEED, PGN_WHEEL_SPEED};
+
+    /// ISO 11783-8 §4.2 gives the ISO 11783-7 definition precedence over the
+    /// J1939-71 one wherever both define a parameter, and these three PGNs are
+    /// part 7 parameters (ISO 11783-9 §4.4.2 classifies a TECU on them). Under
+    /// part 7 bytes 7-8 carry key switch state and maximum time of tractor
+    /// power — the fields part 9's power-management sequence turns on — not
+    /// `0xFF` padding.
+    #[test]
+    fn a_conformant_tractor_frame_decodes_through_the_prefix() {
+        // 2.5 m/s, 100 m, then a non-padding tail: key switch on, max time of
+        // tractor power 3 min, which §4.4 sequences the ignition-off timing on.
+        let mut frame = [0xFFu8; 8];
+        frame[0..2].copy_from_slice(&2500u16.to_le_bytes());
+        frame[2..6].copy_from_slice(&100_000u32.to_le_bytes());
+        frame[6] = 3;
+        frame[7] = 0b1111_1101;
+
+        assert_eq!(
+            SpeedAndDistance::decode(&frame),
+            None,
+            "the strict decoder is the J1939 padding reading"
+        );
+
+        let decoded = SpeedAndDistance::decode_measurement_prefix(&frame)
+            .expect("a real tractor frame must decode");
+        assert!((decoded.speed_mps.unwrap() - 2.5).abs() < 1e-9);
+        assert!((decoded.distance_m.unwrap() - 100.0).abs() < 1e-9);
+    }
 
     #[test]
     fn round_trip_speed_and_distance() {

@@ -72,16 +72,8 @@ pub const MIN_CURVATURE_SPEED_MPS: f64 = 0.05;
 /// [`super::autodrive::COMMAND_STALE_MS`].
 const COMMAND_STALE_MS: u32 = 300;
 
-/// Automatic-guidance (autosteer) plugin.
-/// Stops this plugin can trip (G8). See [`super::autodrive::PRODUCES`].
-#[cfg(test)]
-pub(crate) const PRODUCES: &[SafeStopTrigger] = &[
-    SafeStopTrigger::GuidanceLinkTimeout,
-    SafeStopTrigger::CommandStale,
-    SafeStopTrigger::IsbStop,
-    SafeStopTrigger::OperatorOverride,
-    SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
-];
+/// Automatic-guidance (autosteer) plugin. See [`super::autodrive`] for why the
+/// stops this plugin trips are not listed as a constant.
 
 #[derive(Default)]
 pub struct Guidance {

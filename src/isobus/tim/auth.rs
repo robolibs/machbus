@@ -464,7 +464,6 @@ impl Default for TimAuthentication {
 }
 
 impl TimAuthentication {
-    #[must_use]
     /// A client-side authentication. See [`TimAuthentication::new_server`].
     #[must_use]
     pub fn new() -> Self {

@@ -68,17 +68,10 @@ pub const DEFAULT_MIN_SPEED_MPS: f64 = 0.05;
 pub const COMMAND_STALE_MS: u32 = 300;
 
 /// Unified autonomous-driving controller. See the [module docs](self).
-/// Stops this plugin can trip (G8). Kept next to the code that trips them so
-/// a variant that loses its last producer fails `g8_every_trigger_is_reachable`.
-#[cfg(test)]
-pub(crate) const PRODUCES: &[SafeStopTrigger] = &[
-    SafeStopTrigger::GuidanceLinkTimeout,
-    SafeStopTrigger::CommandStale,
-    SafeStopTrigger::IsbStop,
-    SafeStopTrigger::OperatorOverride,
-    SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
-];
-
+///
+/// The stops this plugin can trip are not listed here: a hand-maintained list
+/// has no compiler relationship to the `trip(...)` call sites below, so it went
+/// stale silently. `g8_every_trigger_is_reachable` scans this file instead.
 pub struct AutoDrive {
     status: AutomationStatus,
     setpoint: DriveCommand,

@@ -13,6 +13,19 @@
 
 #if UINTPTR_MAX == UINT64_MAX
 
+/*
+ * Every assertion below describes ABI v4. If one of them fails, the fix is not
+ * to update the number in place: a widened POD shipping under an unchanged
+ * version lets a stale-header caller past the runtime guard in demo.c and
+ * full_demo.c. Bump MACHBUS_C_ABI_VERSION, update the two `!= 4` checks and
+ * the version table in book/src/bindings/abi-stability.md.
+ *
+ * The Rust side carries the same expectations as const assertions next to the
+ * version constant itself (src/ffi/c_abi_session_core.rs), so a layout change
+ * fails the Rust build too — this file is the C-side mirror, not the only
+ * guard.
+ */
+
 /* ─── Enums: cbindgen emits each as a plain C enum (4 bytes). ────────── */
 _Static_assert(sizeof(MachbusClaimState) == 4, "MachbusClaimState size changed");
 _Static_assert(sizeof(MachbusEventKind) == 4, "MachbusEventKind size changed");

@@ -159,14 +159,38 @@ mod tests {
         }
     }
 
+    /// The non-test portion of a plugin source, as compiled in.
+    ///
+    /// Splitting at the test module matters: `autodrive.rs`'s own tests call
+    /// `stop.trip(...)` directly, and counting those as producers is exactly
+    /// the self-assertion this test exists to avoid.
+    fn production_source(file: &'static str) -> &'static str {
+        file.split("#[cfg(test)]").next().unwrap_or(file)
+    }
+
     /// G8 — every stop trigger must have a real producer.
     ///
-    /// The old version of this test matched each variant to a hard-coded string
-    /// and asserted the string was non-empty, so it passed for triggers nothing
-    /// could ever trip; two dead variants lived behind it for three rounds. This
-    /// one unions the `PRODUCES` lists the producing modules declare next to
-    /// their own code, plus the events `from_event` maps, and requires the union
-    /// to be exactly the enum. Deleting a producer now fails here.
+    /// Three versions of this test have now existed. The first matched each
+    /// variant to a hard-coded string and asserted the string was non-empty, so
+    /// it passed for triggers nothing could ever trip; two dead variants lived
+    /// behind it for three rounds. The second unioned hand-maintained
+    /// `PRODUCES` arrays declared beside the producing code — better, but the
+    /// arrays had no compiler relationship to the `trip()` call sites, so
+    /// deleting the command-staleness stop from both controllers left it green
+    /// while claiming in its own doc comment that it would not.
+    ///
+    /// This one derives both halves from something that breaks when the
+    /// producer goes away:
+    ///
+    /// - the session-level triggers by *running* `from_event` over every event
+    ///   it is expected to classify, so a dropped match arm returns `None`;
+    /// - the plugin-tripped triggers by scanning the compiled-in source of the
+    ///   producing modules for the variant, so deleting a `trip(...)` call site
+    ///   removes it from the union.
+    ///
+    /// The scan proves a producer *exists*, not that it fires; that the
+    /// tick-driven ones actually fire is asserted separately by the
+    /// `Session`-driven tests in [`crate::session`] (G9).
     #[test]
     fn g8_every_trigger_is_reachable() {
         use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
@@ -178,13 +202,59 @@ mod tests {
             .filter_map(|(event, _)| SafeStopTrigger::from_event(event))
             .collect();
 
+        // Everything the controllers trip themselves, derived from their source
+        // rather than from a list somebody has to remember to update.
+        let producers = [
+            production_source(include_str!("../plugins/autodrive.rs")),
+            production_source(include_str!("../plugins/guidance.rs")),
+        ];
+        // Anchored on the *call*, not the bare variant name: every one of these
+        // triggers is also named in the `ctx.emit(...)` beside its trip, so
+        // matching the name alone let a deleted trip site keep passing.
+        let tripped = |shapes: &[&str]| {
+            producers
+                .iter()
+                .any(|src| shapes.iter().any(|shape| src.contains(shape)))
+        };
+
+        let mut plugin_tripped: Vec<SafeStopTrigger> = Vec::new();
+        for (shapes, trigger) in [
+            (
+                &["trip(SafeStopTrigger::GuidanceLinkTimeout)"][..],
+                SafeStopTrigger::GuidanceLinkTimeout,
+            ),
+            (
+                &["trip(SafeStopTrigger::CommandStale)"][..],
+                SafeStopTrigger::CommandStale,
+            ),
+            (
+                &["trip(SafeStopTrigger::IsbStop)"][..],
+                SafeStopTrigger::IsbStop,
+            ),
+            (
+                // Tripped directly in one controller and through
+                // `request_stop` in the other.
+                &[
+                    "trip(SafeStopTrigger::OperatorOverride)",
+                    "request_stop(SafeStopTrigger::OperatorOverride)",
+                    "let trigger = SafeStopTrigger::OperatorOverride;",
+                ][..],
+                SafeStopTrigger::OperatorOverride,
+            ),
+            (
+                // Reached through the shared `on_event` classifier, so the
+                // producer is the match arm that names the PGN.
+                &["Some(SafeStopTrigger::SendFailed(*pgn))"][..],
+                SafeStopTrigger::SendFailed(PGN_GUIDANCE_SYSTEM_CMD),
+            ),
+        ] {
+            if tripped(shapes) {
+                plugin_tripped.push(trigger);
+            }
+        }
+
         let mut reachable: Vec<SafeStopTrigger> = Vec::new();
-        for trigger in crate::session::plugins::autodrive::PRODUCES
-            .iter()
-            .chain(crate::session::plugins::guidance::PRODUCES)
-            .copied()
-            .chain(from_events)
-        {
+        for trigger in plugin_tripped.into_iter().chain(from_events) {
             if !reachable.contains(&trigger) {
                 reachable.push(trigger);
             }

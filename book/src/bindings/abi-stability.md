@@ -4,17 +4,43 @@ The C ABI has an explicit version surface and a generated header. ABI stability
 means C callers can rely on ownership and layout rules within the documented
 version boundary.
 
-## Current version: 3
+## Current version: 4
 
-The ABI is now **version 3**, reported by `machbus_session_abi_version()`. This
-version marks the rewrite onto the [session facade](../guide/session-facade.md):
-the entire symbol set was renamed to the `machbus_session_*` prefix and the model
-changed to sans-IO (the caller bridges IO with feed/tick/poll instead of an
-internal virtual bus). That was a deliberate, breaking change, so stability
-guarantees start fresh from v3 — older `machbus.h` headers and any pre-v3 symbol
-names do not apply.
+The ABI is **version 4**, reported by `machbus_session_abi_version()`.
 
 C examples intentionally fail fast if the runtime reports a different version.
+That guard is the only thing standing between a stale header and undefined
+behaviour, so it is load-bearing: a caller built against v3 that skipped it
+would call the five-argument `machbus_session_fs_client_seek` with four
+arguments, reading `out_tan` from an uninitialised stack slot and writing
+through it.
+
+### v3 → v4
+
+Conformance work against ISO 11783-13 and ISO 11783-7 changed four things a C
+caller must audit:
+
+- **`machbus_session_fs_client_seek` gained an argument.** It was
+  `(handle, position: uint32_t, out_tan)`; it is now
+  `(handle, mode: uint8_t, offset: int32_t, out_tan)`. `mode` is the ISO
+  11783-13 B.17 Position Mode — 0 from the start, 1 from the current pointer,
+  2 from the end — and the offset is signed, so a rewind is a negative value.
+- **File Server error codes were renumbered to Annex B.9.** Everything from 5
+  upward moved: `InvalidHandle` is now 5 (was 7), `MediaNotPresent` 10 (was
+  12), `NotSupported` 12 (was 20). A caller switching on the numeric value must
+  be re-read against the table.
+- **`MachbusEvent`'s FS seek payload carries the resulting position** rather
+  than a unit success, per C.3.3.3.
+- **`repr(C)` PODs widened** where a decoder gained a field (notably the GNSS
+  position, which now carries DD209 integrity).
+
+### v2 → v3
+
+The rewrite onto the [session facade](../guide/session-facade.md): the entire
+symbol set was renamed to the `machbus_session_*` prefix and the model changed
+to sans-IO (the caller bridges IO with feed/tick/poll instead of an internal
+virtual bus). A deliberate breaking change; stability guarantees start fresh
+from v3, and older `machbus.h` headers and pre-v3 symbol names do not apply.
 
 ## What the version covers
 

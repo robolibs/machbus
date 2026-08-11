@@ -33,8 +33,34 @@ use crate::time::Instant;
 ///
 /// Bump this when exported function signatures, `repr(C)` POD layouts, enum
 /// discriminants, or ownership contracts change in a way C callers must audit.
-/// `3` marks the rewrite onto the `session` facade.
-pub const MACHBUS_C_ABI_VERSION: u32 = 3;
+///
+/// - `3` marked the rewrite onto the `session` facade.
+/// - `4` is the round-4 conformance work: `machbus_session_fs_client_seek` grew
+///   a `mode` argument and its `position` became a signed `offset`
+///   (ISO 11783-13 B.17), the File Server error codes were renumbered to Annex
+///   B.9, `MachbusEvent`'s seek payload became a position rather than a unit,
+///   and several `repr(C)` PODs widened. A caller built against a v3 header
+///   that skipped this guard would call the five-argument seek with four,
+///   reading `out_tan` from an uninitialised slot and writing through it.
+pub const MACHBUS_C_ABI_VERSION: u32 = 4;
+
+// The POD layouts this version promises. A `repr(C)` struct that grows a field
+// breaks these at compile time, in the same file as the version constant, so
+// the bump cannot be forgotten — the failure mode this guards against is a
+// widened POD shipping under an unchanged version, which lets a caller built
+// against the old header past the runtime `abi_version()` check in
+// examples/c_abi/demo.c and then read a field that moved.
+//
+// If one of these fails: bump MACHBUS_C_ABI_VERSION, update the two `!= 4`
+// checks in the C examples, record the delta in
+// book/src/bindings/abi-stability.md, and mirror the new sizes in
+// examples/c_abi/layout.c.
+const _: () = {
+    assert!(core::mem::size_of::<MachbusConfig>() == 48);
+    assert!(core::mem::size_of::<MachbusEvent>() == 40);
+    assert!(core::mem::size_of::<MachbusGnssPosition>() == 40);
+    assert!(core::mem::size_of::<MachbusCanBusValidation>() == 5);
+};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };

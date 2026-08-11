@@ -77,7 +77,7 @@ The embedded `Session` enables `IsoNet`'s direct message-capture queue, so
 decoded messages are drained without a boxed callback listener at the session
 boundary. Hosted callback dispatch remains explicit and opt-in.
 Selected ISO 11783 application codecs are also embedded-available, including
-AUX, legacy file-transfer types, Functionalities, Group Function, Guidance,
+AUX, Functionalities, Group Function, guidance codecs,
 TIM, implement/tractor message codecs, and Sequence Control core
 state/recording/TAN helpers. `machbus::isobus::tc` also builds in embedded
 mode for heap-backed DDOP/object codecs, TC client/server pump state, TC-GEO,

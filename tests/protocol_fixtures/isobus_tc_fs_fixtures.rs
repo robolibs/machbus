@@ -1013,11 +1013,10 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     // reserved. 20 used to be emitted for every unimplemented command.
     assert_eq!(FSError::from_u8(12), FSError::NotSupported);
     assert_eq!(FSError::try_from_u8(20), None);
-    assert_eq!(
-        FileAttributes::ReadOnly | FileAttributes::Archive,
-        0x21,
-        "attribute bit layout stays stable"
-    );
+    // B.15: bit 0 read-only, bit 1 hidden, bit 3 volume, bit 4 directory.
+    assert_eq!(FileAttributes::ReadOnly | FileAttributes::Hidden, 0x03);
+    assert_eq!(FileAttributes::IsVolume.bit(), 0x08);
+    assert_eq!(FileAttributes::Directory.bit(), 0x10);
 
     let mut server = IsoFileServer::new(IsoFileServerConfig::default());
     server.add_file("log.txt", b"abc".to_vec(), 0).unwrap();

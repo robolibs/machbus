@@ -275,6 +275,19 @@ impl FileEntry {
     pub const fn is_read_only(&self) -> bool {
         has_attribute(self.attributes, FileAttributes::ReadOnly)
     }
+
+    /// B.15 bit 3. A client walking `\\` for the volume list reads this;
+    /// under the old DOS-shaped table it was never set, so the list came back
+    /// empty while fixed-media directories were classified as volumes.
+    #[must_use]
+    pub const fn is_volume(&self) -> bool {
+        has_attribute(self.attributes, FileAttributes::IsVolume)
+    }
+
+    #[must_use]
+    pub const fn is_hidden(&self) -> bool {
+        has_attribute(self.attributes, FileAttributes::Hidden)
+    }
 }
 
 /// TAN cache entry for idempotent retry-handling.

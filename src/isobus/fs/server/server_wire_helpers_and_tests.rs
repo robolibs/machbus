@@ -1096,7 +1096,7 @@ mod tests {
         s.add_file(
             "\\logs\\old.txt",
             b"abc".to_vec(),
-            FileAttributes::Archive.bit(),
+            FileAttributes::Hidden.bit(),
         )
         .unwrap();
 
@@ -1125,7 +1125,7 @@ mod tests {
         get_attrs.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(get_attrs, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        assert_eq!(out[0].data[3], FileAttributes::Archive.bit());
+        assert_eq!(out[0].data[3], FileAttributes::Hidden.bit());
 
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
 
         s.file_attrs
-            .insert("\\logs\\new.txt".to_string(), FileAttributes::Archive.bit());
+            .insert("\\logs\\new.txt".to_string(), FileAttributes::Hidden.bit());
         let out = s.handle_client_message(&req_msg(delete_read_only, 0x43));
         assert_eq!(out[0].data, success_response(FSFunction::DeleteFile, 0x13));
         assert!(!s.files.contains_key("\\logs\\new.txt"));
@@ -1186,7 +1186,7 @@ mod tests {
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
             0x22,
-            FileAttributes::Volume.bit(),
+            FileAttributes::IsVolume.bit(),
             bad_attrs.len() as u8, (bad_attrs.len() >> 8) as u8,
         ];
         set_attrs.extend_from_slice(bad_attrs);

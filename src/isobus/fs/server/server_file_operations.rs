@@ -1419,10 +1419,7 @@ impl FileServer {
         }
         let new_attrs = request[2];
         if new_attrs
-            & !(FileAttributes::ReadOnly.bit()
-                | FileAttributes::Hidden.bit()
-                | FileAttributes::System.bit()
-                | FileAttributes::Archive.bit())
+            & !FILE_ATTRIBUTES_CLIENT_SETTABLE
             != 0
         {
             return encode_error_response(

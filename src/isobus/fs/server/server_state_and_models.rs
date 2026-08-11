@@ -8,8 +8,8 @@ use alloc::{
 };
 
 use super::error_codes::{
-    FSError, FileAttributes, OpenFlags, get_access_mode, has_attribute, has_flag,
-    open_flags_have_no_reserved_bits,
+    FILE_ATTRIBUTES_CLIENT_SETTABLE, FSError, FileAttributes, OpenFlags, get_access_mode,
+    has_attribute, has_flag, open_flags_have_no_reserved_bits,
 };
 use super::types::{
     CCM_FUNCTION_CODE, CCMMessage, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry, FileHandle,

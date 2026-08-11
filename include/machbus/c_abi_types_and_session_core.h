@@ -149,6 +149,65 @@ typedef enum {
 } MachbusValveCommand;
 
 /**
+ * ISO 11783-13:2022 B.15 Attributes.
+ *
+ * Bits 0 and 1 describe the entry; bits 2 and 5-7 describe the volume it
+ * lives on; bits 3 and 4 say what kind of entry it is.
+ *
+ * These used to carry DOS/FAT meanings, and only read-only, hidden and
+ * directory happened to line up. `Volume` sat at bit 6, which B.15 defines as
+ * "volume is not removable", so every entry on fixed media was classified as
+ * a volume while a real volume entry (bit 3) was invisible — a client walking
+ * the volume list saw none. `System` at bit 2 is really "volume supports the
+ * hidden attribute" and `Archive` at bit 5 is really "volume supports long
+ * filenames", both of which Set File Attributes let a client claim.
+ */
+enum FileAttributes
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+  FILE_ATTRIBUTES_NONE = 0,
+  /**
+   * Bit 0 — the entry's read-only attribute is set.
+   */
+  FILE_ATTRIBUTES_READ_ONLY = 1,
+  /**
+   * Bit 1 — the entry's hidden attribute is set.
+   */
+  FILE_ATTRIBUTES_HIDDEN = 2,
+  /**
+   * Bit 2 — the volume supports the hidden attribute.
+   */
+  FILE_ATTRIBUTES_VOLUME_SUPPORTS_HIDDEN = 4,
+  /**
+   * Bit 3 — the entry specifies a volume.
+   */
+  FILE_ATTRIBUTES_IS_VOLUME = 8,
+  /**
+   * Bit 4 — the entry specifies a directory.
+   */
+  FILE_ATTRIBUTES_DIRECTORY = 16,
+  /**
+   * Bit 5 — the volume supports long filenames.
+   */
+  FILE_ATTRIBUTES_VOLUME_SUPPORTS_LONG_FILENAMES = 32,
+  /**
+   * Bit 6 — the volume is *not* removable.
+   */
+  FILE_ATTRIBUTES_VOLUME_NOT_REMOVABLE = 64,
+  /**
+   * Bit 7 — the volume is case-sensitive. A client that cannot read this
+   * has no way to know whether `Task.xml` and `TASK.XML` are one file,
+   * which A.2.2.1 warns about.
+   */
+  FILE_ATTRIBUTES_VOLUME_CASE_SENSITIVE = 128,
+};
+#ifndef __cplusplus
+typedef uint8_t FileAttributes;
+#endif // __cplusplus
+
+/**
  * Process-data trigger methods. Bitmask, OR multiple together.
  */
 enum TriggerMethod

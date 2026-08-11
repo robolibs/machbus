@@ -1257,7 +1257,7 @@ fn file_client_rejects_malformed_volume_status_responses_without_media_state_or_
 fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut server = FileServer::new(FileServerConfig::default());
     server
-        .add_file("log.txt", b"abc".to_vec(), FileAttributes::Archive.bit())
+        .add_file("log.txt", b"abc".to_vec(), FileAttributes::Hidden.bit())
         .unwrap();
 
     let open = server.handle_client_message(&fs_request(
@@ -1297,7 +1297,7 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     );
     assert_eq!(
         attrs[0].data[3],
-        FileAttributes::Archive.bit(),
+        FileAttributes::Hidden.bit(),
         "denied SetFileAttributes must not mutate the existing attributes"
     );
 }

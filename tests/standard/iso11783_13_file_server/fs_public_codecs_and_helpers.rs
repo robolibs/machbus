@@ -1581,7 +1581,7 @@ fn file_client_rejects_non_ascii_path_requests_before_transport() {
         client.try_delete_file("résumé.txt").unwrap_err(),
         client.try_get_file_attributes("ångle.txt").unwrap_err(),
         client
-            .try_set_file_attributes("måp.txt", FileAttributes::Archive.bit())
+            .try_set_file_attributes("måp.txt", FileAttributes::Hidden.bit())
             .unwrap_err(),
         client.try_get_file_date_time("día.txt").unwrap_err(),
     ] {
@@ -1638,16 +1638,18 @@ fn file_client_management_requests_validate_and_parse_standard_responses() {
         .on_file_attributes_response
         .subscribe(move |(tan, result)| attrs_log_sub.borrow_mut().push((*tan, *result)));
 
-    let bad_attrs = client
+    // B.15 assigns all eight bits, so none of them is reserved on receive —
+    // bit 3 is "specifies a volume", which the old DOS-shaped mask dropped.
+    let volume_attrs = client
         .try_get_file_attributes("new.txt")
         .expect("valid GetFileAttributes request");
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         vec![
             FSFunction::GetFileAttributes.as_u8(),
-            bad_attrs.data[1],
+            volume_attrs.data[1],
             FSError::Success.as_u8(),
-            FileAttributes::Volume.bit(),
+            FileAttributes::IsVolume.bit(),
             0xFF,
             0xFF,
             0xFF,
@@ -1657,14 +1659,14 @@ fn file_client_management_requests_validate_and_parse_standard_responses() {
     ));
     assert_eq!(
         attrs_log.borrow().last().unwrap().1,
-        Err(FSError::MalformedRequest),
-        "reserved/unsupported attribute response bits must be rejected"
+        Ok(FileAttributes::IsVolume.bit()),
+        "B.15 bit 3 marks a volume entry and must survive decoding"
     );
 
     let good_attrs = client
         .try_get_file_attributes("new.txt")
         .expect("valid GetFileAttributes retry");
-    let expected_attrs = FileAttributes::Hidden | FileAttributes::Archive;
+    let expected_attrs = FileAttributes::ReadOnly | FileAttributes::Hidden;
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         vec![

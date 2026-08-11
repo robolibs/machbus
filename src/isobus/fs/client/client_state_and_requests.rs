@@ -8,7 +8,7 @@ use alloc::{
 };
 
 use super::error_codes::{
-    FSError, FileAttributes, OpenFlags, fs_error_byte_is_valid, get_access_mode,
+    FILE_ATTRIBUTES_CLIENT_SETTABLE, FSError, OpenFlags, fs_error_byte_is_valid, get_access_mode,
     open_flags_have_no_reserved_bits,
 };
 use super::types::{
@@ -30,15 +30,7 @@ const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;
 const VOLUME_MODE_PREPARE_REMOVAL: u8 = 0x02;
 const VOLUME_MODE_RESERVED_MASK: u8 = !0x03;
-const FILE_ATTRIBUTES_RESPONSE_ALLOWED_MASK: u8 = FileAttributes::ReadOnly as u8
-    | FileAttributes::Hidden as u8
-    | FileAttributes::System as u8
-    | FileAttributes::Directory as u8
-    | FileAttributes::Archive as u8;
-const FILE_ATTRIBUTES_SET_ALLOWED_MASK: u8 = FileAttributes::ReadOnly as u8
-    | FileAttributes::Hidden as u8
-    | FileAttributes::System as u8
-    | FileAttributes::Archive as u8;
+const FILE_ATTRIBUTES_SET_ALLOWED_MASK: u8 = FILE_ATTRIBUTES_CLIENT_SETTABLE;
 const INITIALIZE_VOLUME_FLAGS_RESERVED_MASK: u8 = !0x03;
 
 /// Seek origin (ISO 11783-13:2022 B.17 Position Mode). Values 3-255 are
@@ -1512,9 +1504,9 @@ impl FileClient {
             self.on_file_attributes_response.emit(&(tan, Err(error)));
             return;
         }
-        if !fs_payload_len_is_canonical(response, 4)
-            || response[3] & !FILE_ATTRIBUTES_RESPONSE_ALLOWED_MASK != 0
-        {
+        // B.15 assigns all eight bits, so there is nothing reserved to reject
+        // here; only the frame length is checked.
+        if !fs_payload_len_is_canonical(response, 4) {
             self.on_file_attributes_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;

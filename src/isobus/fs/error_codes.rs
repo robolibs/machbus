@@ -249,19 +249,48 @@ pub const fn open_flags_have_no_reserved_bits(flags: u8) -> bool {
 
 // ─── FileAttributes ────────────────────────────────────────────────────
 
-/// File attribute flags (mirrors DOS/FAT semantics).
+/// ISO 11783-13:2022 B.15 Attributes.
+///
+/// Bits 0 and 1 describe the entry; bits 2 and 5-7 describe the volume it
+/// lives on; bits 3 and 4 say what kind of entry it is.
+///
+/// These used to carry DOS/FAT meanings, and only read-only, hidden and
+/// directory happened to line up. `Volume` sat at bit 6, which B.15 defines as
+/// "volume is not removable", so every entry on fixed media was classified as
+/// a volume while a real volume entry (bit 3) was invisible — a client walking
+/// the volume list saw none. `System` at bit 2 is really "volume supports the
+/// hidden attribute" and `Archive` at bit 5 is really "volume supports long
+/// filenames", both of which Set File Attributes let a client claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum FileAttributes {
     #[default]
     None = 0x00,
+    /// Bit 0 — the entry's read-only attribute is set.
     ReadOnly = 0x01,
+    /// Bit 1 — the entry's hidden attribute is set.
     Hidden = 0x02,
-    System = 0x04,
+    /// Bit 2 — the volume supports the hidden attribute.
+    VolumeSupportsHidden = 0x04,
+    /// Bit 3 — the entry specifies a volume.
+    IsVolume = 0x08,
+    /// Bit 4 — the entry specifies a directory.
     Directory = 0x10,
-    Archive = 0x20,
-    Volume = 0x40,
+    /// Bit 5 — the volume supports long filenames.
+    VolumeSupportsLongFilenames = 0x20,
+    /// Bit 6 — the volume is *not* removable.
+    VolumeNotRemovable = 0x40,
+    /// Bit 7 — the volume is case-sensitive. A client that cannot read this
+    /// has no way to know whether `Task.xml` and `TASK.XML` are one file,
+    /// which A.2.2.1 warns about.
+    VolumeCaseSensitive = 0x80,
 }
+
+/// The B.15 bits a client may set through Set File Attributes: the two that
+/// describe the entry itself. The rest describe the volume and are the file
+/// server's to report.
+pub const FILE_ATTRIBUTES_CLIENT_SETTABLE: u8 =
+    FileAttributes::ReadOnly as u8 | FileAttributes::Hidden as u8;
 
 impl FileAttributes {
     #[inline]
@@ -343,11 +372,31 @@ mod tests {
         assert_eq!(get_access_mode(bits), 0x01);
     }
 
+    /// The B.15 table verbatim. The old values were DOS/FAT ones: `Volume`
+    /// sat on bit 6 ("volume is not removable"), so no entry ever reported
+    /// itself as a volume and every fixed-media entry claimed to be one.
     #[test]
-    fn file_attributes_or_yields_bitfield() {
+    fn file_attribute_bits_match_the_b15_table() {
+        for (bit, attribute) in [
+            (0x01, FileAttributes::ReadOnly),
+            (0x02, FileAttributes::Hidden),
+            (0x04, FileAttributes::VolumeSupportsHidden),
+            (0x08, FileAttributes::IsVolume),
+            (0x10, FileAttributes::Directory),
+            (0x20, FileAttributes::VolumeSupportsLongFilenames),
+            (0x40, FileAttributes::VolumeNotRemovable),
+            (0x80, FileAttributes::VolumeCaseSensitive),
+        ] {
+            assert_eq!(attribute.bit(), bit);
+            assert!(has_attribute(bit, attribute));
+        }
+
         let bits = FileAttributes::ReadOnly | FileAttributes::Hidden;
         assert_eq!(bits, 0x03);
-        assert!(has_attribute(bits, FileAttributes::ReadOnly));
         assert!(!has_attribute(bits, FileAttributes::Directory));
+
+        // Only the two entry-level bits are a client's to set; the rest
+        // describe the volume and used to be writable.
+        assert_eq!(FILE_ATTRIBUTES_CLIENT_SETTABLE, 0x03);
     }
 }

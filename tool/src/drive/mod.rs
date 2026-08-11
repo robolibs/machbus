@@ -490,9 +490,18 @@ mod tests {
             ),
         ];
 
-        // 80×24 is the smallest terminal worth supporting; if the panes do not
-        // fit there they are clipped in the field.
-        for (w, h) in [(80u16, 24u16), (110, 32), (200, 60)] {
+        // Hostile sizes on purpose. The keyboard pane draws a fixed 8-row key
+        // grid and the gamepad pane fixed stick/trigger art, neither of which
+        // shrinks — so anything short or narrow is where a missing bounds check
+        // shows up. 80x24 is the classic default; the rest bracket it.
+        for (w, h) in [
+            (80u16, 24u16),
+            (60, 20),
+            (40, 12),
+            (20, 8),
+            (110, 32),
+            (200, 60),
+        ] {
             for (automation, stop, refusal, armed, engaged) in states {
                 let mut state = DriveState::new(&args);
                 state.claimed = true;

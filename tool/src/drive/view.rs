@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use machbus::isobus::implement::guidance::GenericSaeBs02SlotValue;
 use machbus::session::Session;
@@ -21,6 +21,21 @@ const GREEN: Color = Color::Green;
 const RED: Color = Color::Red;
 const GRAY: Color = Color::DarkGray;
 const WHITE: Color = Color::White;
+
+/// Render `widget`, clipped to the frame.
+///
+/// The keyboard and gamepad panes are drawn at **fixed absolute offsets** — an
+/// 8-row key grid, stick boxes, trigger bars — none of which shrink with the
+/// terminal. Any of them writing past the buffer makes ratatui panic, so the
+/// tool used to die on a standard 80x24 rather than draw something cramped.
+/// Clipping here instead of at each of the twenty-odd call sites means a new
+/// widget cannot reintroduce it by forgetting a bounds check.
+fn paint<W: Widget>(f: &mut Frame, widget: W, area: Rect) {
+    let area = area.intersection(f.area());
+    if area.width > 0 && area.height > 0 {
+        f.render_widget(widget, area);
+    }
+}
 
 pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, session: &Session) {
     let area = f.area();
@@ -59,7 +74,7 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
     if inner.height < 14 {
         return;
@@ -69,14 +84,14 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     let cy = inner.y + inner.height / 2;
 
     // Left stick circle — bigger: 14 wide × 7 tall.
-    draw_stick(f, cx - 22, cy - 4, pad.lstick_x, pad.lstick_y, "L", GOLD);
+    draw_stick(f, cx.saturating_sub(22), cy - 4, pad.lstick_x, pad.lstick_y, "L", GOLD);
     // Right stick circle — same size.
     draw_stick(f, cx + 12, cy - 4, 0.0, 0.0, "R", GRAY);
 
     // Trigger bars above.
     let ty = inner.y + 1;
     let engaged = pad.rtrigger > 0.3;
-    draw_trigger(f, cx - 26, ty, "L2", pad.ltrigger, GRAY);
+    draw_trigger(f, cx.saturating_sub(26), ty, "L2", pad.ltrigger, GRAY);
     let r2_col = if engaged { GREEN } else { RED };
     let r2_label = if engaged { "R2 ENGAGED" } else { "R2 HOLD" };
     draw_trigger(f, cx + 14, ty, r2_label, pad.rtrigger, r2_col);
@@ -85,14 +100,14 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     let bx = cx + 18;
     let by = cy;
     draw_pad_btn(f, bx, by - 3, "Y", pad.y_held);
-    draw_pad_btn(f, bx - 6, by, "X", pad.x_held);
+    draw_pad_btn(f, bx.saturating_sub(6), by, "X", pad.x_held);
     draw_pad_btn(f, bx + 6, by, "B", pad.b_held);
     draw_pad_btn(f, bx, by + 3, "A", pad.a_held);
 
     // D-pad on the left — bigger spacing.
-    let dx = cx - 18;
+    let dx = cx.saturating_sub(18);
     draw_pad_btn(f, dx, by - 3, "↑", pad.dpad_up);
-    draw_pad_btn(f, dx - 6, by, "←", false);
+    draw_pad_btn(f, dx.saturating_sub(6), by, "←", false);
     draw_pad_btn(f, dx + 6, by, "→", false);
     draw_pad_btn(f, dx, by + 3, "↓", pad.dpad_down);
 
@@ -100,12 +115,12 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     draw_pad_btn(f, cx, by, "⌖", pad.start_held);
 
     // Labels under left stick.
-    f.render_widget(
+    paint(f, 
         Paragraph::new("steer / throttle")
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
         Rect {
-            x: cx - 28,
+            x: cx.saturating_sub(28),
             y: cy + 4,
             width: 16,
             height: 1,
@@ -113,7 +128,7 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     );
 
     // Info line at the bottom.
-    f.render_widget(
+    paint(f, 
         Paragraph::new(format!(
             " L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
             pad.lstick_x,
@@ -146,7 +161,7 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
         width: w,
         height: h,
     });
-    f.render_widget(
+    paint(f, 
         block,
         Rect {
             x,
@@ -167,7 +182,7 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
     let h_line: String = (0..inner.width)
         .map(|i| if inner.x + i == ccx { '┼' } else { '─' })
         .collect();
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(h_line, Style::default().fg(GRAY))),
         Rect {
             x: inner.x,
@@ -180,7 +195,7 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
     // Crosshair — vertical line through centre.
     for ry in inner.y..inner.y + inner.height {
         let ch = if ry == mid_y { '┼' } else { '│' };
-        f.render_widget(
+        paint(f, 
             Paragraph::new(Span::styled(ch.to_string(), Style::default().fg(GRAY))),
             Rect {
                 x: ccx,
@@ -192,7 +207,7 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
     }
 
     // The dot.
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(
             "●",
             Style::default().fg(col).add_modifier(Modifier::BOLD),
@@ -211,7 +226,7 @@ fn draw_trigger(f: &mut Frame, x: u16, y: u16, label: &str, value: f64, col: Col
     let pct = (value.clamp(0.0, 1.0) * w as f64).round() as u16;
     let bar: String = "▰".repeat(pct as usize) + &"▱".repeat((w - pct) as usize);
     let line = format!("{label} {bar}");
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(line, Style::default().fg(col))),
         Rect {
             x,
@@ -231,7 +246,7 @@ fn draw_pad_btn(f: &mut Frame, x: u16, y: u16, label: &str, held: bool) {
     } else {
         Style::default().fg(WHITE).bg(Color::Indexed(236))
     };
-    f.render_widget(
+    paint(f, 
         Paragraph::new(format!(" {label} "))
             .style(style)
             .alignment(Alignment::Center),
@@ -284,8 +299,8 @@ fn draw_title(f: &mut Frame, state: &DriveState, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(20)])
         .split(area);
-    f.render_widget(Paragraph::new(Line::from(vec![brand, sub])), top[0]);
-    f.render_widget(Paragraph::new(right), top[1]);
+    paint(f, Paragraph::new(Line::from(vec![brand, sub])), top[0]);
+    paint(f, Paragraph::new(right), top[1]);
 }
 
 // ─── keyboard ────────────────────────────────────────────────────────────
@@ -300,7 +315,7 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
     let cx = inner.x + inner.width / 2;
     let mut y = inner.y;
@@ -312,7 +327,7 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     key(f, cx, y, 'W', kb.kw.lit(), "forward");
     y += step;
     // A S D
-    key(f, cx - 14, y, 'A', kb.ka.lit(), "left");
+    key(f, cx.saturating_sub(14), y, 'A', kb.ka.lit(), "left");
     key(f, cx, y, 'S', kb.ks.lit(), "brake");
     key(f, cx + 14, y, 'D', kb.kd.lit(), "right");
     y += step;
@@ -320,15 +335,15 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     key_wide(f, cx, y, "ENTER", 14, kb.kenter.lit(), "stop");
     y += step;
     // I K
-    key(f, cx - 7, y, 'I', kb.ki.lit(), "limit +");
+    key(f, cx.saturating_sub(7), y, 'I', kb.ki.lit(), "limit +");
     key(f, cx + 7, y, 'K', kb.kk.lit(), "limit −");
     y += step;
     // H J
-    key(f, cx - 7, y, 'H', kb.kh.lit(), "hitch ↑");
+    key(f, cx.saturating_sub(7), y, 'H', kb.kh.lit(), "hitch ↑");
     key(f, cx + 7, y, 'J', kb.kj.lit(), "hitch ↓");
     y += step;
     // P O
-    key(f, cx - 7, y, 'P', kb.kp.lit(), "PTO on");
+    key(f, cx.saturating_sub(7), y, 'P', kb.kp.lit(), "PTO on");
     key(f, cx + 7, y, 'O', kb.ko.lit(), "PTO off");
     y += step;
     // X
@@ -359,7 +374,7 @@ fn key_hint(f: &mut Frame, cx: u16, y: u16, hint: &str) {
     if row >= f.area().bottom() {
         return;
     }
-    f.render_widget(
+    paint(f, 
         Paragraph::new(hint)
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
@@ -416,7 +431,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         top.push_str(h);
     }
     top.push(corners.chars().nth(1).unwrap());
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(top, b_style)),
         Rect {
             x,
@@ -426,7 +441,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         },
     );
     // Middle
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(label.to_string(), i_style)).alignment(Alignment::Center),
         Rect {
             x: x + 1,
@@ -435,7 +450,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
             height: 1,
         },
     );
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(v.to_string(), b_style)),
         Rect {
             x,
@@ -444,7 +459,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
             height: 1,
         },
     );
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(v.to_string(), b_style)),
         Rect {
             x: x + w - 1,
@@ -460,7 +475,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         bot.push_str(h);
     }
     bot.push(corners.chars().nth(3).unwrap());
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(bot, b_style)),
         Rect {
             x,
@@ -491,7 +506,7 @@ fn draw_telemetry(
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
     // 7 lines max. Values + bars on the SAME line.
     let lines: Vec<Line> = vec![
@@ -653,7 +668,7 @@ fn draw_telemetry(
         },
     ];
 
-    f.render_widget(
+    paint(f, 
         Paragraph::new(lines).style(Style::default().fg(WHITE)),
         inner,
     );
@@ -750,5 +765,5 @@ fn draw_status(f: &mut Frame, state: &DriveState, area: Rect) {
         format!("❯ {}", state.status),
         Style::default().fg(GOLD),
     ));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    paint(f, Paragraph::new(Line::from(spans)), area);
 }

@@ -802,7 +802,11 @@ mod tests {
         );
         app.frames.push_back(entry);
 
-        let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+        // Hostile sizes too: a pane drawn at fixed offsets panics rather than
+        // shrinking, and the drive TUI had exactly that bug on a standard
+        // 80x24. Every tab has to survive a cramped terminal.
+        for (w, h) in [(110u16, 32u16), (80, 24), (40, 12), (20, 8)] {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         for tab in [
             Tab::Live,
             Tab::Sniffer,
@@ -817,7 +821,8 @@ mod tests {
             app.tab = tab;
             app.selected = 0;
             term.draw(|f| view::render(f, &mut app))
-                .expect("render must not panic");
+                .unwrap_or_else(|e| panic!("tab {tab:?} at {w}x{h}: {e}"));
+        }
         }
     }
 }

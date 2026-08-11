@@ -454,3 +454,36 @@ fn parse_addr(spec: &str) -> Result<u8, String> {
     u8::from_str_radix(spec.trim_start_matches("0x"), 16)
         .map_err(|_| format!("--addr '{spec}': expected hex byte, e.g. 26"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// The live VT server's `draw` was never exercised. The drive TUI panicked
+    /// on a standard 80x24 by drawing at fixed offsets without bounds checks,
+    /// so every render path in the tool now proves it survives a cramped
+    /// terminal — including the portrait/landscape switch, which picks a
+    /// different layout below a square aspect ratio.
+    #[test]
+    fn the_live_vt_tui_renders_at_hostile_sizes() {
+        let name = Name::default()
+            .with_self_configurable(true)
+            .with_function_code(0x80)
+            .with_identity_number(0x77);
+        let session = Session::builder(name, 0x26)
+            .plug(VtServer::new(VTServerConfig::default()).expect("vt server config"))
+            .build()
+            .expect("session builds");
+        let state = LiveState::default();
+
+        for (w, h) in [(110u16, 32u16), (80, 24), (40, 12), (20, 8), (12, 40)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| {
+                let _ = draw(f, &state, "vcan0", 0x26, &session);
+            })
+            .unwrap_or_else(|e| panic!("live VT TUI at {w}x{h}: {e}"));
+        }
+    }
+}

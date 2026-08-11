@@ -447,6 +447,43 @@ impl TransportProtocol {
         Ok(emitted)
     }
 
+    /// Drop every session on `port` that uses `address` at either end, and
+    /// return the Conn_Abort frames announcing it.
+    ///
+    /// ISO 11783-5 §4.5.3 says a CF that loses arbitration "shall discontinue
+    /// using the address". New sends are already refused once the CF is
+    /// offline, but sessions that were already open kept running — and a BAM
+    /// needs no peer cooperation at all, so it carried on emitting DT frames
+    /// from an address now owned by somebody else.
+    ///
+    /// A destination-specific session gets an abort so the peer can release
+    /// its half immediately; a BAM has no peer state to release, so it is just
+    /// dropped.
+    pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
+        let mut frames = Vec::new();
+        for session in self.sessions.iter() {
+            if session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+            {
+                continue;
+            }
+            if session.destination_address != BROADCAST_ADDRESS {
+                frames.push(make_session_abort(
+                    session,
+                    TransportAbortReason::ResourcesUnavailable,
+                ));
+            }
+        }
+        self.sessions.retain(|session| {
+            session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+        });
+        self.timer_sessions.retain(|session| {
+            session.port != port || (session.source != address && session.destination != address)
+        });
+        frames
+    }
+
     #[inline]
     pub fn active_sessions_iter(&self) -> impl Iterator<Item = &TransportSession> {
         self.sessions.iter()

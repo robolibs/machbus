@@ -828,6 +828,33 @@ impl ExtendedTransportProtocol {
         Ok(emitted)
     }
 
+    /// Drop every session on `port` that uses `address` at either end, and
+    /// return the Conn_Abort frames announcing it.
+    ///
+    /// ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+    /// using the address". ETP is always destination-specific, so every
+    /// dropped session gets an abort. See the TP counterpart for why open
+    /// sessions used to outlive the address they were running on.
+    pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
+        let mut frames = Vec::new();
+        for session in self.sessions.iter() {
+            if session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+            {
+                continue;
+            }
+            frames.push(make_session_abort(
+                session,
+                TransportAbortReason::ResourcesUnavailable,
+            ));
+        }
+        self.sessions.retain(|session| {
+            session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+        });
+        frames
+    }
+
     #[inline]
     pub fn active_sessions_iter(&self) -> impl Iterator<Item = &TransportSession> {
         self.sessions.iter()

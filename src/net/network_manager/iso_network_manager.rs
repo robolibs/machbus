@@ -955,11 +955,31 @@ impl<L: Link> IsoNet<L> {
 
         let mut emitted = Vec::new();
         let mut matched = false;
+        let mut surrendered: Vec<Address> = Vec::new();
         for icf in &mut self.internal_cfs {
             if icf.port() != port || icf.name() != target_name {
                 continue;
             }
-            if icf.claim_state() != ClaimState::Claimed || !icf.cf().is_online() {
+            // §4.5.5 lists the commanded-address response among the messages a
+            // CF that cannot claim may send: it is the one recovery path the
+            // standard leaves a node that is off the bus. This used to require
+            // ClaimState::Claimed, so exactly the CF that needed the command
+            // was the one that ignored it. (Support for the message is
+            // optional per §4.4.2.5 — this restores an optional recovery
+            // path, it does not fix a "shall".)
+            let cannot_claim = icf.claim_state() == ClaimState::Failed;
+            if !cannot_claim && (icf.claim_state() != ClaimState::Claimed || !icf.cf().is_online()) {
+                continue;
+            }
+
+            if occupied_by_other && cannot_claim {
+                // Nothing to re-announce: this CF holds no address.
+                tracing::warn!(
+                    target: "machbus.network.claim",
+                    refused = %format_args!("0x{new_address:02X}"),
+                    "commanded address occupied — cannot-claim CF stays off the bus",
+                );
+                matched = true;
                 continue;
             }
 
@@ -991,10 +1011,18 @@ impl<L: Link> IsoNet<L> {
                 new = %format_args!("0x{new_address:02X}"),
                 "commanded address accepted",
             );
+            // The old address stops being ours the moment the command is
+            // accepted, so anything still running on it has to be torn down
+            // (§4.5.3, same rule as losing arbitration).
+            let vacated = icf.address();
             icf.set_address(new_address);
             icf.set_state(CfState::Online);
+            icf.state_machine_mut().transition(ClaimState::Claimed);
             icf.reset_claim_timer();
             icf.on_address_claimed.emit(&new_address);
+            if vacated != new_address {
+                surrendered.push(vacated);
+            }
             emitted.push(Frame::new(
                 Identifier::encode(
                     Priority::Default,
@@ -1008,6 +1036,10 @@ impl<L: Link> IsoNet<L> {
             matched = true;
         }
 
+        for address in surrendered {
+            let aborts = self.discontinue_address(port, address);
+            emitted.extend(aborts);
+        }
         self.send_frames_best_effort(&emitted, port);
         matched
     }
@@ -1094,6 +1126,35 @@ impl<L: Link> IsoNet<L> {
         true
     }
 
+    /// Stop using `address` on `port`: tear down every in-flight TP/ETP
+    /// session that runs on it, drop anything still queued behind one, and
+    /// return the Conn_Abort frames to emit.
+    ///
+    /// ISO 11783-5 §4.5.3 requires a CF that loses arbitration to discontinue
+    /// using the address, and §4.4.2.4 leaves it only cannot-claim and
+    /// request-for-address-claimed. `IsoNet::send` already refuses new
+    /// transfers once the CF is offline, so only sessions opened *before* the
+    /// loss leaked — and a BAM, needing no peer cooperation, kept emitting DT
+    /// frames from an address another CF now owns.
+    fn discontinue_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
+        if address == NULL_ADDRESS || address == BROADCAST_ADDRESS {
+            return Vec::new();
+        }
+        let mut frames = self.tp.abort_sessions_for_address(port, address);
+        frames.extend(self.etp.abort_sessions_for_address(port, address));
+        self.pending_transport_tx
+            .retain(|tx| tx.port != port || tx.source != address);
+        if !frames.is_empty() {
+            tracing::warn!(
+                target: "machbus.network.claim",
+                addr = %format_args!("0x{address:02X}"),
+                aborted = frames.len(),
+                "discontinued address — aborted in-flight transport sessions",
+            );
+        }
+        frames
+    }
+
     fn handle_address_claim(&mut self, frame: &Frame, port: u8) {
         let claimed_name = match Name::from_bytes(frame.payload()) {
             Some(n) => n,
@@ -1113,12 +1174,23 @@ impl<L: Link> IsoNet<L> {
         if claimed_addr <= MAX_ADDRESS {
             self.handle_duplicate_internal_name(claimed_name, claimed_addr, port);
 
-            // Notify our claimers.
+            // Notify our claimers, remembering which addresses they were on so
+            // a CF that yields can stop using the one it just gave up.
             let mut emitted: Vec<Frame> = Vec::new();
+            let mut surrendered: Vec<Address> = Vec::new();
             for (icf, claimer) in self.internal_cfs.iter_mut().zip(self.claimers.iter_mut()) {
-                if icf.port() == port {
-                    emitted.extend(claimer.handle_claim(icf, claimed_addr, claimed_name));
+                if icf.port() != port {
+                    continue;
                 }
+                let held = icf.address();
+                emitted.extend(claimer.handle_claim(icf, claimed_addr, claimed_name));
+                if icf.address() != held || !icf.cf().is_online() {
+                    surrendered.push(held);
+                }
+            }
+            for address in surrendered {
+                let aborts = self.discontinue_address(port, address);
+                emitted.extend(aborts);
             }
             self.send_frames_best_effort(&emitted, port);
         }

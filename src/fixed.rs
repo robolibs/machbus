@@ -102,6 +102,16 @@ impl<T, const N: usize> FixedQueue<T, N> {
             .flatten()
     }
 
+    /// Keep only the items `keep` returns `true` for, preserving order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        for _ in 0..self.len {
+            let Some(item) = self.pop_front() else { break };
+            if keep(&item) {
+                let _ = self.push_back(item);
+            }
+        }
+    }
+
     /// Remove all queued items.
     pub fn clear(&mut self) {
         while self.pop_front().is_some() {}
@@ -214,6 +224,22 @@ impl<T, const N: usize> FixedSlots<T, N> {
         }
         self.len -= 1;
         removed
+    }
+
+    /// Keep only the items `keep` returns `true` for.
+    ///
+    /// Order is not preserved — removal swaps in the last item, matching
+    /// [`Self::swap_remove`].
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        let mut idx = 0;
+        while idx < self.len {
+            let drop = self.buf[idx].as_ref().is_some_and(|item| !keep(item));
+            if drop {
+                let _ = self.swap_remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
     }
 
     /// Remove all items.

@@ -25,6 +25,44 @@ mod tests {
         )
     }
 
+    /// ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+    /// using the address". Sessions opened before the loss used to keep
+    /// running — and a BAM, which needs no peer cooperation, went on emitting
+    /// DT frames from an address another CF now owns.
+    #[test]
+    fn losing_an_address_tears_down_its_in_flight_sessions() {
+        let mut tp = TransportProtocol::new();
+        tp.send(0xEF00, &payload(20), 0x10, 0x20, 0, Priority::Lowest)
+            .unwrap();
+        tp.send(0xEF01, &payload(20), 0x10, BROADCAST_ADDRESS, 0, Priority::Lowest)
+            .unwrap();
+        tp.send(0xEF02, &payload(20), 0x11, 0x20, 0, Priority::Lowest)
+            .unwrap();
+        assert_eq!(tp.active_sessions_iter().count(), 3);
+
+        let aborts = tp.abort_sessions_for_address(0, 0x10);
+
+        // The destination-specific session is aborted so the peer can release
+        // its half; the BAM has no peer state, so it is only dropped.
+        assert_eq!(aborts.len(), 1);
+        assert_eq!(aborts[0].pgn(), PGN_TP_CM);
+        assert_eq!(aborts[0].data[0], tp_cm::ABORT);
+        assert_eq!(aborts[0].source(), 0x10);
+        assert_eq!(aborts[0].destination(), 0x20);
+
+        // Only the sessions on the surrendered address are gone.
+        let left: Vec<Pgn> = tp.active_sessions_iter().map(|s| s.pgn).collect();
+        assert_eq!(left, vec![0xEF02]);
+
+        // A different port is untouched.
+        let mut other = TransportProtocol::new();
+        other
+            .send(0xEF00, &payload(20), 0x10, 0x20, 1, Priority::Lowest)
+            .unwrap();
+        assert!(other.abort_sessions_for_address(0, 0x10).is_empty());
+        assert_eq!(other.active_sessions_iter().count(), 1);
+    }
+
     #[test]
     fn rejects_payload_too_small() {
         let mut tp = TransportProtocol::new();

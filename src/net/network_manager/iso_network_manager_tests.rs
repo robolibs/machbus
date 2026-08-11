@@ -610,9 +610,10 @@ mod tests {
         assert_eq!(net_a.internal_cf(h_a).unwrap().address(), 0x80);
 
         net_a.start_address_claiming().unwrap();
+        // §4.5.1 a): a restart re-opens the listen window before re-claiming.
         assert_eq!(
             net_a.internal_cf(h_a).unwrap().claim_state(),
-            ClaimState::WaitForContest
+            ClaimState::SendRequest
         );
         pump_until(&mut net_a, &mut net_b, &mut built, 50, 100, |a, _b| {
             a.internal_cf(h_a).unwrap().claim_state() == ClaimState::Claimed
@@ -698,8 +699,21 @@ mod tests {
         });
         assert!(ticks < 49, "later lower-NAME claim did not converge");
 
-        assert_eq!(low.internal_cf(h_low).unwrap().address(), 0x80);
-        assert_eq!(high.internal_cf(h_high).unwrap().address(), 0x81);
+        // §4.5.1 a) has the newcomer listen for 250 ms + RTxD and then claim an
+        // *unused* address. This used to assert the reverse — the lower NAME
+        // taking 0x80 and evicting the incumbent to 0x81 — because the claim
+        // went out before any address table existed, so arbitration had to
+        // clean up a collision the standard's own sequence avoids.
+        assert_eq!(
+            high.internal_cf(h_high).unwrap().address(),
+            0x80,
+            "the incumbent keeps the address it already holds"
+        );
+        assert_eq!(
+            low.internal_cf(h_low).unwrap().address(),
+            0x81,
+            "the newcomer picks a free address instead of contesting"
+        );
     }
 
     #[test]

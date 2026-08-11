@@ -38,6 +38,7 @@ use machbus::net::pgn_defs::{
     PGN_REQUEST, PGN_SHORTCUT_BUTTON, PGN_TC_TO_ECU, PGN_TIME_DATE, PGN_TP_CM, PGN_TP_DT,
     PGN_VT_TO_ECU, PGN_WHEEL_BASED_SPEED_DIST, PGN_WORKING_SET_MASTER,
 };
+use machbus::net::constants::ADDRESS_CLAIM_TIMEOUT_MS;
 use machbus::net::{
     AddressClaimer, BROADCAST_ADDRESS, ClaimState, FastPacketProtocol, Frame, Identifier,
     InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS, Name, NameFilter, NameFilterField,
@@ -170,7 +171,15 @@ fn address_claim_cannot_claim_when_all_addresses_are_observed_occupied() {
         .with_identity_number(1)
         .with_manufacturer_code(1);
     let preferred_address = local_cf.preferred_address();
-    let cannot_claim = claimer.handle_claim(&mut local_cf, preferred_address, preferred_winner);
+    // §4.5.1 a): during the initial listen window a peer claim is only an
+    // address-table entry. The cannot-claim comes out when the window closes
+    // and there is no free address left to pick.
+    assert!(
+        claimer
+            .handle_claim(&mut local_cf, preferred_address, preferred_winner)
+            .is_empty()
+    );
+    let cannot_claim = claimer.update(&mut local_cf, ADDRESS_CLAIM_TIMEOUT_MS);
 
     assert_eq!(local_cf.claim_state(), ClaimState::Failed);
     assert_eq!(local_cf.address(), NULL_ADDRESS);

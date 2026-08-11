@@ -79,7 +79,7 @@ use machbus::j1939::{
     Vep1, VolumeUnit,
 };
 use machbus::net::constants::{
-    BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
+    ADDRESS_CLAIM_TIMEOUT_MS, BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
     TP_MAX_PACKETS_PER_CTS, TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS,
 };
 use machbus::net::error::Error;
@@ -1030,7 +1030,10 @@ fn fixture_j1939_address_claim_frame_bytes_are_stable() {
     let name = Name::from_raw(u64::from_le_bytes(*NAME_MAGIC_RAW_LE));
     let mut cf = InternalCf::new(name, 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
-    let frames = claimer.start(&mut cf);
+    // §4.5.1 a): the request goes out first and the claim only after the
+    // 250 ms + RTxD listen window. The wire bytes of both are unchanged.
+    let mut frames = claimer.start(&mut cf);
+    frames.extend(claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS));
 
     assert_eq!(frames.len(), 2);
 

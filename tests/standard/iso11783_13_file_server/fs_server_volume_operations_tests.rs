@@ -450,14 +450,27 @@ fn file_server_get_file_date_time_uses_counted_paths_and_rejects_invalid_targets
         FSError::NotFound,
     );
 
-    let invalid = server.handle_client_message(&fs_request(
+    // A.2.3.1: the dot segments normalize away, so this names \\secret.txt —
+    // which does not exist. It used to be refused as an invalid source name.
+    let normalized = server.handle_client_message(&fs_request(
         date_time_request(0xC4, "jobs\\..\\secret.txt"),
+        0x42,
+    ));
+    assert_response(
+        &normalized[0].data,
+        FSFunction::GetFileDateTime,
+        0xC4,
+        FSError::NotFound,
+    );
+
+    let invalid = server.handle_client_message(&fs_request(
+        date_time_request(0xC6, "bad|name.txt"),
         0x42,
     ));
     assert_response(
         &invalid[0].data,
         FSFunction::GetFileDateTime,
-        0xC4,
+        0xC6,
         FSError::InvalidSourceName,
     );
 

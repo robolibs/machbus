@@ -252,13 +252,64 @@ fn decode_wire_path(path_bytes: &[u8]) -> Option<String> {
     )
 }
 
+/// Resolve the `.` and `..` components A.2.3.1 requires the file server to
+/// remove: "In case they are used in a path name, the file server shall
+/// normalize the path to remove '.' and '..' before the path is checked or
+/// used by any command." A `..` at the volume list is ignored, per the same
+/// clause.
+///
+/// These used to be rejected outright by [`is_valid_fs_path`], so the
+/// standard's own example — `\Vol1\SomeDirectory\..\.\File.txt` — and the far
+/// commoner `..\TASKDATA\TASKDATA.XML` were answered with an invalid-source-
+/// name error. Refusal is not one of the permitted outcomes.
+///
+/// A relative path is resolved against `current_directory` first, so `..`
+/// walks the client's actual working directory. The result never escapes the
+/// root: `is_valid_fs_path` still rejects any residual dot component as a
+/// post-condition.
+fn resolve_dot_segments(path: &str, current_directory: &str) -> String {
+    if !path.split('\\').any(|c| c == "." || c == "..") {
+        return path.to_string();
+    }
+
+    let absolute = is_absolute_path(path);
+    let mut resolved: Vec<&str> = if absolute {
+        Vec::new()
+    } else {
+        current_directory
+            .split('\\')
+            .filter(|c| !c.is_empty())
+            .collect()
+    };
+    for component in path.split('\\') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            name => resolved.push(name),
+        }
+    }
+
+    let trailing = path.ends_with('\\') || path.ends_with("..") || path.ends_with('.');
+    if resolved.is_empty() {
+        return "\\".to_string();
+    }
+    let body = resolved.join("\\");
+    if trailing {
+        format!("\\{body}\\")
+    } else {
+        format!("\\{body}")
+    }
+}
+
 fn normalize_iso_path(
     path: &str,
     current_directory: &str,
     allow_root: bool,
     allow_wildcards: bool,
 ) -> Result<String> {
-    let path = path.replace('/', "\\");
+    let path = resolve_dot_segments(&path.replace('/', "\\"), current_directory);
     if !is_valid_fs_path(&path, allow_root, allow_wildcards) {
         return Err(invalid_fs_path_error(
             "FileServer: path must be a valid ISO 11783-13 backslash path",
@@ -491,12 +542,10 @@ mod tests {
 
     #[test]
     fn open_file_rejects_invalid_paths_without_creating_entries() {
+        // A.2.3.1 has the server *normalize* '.' and '..' rather than refuse
+        // them, so only genuinely unencodable paths belong here.
         let invalid_paths = [
-            "..\\secret.txt",
-            "dir\\..\\secret.txt",
-            "dir\\.\\secret.txt",
             "dir\\\\secret.txt",
-            "../secret.txt",
             "c:\\secret.txt",
             "bad|name.txt",
         ];
@@ -670,21 +719,24 @@ mod tests {
     }
 
     #[test]
-    fn preloaded_paths_reject_traversal_and_file_directories() {
+    fn preloaded_paths_reject_unencodable_names_and_file_directories() {
         let mut s = FileServer::new(FileServerConfig::default());
-        for path in [
-            "..\\secret.txt",
-            "dir\\..\\secret.txt",
-            "bad|name.txt",
-            "\\",
-        ] {
+        for path in ["bad|name.txt", "\\"] {
             assert!(
                 s.add_file(path, Vec::new(), 0).is_err(),
                 "file path {path:?} should be rejected"
             );
         }
-        assert!(s.add_directory("dir\\..").is_err());
         assert!(s.add_directory("bad|dir").is_err());
+
+        // A.2.3.1's own example: the dot segments resolve away and the file
+        // lands where the normalized path points.
+        s.add_file("Vol1\\SomeDirectory\\..\\.\\File.txt", Vec::new(), 0)
+            .unwrap();
+        assert!(s.files.contains_key("\\Vol1\\File.txt"));
+        // '..' at the volume list is ignored rather than escaping it.
+        s.add_file("..\\secret.txt", Vec::new(), 0).unwrap();
+        assert!(s.files.contains_key("\\secret.txt"));
     }
 
     #[test]
@@ -1054,15 +1106,34 @@ mod tests {
         assert!(!sub.iter().any(|e| e.name == "deep\\"));
     }
 
+    /// A.2.3.1: nested dot segments are normalized away, not refused. Walking
+    /// into a directory and back out again lands at the root.
     #[test]
-    fn change_directory_rejects_nested_traversal() {
+    fn change_directory_normalizes_nested_traversal() {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\safe").unwrap();
-        let path = b"safe\\..";
-        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
-        req.extend_from_slice(path);
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[2], FSError::InvalidSourceName.as_u8());
+        let change = |tan: u8, path: &[u8]| {
+            let mut req = vec![
+                FSFunction::ChangeDirectory.as_u8(),
+                tan,
+                path.len() as u8,
+                (path.len() >> 8) as u8,
+            ];
+            req.extend_from_slice(path);
+            req
+        };
+
+        let out = s.handle_client_message(&req_msg(change(0x01, b"safe\\.."), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
+
+        let out = s.handle_client_message(&req_msg(change(0x02, b"\\safe"), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\safe\\");
+
+        // '..' from the root is ignored, not an escape.
+        let out = s.handle_client_message(&req_msg(change(0x03, b"..\\.."), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
     }
 

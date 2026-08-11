@@ -1315,7 +1315,9 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
         .unwrap();
     server.add_file("empty.txt", Vec::new(), 0).unwrap();
 
-    let invalid_path = b"..\\secret.txt";
+    // A.2.3.1 has the server normalize dot segments, so a bad name is one
+    // that cannot be encoded at all.
+    let invalid_path = b"bad|name.txt";
     let mut invalid_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x01,
@@ -1467,7 +1469,7 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
         parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "move_error_malformed_request").as_slice()
     );
 
-    let invalid_dir = b"safe\\..";
+    let invalid_dir = b"bad|dir";
     let mut change_dir = vec![
         FSFunction::ChangeDirectory.as_u8(),
         0x07,

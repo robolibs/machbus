@@ -450,6 +450,11 @@ pub fn is_valid_volume_name(name: &str) -> bool {
     })
 }
 
+/// Whether `path` is a well-formed, already-normalized ISO 11783-13 path.
+///
+/// This is a *post*-normalization check: `.` and `..` are rejected because the
+/// file server resolves them away first (A.2.3.1 makes that mandatory, not
+/// optional), so any that survive to here mean the normalizer was bypassed.
 #[must_use]
 pub fn is_valid_fs_path(path: &str, allow_root: bool, allow_wildcards: bool) -> bool {
     if path.is_empty() {

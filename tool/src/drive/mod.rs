@@ -336,10 +336,9 @@ pub fn parse_addr(spec: &str) -> Result<u8, String> {
 mod tests {
     use super::*;
 
-    /// The session builder refuses two authors of one command PGN, and
-    /// `AutoDrive` and `Guidance` both transmit 0xAD00 — so leaving `Guidance`
-    /// plugged alongside the switch would fail at runtime, not compile time.
-    /// Build the real plugin set and assert it assembles.
+    /// The session builder refuses two authors of one command PGN, and it does
+    /// so at **runtime**, not compile time — a bad plugin set would launch and
+    /// then fail. Build the real set and assert it assembles.
     #[test]
     fn the_drive_plugin_set_is_a_legal_session() {
         let args = DriveArgs {
@@ -435,5 +434,86 @@ mod tests {
             !kb.kspace.held_within(DEADMAN_WINDOW_S),
             "releasing SPACE must read as a released dead-man"
         );
+    }
+
+    /// The drive TUI cannot be launched here — it needs a tty — so render it
+    /// headlessly instead. This is the only automated check that the panes fit
+    /// and the widgets are wired: `draw_telemetry` grew a seventh line for the
+    /// automation status and both layouts had to grow with it, which a compile
+    /// cannot catch.
+    #[test]
+    fn both_drive_tuis_render_headlessly() {
+        use machbus::session::{AutodriveRefusal, AutomationStatus, SafeStopTrigger};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let args = DriveArgs {
+            iface: "vcan0".into(),
+            addr: "80".into(),
+            default_speed: 2.0,
+            speed_step: 0.1,
+            max_curvature: 40.0,
+            daemon: false,
+        };
+        let name = Name::default()
+            .with_self_configurable(true)
+            .with_function_code(0x80)
+            .with_identity_number(0x42);
+        let session = Session::builder(name, 0x80)
+            .plug(AutoDrive::new())
+            .plug(ShortcutButton::new())
+            .plug(Implement::new())
+            .plug(Gnss::new(
+                machbus::nmea::NMEAConfig::default().with_all(true),
+            ))
+            .build()
+            .expect("the drive plugin set assembles");
+
+        // Every interesting state, including the ones only reachable after a
+        // fault: a latched stop and a refused request both have to be legible.
+        let states = [
+            (AutomationStatus::NotReady, None, None, false, false),
+            (AutomationStatus::ReadyToEnable, None, None, true, false),
+            (
+                AutomationStatus::ActiveLimitedHigh,
+                None,
+                Some(AutodriveRefusal::StopConditionLive),
+                true,
+                true,
+            ),
+            (
+                AutomationStatus::Fault,
+                Some(SafeStopTrigger::PositionStale),
+                Some(AutodriveRefusal::LinkDown),
+                false,
+                false,
+            ),
+        ];
+
+        // 80×24 is the smallest terminal worth supporting; if the panes do not
+        // fit there they are clipped in the field.
+        for (w, h) in [(80u16, 24u16), (110, 32), (200, 60)] {
+            for (automation, stop, refusal, armed, engaged) in states {
+                let mut state = DriveState::new(&args);
+                state.claimed = true;
+                state.claimed_addr = 0x80;
+                state.speed = 1.5;
+                state.steer = 0.4;
+                state.automation = automation;
+                state.stop_reason = stop;
+                state.refusal = refusal;
+                state.armed = armed;
+                state.engaged = engaged;
+                state.arm_progress = 0.5;
+
+                let kb = keyboard::KeyboardState::new();
+                let pad = joystick::PadState::new();
+                let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+                term.draw(|f| view::render_keyboard(f, &state, &kb, &session))
+                    .unwrap_or_else(|e| panic!("keyboard TUI at {w}x{h}: {e}"));
+                term.draw(|f| view::render_joystick(f, &state, &pad, &session))
+                    .unwrap_or_else(|e| panic!("joystick TUI at {w}x{h}: {e}"));
+            }
+        }
     }
 }

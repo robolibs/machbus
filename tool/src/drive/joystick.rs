@@ -49,7 +49,7 @@ pub struct PadState {
 }
 
 impl PadState {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             lstick_y: 0.0,
             lstick_x: 0.0,

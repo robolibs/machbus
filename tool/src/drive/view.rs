@@ -347,53 +347,48 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     key(f, cx + 14, y, 'C', kb.kc.lit(), "clear stop");
 }
 
-fn key(f: &mut Frame, cx: u16, y: u16, ch: char, held: bool, hint: &str) {
-    let w = 7u16;
-    let x = cx.saturating_sub(w / 2);
-    key_box(f, x, y, w, &format!("  {ch}  "), held);
+/// The caption under a key cap.
+///
+/// `key_box` clips itself to the frame but this did not, so on any terminal
+/// shorter than the fixed 8-row key grid needs (~34 lines, and a standard
+/// 80x24 is well under that) the hint wrote past the buffer and ratatui
+/// panicked. Clip it the same way rather than letting terminal size crash the
+/// tool.
+fn key_hint(f: &mut Frame, cx: u16, y: u16, hint: &str) {
+    let row = y + 3;
+    if row >= f.area().bottom() {
+        return;
+    }
     f.render_widget(
         Paragraph::new(hint)
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
         Rect {
             x: cx.saturating_sub(10),
-            y: y + 3,
+            y: row,
             width: 21,
             height: 1,
         },
     );
+}
+
+fn key(f: &mut Frame, cx: u16, y: u16, ch: char, held: bool, hint: &str) {
+    let w = 7u16;
+    let x = cx.saturating_sub(w / 2);
+    key_box(f, x, y, w, &format!("  {ch}  "), held);
+    key_hint(f, cx, y, hint);
 }
 
 fn key_wide(f: &mut Frame, cx: u16, y: u16, label: &str, w: u16, held: bool, hint: &str) {
     let x = cx.saturating_sub(w / 2);
     key_box(f, x, y, w, &format!(" {} ", label), held);
-    f.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx.saturating_sub(10),
-            y: y + 3,
-            width: 21,
-            height: 1,
-        },
-    );
+    key_hint(f, cx, y, hint);
 }
 
 fn key_fmt(f: &mut Frame, cx: u16, y: u16, label: &str, w: u16, held: bool, hint: &str) {
     let x = cx.saturating_sub(w / 2);
     key_box(f, x, y, w, &format!("{}  ", label), held);
-    f.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx.saturating_sub(10),
-            y: y + 3,
-            width: 21,
-            height: 1,
-        },
-    );
+    key_hint(f, cx, y, hint);
 }
 
 fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {

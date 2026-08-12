@@ -36,6 +36,31 @@ faults; clearing one moves it to the "previously active" list. ISOBUS adds a six
 ECU-identification field and the control-function functionalities advertisement on top
 of the J1939 base.
 
+> **ISOBUS DM1 and DM2 have no lamp bytes.** Annex B.6 and B.7 define bytes 1–2
+> as "Reserved, set to FF16" and put SPN/FMI/occurrence in bytes 3–6; the word
+> "lamp" does not appear in ISO 11783-12 at all. J1939-73 *does* put lamp status
+> there, which is why `DmDtcList` keeps two encoders — `encode()` for the J1939
+> form and `encode_iso()` for the ISOBUS one. The diagnostics plugin broadcasts
+> the ISOBUS form.
+
+### Advertising functionalities is forward-compatible by design
+
+The Control Function Functionalities message (PGN 0xFC8E) is how a node says
+which roles it implements and at which generation. Annex B.9 is unusually
+explicit that a reader must tolerate what it does not recognise:
+
+> "Functionality characteristics values reserved for ISO assignment shall be
+> parsed without generating an error." … "If the number of option bytes is
+> larger than specified in this document for a functionality, the receiving CF
+> shall ignore the undefined functionality option bytes and parse the known
+> option bytes for this functionality only."
+
+Both halves matter, because A.10 keeps the 0–255 functionality list in the
+online database — it grows between revisions. A decoder that rejects the message
+over one unknown code throws away every functionality it *did* understand, so
+machbus skips unknown blocks using their own declared option length and keeps
+the rest.
+
 ## How machbus expresses it
 
 Two plugins cover the family:

@@ -54,6 +54,24 @@ consumer keeps the latest decoded value per source address and acts on it. A
 frame is a snapshot, not a stream of deltas: if a newer frame never arrives,
 the last one simply ages, and it is the *receiver's* job to notice staleness.
 
+### When J1939 and ISOBUS disagree, ISOBUS wins
+
+ISO 11783-8 is three pages and its whole substance is a precedence rule:
+
+> §4.2 — "Any parameters defined in SAE J 1939/71 that are also given in
+> ISO 11783-7 shall use the parameter definitions **according to ISO 11783-7**."
+
+§4.3 says the same for parameter *groups*. This is not academic. Wheel-based
+speed and distance (0xFE48) and ground-based (0xFE49) are ISO 11783-7
+parameters — ISO 11783-9 §4.4.2 classifies a TECU on them — and under part 7
+their trailing two bytes carry **key switch state and maximum time of tractor
+power**, the fields part 9's ignition-off sequence depends on. Read them the
+plain J1939 way and those bytes look like `0xFF` padding.
+
+So `SpeedAndDistance::decode` — which demands that padding — is the wrong entry
+point for real tractor traffic. Use `decode_measurement_prefix` for these three
+PGNs; it takes the speed/distance prefix and leaves the status bytes alone.
+
 ## Anatomy: the message groups
 
 `machbus` ports each powertrain frame as a small `Copy` struct with `encode`

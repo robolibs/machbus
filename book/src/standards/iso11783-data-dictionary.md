@@ -1,9 +1,23 @@
 # ISO 11783-11 — the data dictionary
 
 The Task Controller can only trade numbers if everyone agrees what each number *means*.
-Part 11 is that agreement: a public dictionary of **DDIs** — Data Dictionary
+Part 11 delegates that agreement to a public dictionary of **DDIs** — Data Dictionary
 Identifiers — each pinning a quantity to specific units and resolution. It is the
 vocabulary that makes one vendor's "application rate" equal another vendor's.
+
+> **Part 11 does not contain the dictionary.** The document is three pages. §4.1
+> says the process-data variables "shall be as defined in the ISOBUS Data
+> Dictionary, accessible at the ISOBUS website" — maintained by VDMA as the
+> maintenance agency appointed by the ISO Technical Management Board — and §4.2
+> fixes only the *shape* of an entry: "identification number; process data
+> element definition; range of the process data element; resolution of the
+> process data element; units of the process data element."
+>
+> So the DDI values below are sourced from the online database, and no document
+> in the ISO 11783 series can be used to check them. What *is* checkable is that
+> every entry carries those five attributes, which
+> [`DDIDefinition`](https://docs.rs/machbus) does. See the
+> [standards-text audit](../reference/audit/standards-text-audit.md).
 
 ## Why this exists
 

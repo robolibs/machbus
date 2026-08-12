@@ -54,6 +54,21 @@ files and directories.
 | Serving files (server) | `session::plugins::FsServer` | [File Server](../tutorials/file-server.md) |
 | The FS codecs directly | `isobus::fs` | [File Server](../tutorials/file-server.md) |
 
+## What counts as malformed
+
+Narrower than it looks. §4.9 scopes the malformed-request error to one thing:
+
+> "The file server shall respond with Error Code 47 Malformed Request, if it
+> receives a message, which is **shorter than expected**."
+
+Length — not a surprising flag value. The volume flags (B.29) and volume mode
+(B.30) each describe their spare bits as "Reserved, send as 000000", which binds
+the *sender*; nothing licenses a server to refuse a request over one. Refusing
+would also mean a later revision that defines one of those bits gets turned away
+rather than ignored, against the general rule that undefined bits are "received
+as 'don't care'". machbus therefore masks them on receive while still refusing
+to transmit them set.
+
 ## Failure modes worth knowing
 
 - **TAN confusion** — matching a response to the wrong request if TANs are not tracked.

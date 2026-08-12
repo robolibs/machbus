@@ -140,6 +140,7 @@
   - [Behavior differences](reference/behavior-differences.md)
   - [Glossary](reference/glossary.md)
   - [Audit and hardening history]()
+    - [Audit against the standards text](reference/audit/standards-text-audit.md)
     - [Audit binding contracts](reference/audit/bindings.md)
     - [Audit conformance boundary](reference/audit/conformance.md)
     - [Audit hardening plan](reference/audit/hardening-plan.md)

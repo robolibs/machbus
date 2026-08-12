@@ -43,6 +43,7 @@ do not create that external evidence by themselves.
 | Evidence class | Current status | Where to look |
 |---|---|---|
 | Local build/test gate | Present | `Makefile`, `book/src/reference/validation-history.md` |
+| Standards-text review | Present for the areas named in the audit page | `book/src/reference/audit/standards-text-audit.md` |
 | Public claim boundary | Present | this page and `book/src/conformity/` |
 | Protocol fixtures | Present for selected flows | `tests/protocol_fixtures.rs`, `tests/fixtures/`, `book/src/reference/assets/protocol_matrix.csv` |
 | AgIsoStack/reference-style bytes | Present for selected rows only | `tests/agisostack_compat.rs`, `tests/fixtures/oracle/agisostack_manifest.txt` |
@@ -68,6 +69,16 @@ A row can move out of `missing` only when it names a reduced trace with
 - No real machine safety claim is made.
 - Nothing in this checkout is currently AEF-tested.
 - No official ISO 11783 text is embedded in this repository.
+- Reviewing behaviour against the standards text is **not** conformance
+  testing. The [standards-text audit](standards-text-audit.md) checked field
+  orders, ranges, timings and reserved-bit rules against licensed copies of the
+  documents; that says nothing about how a given tractor behaves and moves no
+  row in this table. "Checked against the text" is safe wording; "conformant"
+  remains on the forbidden list above.
+- No PGN value in this crate is evidenced by the standards. ISO 11783-1 §7,
+  ISO 11783-7 §4.2 and ISO 11783-11 §4.1 each place the assignments in the
+  electronic database at isobus.net instead. Citations beside PGN constants name
+  the clause defining the *message*, not one stating its number.
 - No broad external peer compatibility statement is made beyond the exact
   local fixtures, virtual-bus tests, checked-in traces, and reports named in
   the docs.

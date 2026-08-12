@@ -101,7 +101,7 @@ ISO11783-7,implement-aux-valve-public-state-strict-decoders,src/isobus/implement
 ISO11783-7,implement-drive-strategy-upper-edge-values,src/isobus/implement/drive_strategy.rs,complete,standard-suite,none,maintain implement_drive_strategy_preserves_upper_edge_values_and_rejects_reserved_modes
 ISO11783-7,implement-guidance-system-command-curvature-boundary,src/isobus/implement/drive_strategy.rs,complete,standard-suite,none,maintain implement_guidance_system_command_rejects_reserved_bits_and_curvature_sentinel_band
 ISO11783-7,implement-guidance-command-public-status-strict-decoder,src/isobus/implement/drive_strategy.rs,complete,standard-suite,none,maintain implement_guidance_command_public_status_decoder_rejects_noncanonical_bytes
-ISO11783-7,implement-top-level-guidance-envelope-validation,src/isobus/guidance.rs,complete,standard-suite,none,maintain implement_top_level_guidance_rejects_wrong_pgn_width_sources_and_reserved_tail
+ISO11783-7,implement-guidance-envelope-validation,src/isobus/implement/guidance.rs,complete,standard-suite,none,maintain guidance machine info decode against captured tractor frames
 ISO11783-7,implement-hitch-pto-combined-roll-pitch-canonicalization,src/isobus/implement/drive_strategy.rs,complete,standard-suite,none,maintain implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls_and_padding
 ISO11783-7,implement-lighting-fixed-frame-canonicalization,src/isobus/implement/lighting.rs,complete,standard-suite,none,maintain implement_lighting_state_rejects_non_canonical_fixed_frames
 ISO11783-7,implement-guidance-status-reserved-padding,src/isobus/implement/guidance.rs,complete,standard-suite,none,maintain implement_guidance_messages_reject_reserved_status_values_and_padding
@@ -232,8 +232,6 @@ ISO11783-13,fs-property-version-range-validation,src/isobus/fs/types.rs;src/isob
 ISO11783-13,fs-client-explicit-server-request-state-gates,src/isobus/fs/client.rs,complete,standard-suite,none,maintain file_client_explicit_status_and_property_requests_reject_disconnected_state_without_tan
 ISO11783-13,fs-client-reserved-error-code-rejection,src/isobus/fs/client.rs;src/isobus/fs/error_codes.rs,complete,standard-suite,none,maintain reserved error-byte assertion in file_client_get_file_date_time_validates_requests_and_fixed_success_responses
 ISO11783-13,file-server-public-error-strict-decoder,src/isobus/fs/error_codes.rs,complete,standard-suite,none,maintain file_server_public_error_decoder_rejects_noncanonical_bytes and keep response validation sourced from FSError::try_from_u8
-ISO11783-13,file-server-legacy-transfer-error-strict-decoder,src/isobus/file_transfer.rs,complete,standard-suite,none,maintain file_server_legacy_transfer_error_decoder_rejects_noncanonical_bytes
-ISO11783-13,file-server-legacy-operation-strict-decoder,src/isobus/file_transfer.rs,complete,standard-suite,none,maintain file_server_legacy_operation_decoder_rejects_noncanonical_bytes
 ISO11783-13,file-server-function-public-strict-decoder,src/isobus/fs/types.rs,complete,standard-suite,none,maintain file_server_function_codes_reject_reserved_values
 ISO11783-13,file-server-volume-state-public-strict-decoders,src/isobus/fs/types.rs;src/isobus/fs/properties.rs,complete,standard-suite,none,maintain file_server_volume_state_decoders_reject_noncanonical_bytes
 ISO11783-13,fs-removed-volume-current-directory-state,src/isobus/fs/server.rs,complete,standard-suite,none,maintain file_server_removed_volume_resets_and_blocks_current_directory_state

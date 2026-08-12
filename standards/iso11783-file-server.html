@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -228,6 +228,19 @@ files and directories.</p>
 </tbody>
 </table>
 </div>
+<h2 id="what-counts-as-malformed"><a class="header" href="#what-counts-as-malformed">What counts as malformed</a></h2>
+<p>Narrower than it looks. §4.9 scopes the malformed-request error to one thing:</p>
+<blockquote>
+<p>“The file server shall respond with Error Code 47 Malformed Request, if it
+receives a message, which is <strong>shorter than expected</strong>.”</p>
+</blockquote>
+<p>Length — not a surprising flag value. The volume flags (B.29) and volume mode
+(B.30) each describe their spare bits as “Reserved, send as 000000”, which binds
+the <em>sender</em>; nothing licenses a server to refuse a request over one. Refusing
+would also mean a later revision that defines one of those bits gets turned away
+rather than ignored, against the general rule that undefined bits are “received
+as ‘don’t care’”. machbus therefore masks them on receive while still refusing
+to transmit them set.</p>
 <h2 id="failure-modes-worth-knowing"><a class="header" href="#failure-modes-worth-knowing">Failure modes worth knowing</a></h2>
 <ul>
 <li><strong>TAN confusion</strong> — matching a response to the wrong request if TANs are not tracked.</li>
@@ -290,7 +303,7 @@ reads and writes.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

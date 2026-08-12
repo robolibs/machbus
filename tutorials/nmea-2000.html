@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -326,6 +326,38 @@ solution, <code>altitude_m</code> stays <code>None</code> — it does not become
 This is why so many fields on <code>GNSSPosition</code> are <code>Option&lt;f64&gt;</code>: present means
 real, <code>None</code> means the receiver said “not available”. Inbound frames from the
 null or broadcast source address are also rejected outright before any decode.</p>
+<h2 id="each-pgn-has-its-own-transmit-priority"><a class="header" href="#each-pgn-has-its-own-transmit-priority">Each PGN has its own transmit priority</a></h2>
+<p>Appendix B.1 gives every parameter group a <strong>“Priority Default”</strong>, and they are
+not the same. Across the groups machbus sends they span four levels:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Groups</th></tr>
+</thead>
+<tbody>
+<tr><td>2</td><td>129025 position rapid, 129026 COG/SOG, 129027 position delta, 127250 heading, 127251 rate of turn, engine/transmission rapid</td></tr>
+<tr><td>3</td><td>129029 GNSS position data, 126992 system time, 127257 attitude, switch state</td></tr>
+<tr><td>5</td><td>127497 engine trip</td></tr>
+<tr><td>6</td><td>129539 DOPs, 129540 satellites in view, 127258 magnetic variation</td></tr>
+<tr><td>7</td><td>126993 heartbeat</td></tr>
+</tbody>
+</table>
+</div>
+<p>Lower wins arbitration, so this is not cosmetic: the 10 Hz position stream an
+autonomy consumer gates on is meant to outrank the once-a-second housekeeping
+groups. Sending everything at one priority — the J1939 general default of 6 is
+the easy mistake — puts a position fix behind its own dilution-of-precision
+report on a loaded bus. <code>nmea2000_default_priority()</code> holds the table, and the
+GNSS plugin applies it per frame.</p>
+<h2 id="a-reserved-sequence-id-costs-the-binding-not-the-data"><a class="header" href="#a-reserved-sequence-id-costs-the-binding-not-the-data">A reserved Sequence ID costs the binding, not the data</a></h2>
+<p>DD056 defines the SID as a correlation tag: “identical SID values within two or
+more different PGN transmissions identifies those PGN transmissions as a single
+related data set”. Values 0–252 bind, <strong>253–254 are reserved</strong>, 255 means “No
+binding provided”.</p>
+<p>Because the SID carries no measurement, machbus does not discard a parameter
+group over a reserved one — it maps it to 255 and decodes the rest. You still
+cannot correlate that frame with a matching COG/SOG, which is the honest outcome;
+you do not lose the position to punish its label.</p>
 <h2 id="why-fast-packet-for-the-big-ones"><a class="header" href="#why-fast-packet-for-the-big-ones">Why Fast Packet for the big ones</a></h2>
 <p>A classic CAN frame carries at most 8 bytes. The position-rapid and COG/SOG
 PGNs fit in one frame, which is exactly why they exist as separate “rapid” PGNs.
@@ -566,7 +598,7 @@ geo-referenced application maps.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

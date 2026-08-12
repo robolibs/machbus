@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -226,6 +226,21 @@ reading</em> rather than a real value.</p>
 consumer keeps the latest decoded value per source address and acts on it. A
 frame is a snapshot, not a stream of deltas: if a newer frame never arrives,
 the last one simply ages, and it is the <em>receiver’s</em> job to notice staleness.</p>
+<h3 id="when-j1939-and-isobus-disagree-isobus-wins"><a class="header" href="#when-j1939-and-isobus-disagree-isobus-wins">When J1939 and ISOBUS disagree, ISOBUS wins</a></h3>
+<p>ISO 11783-8 is three pages and its whole substance is a precedence rule:</p>
+<blockquote>
+<p>§4.2 — “Any parameters defined in SAE J 1939/71 that are also given in
+ISO 11783-7 shall use the parameter definitions <strong>according to ISO 11783-7</strong>.”</p>
+</blockquote>
+<p>§4.3 says the same for parameter <em>groups</em>. This is not academic. Wheel-based
+speed and distance (0xFE48) and ground-based (0xFE49) are ISO 11783-7
+parameters — ISO 11783-9 §4.4.2 classifies a TECU on them — and under part 7
+their trailing two bytes carry <strong>key switch state and maximum time of tractor
+power</strong>, the fields part 9’s ignition-off sequence depends on. Read them the
+plain J1939 way and those bytes look like <code>0xFF</code> padding.</p>
+<p>So <code>SpeedAndDistance::decode</code> — which demands that padding — is the wrong entry
+point for real tractor traffic. Use <code>decode_measurement_prefix</code> for these three
+PGNs; it takes the speed/distance prefix and leaves the status bytes alone.</p>
 <h2 id="anatomy-the-message-groups"><a class="header" href="#anatomy-the-message-groups">Anatomy: the message groups</a></h2>
 <p><code>machbus</code> ports each powertrain frame as a small <code>Copy</code> struct with <code>encode</code>
 returning the 8-byte wire form and <code>decode</code> returning <code>Option&lt;Self&gt;</code> — <code>None</code>
@@ -343,34 +358,34 @@ builds an <code>Eec1</code>, encodes it, decodes it back, and prints the enginee
 values — the canonical pattern for a callback that received a raw frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let eec1 = Eec1 {
-        engine_torque_percent: 50.0,
-        driver_demand_percent: 75.0,
-        actual_engine_percent: 45.0,
-        engine_speed_rpm: 1500.0,
+</span>    // EEC1 — Electronic Engine Controller 1.
+    let eec1 = Eec1 {
+        engine_torque_percent: Signal::Value(50.0),
+        driver_demand_percent: Signal::Value(75.0),
+        actual_engine_percent: Signal::Value(45.0),
+        engine_speed_rpm: Signal::Value(1500.0),
         starter_mode: 1,
         source_address: 0x00,
     };
     let bytes = eec1.encode();
     let d = Eec1::decode(&amp;bytes).unwrap();
     println!(
-        "[EEC1]  rpm={:.1}, torque={:.1}%, driver_demand={:.1}%",
-        d.engine_speed_rpm, d.engine_torque_percent, d.driver_demand_percent
-    );
+        "[EEC1]  rpm={:?}, torque={:?}%, driver_demand={:?}%",
+        d.engine_speed_rpm.value(),
 <span class="boring">}</span></code></pre>
 <p><code>EngineHours</code> works the same way, carrying the lifetime counters:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let hours = EngineHours {
-        total_hours: 1234.75,
-        total_revolutions: 1_000_000.0,
-    };
-    let hbytes = hours.encode();
-    let hd = EngineHours::decode(&amp;hbytes).unwrap();
+</span>    let fbytes = fe.encode();
+    let fd = FuelEconomy::decode(&amp;fbytes).unwrap();
     println!(
-        "[Hours] total={:.2} h, revs={:.0}",
-        hd.total_hours, hd.total_revolutions
+        "[LFE]   rate={:?} L/h, inst={:?} L/h, throttle={:?}%",
+        fd.fuel_rate_lph.value(),
+        fd.instantaneous_lph.value(),
+        fd.throttle_position.value()
     );
+
+    // Engine hours.
 <span class="boring">}</span></code></pre>
 <p>To wire these into a low-level loop, register a callback for the relevant PGN
 with <code>IsoNet::register_pgn_callback</code> and call the matching <code>decode</code> inside it.
@@ -509,7 +524,7 @@ a claimed source address first.</li>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../tutorials/guidance.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../tutorials/autodrive.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -523,7 +538,7 @@ a claimed source address first.</li>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../tutorials/guidance.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../tutorials/autodrive.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -549,7 +564,7 @@ a claimed source address first.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

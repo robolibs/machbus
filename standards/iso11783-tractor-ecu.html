@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -203,6 +203,42 @@ capability</em>: “here is what I provide, at this class.” The implement read
 control, guidance). machbus models the facility set, the class matrix, and the
 <code>tractor()</code> preset plus the <code>Implement</code> facilities broadcast that advertises them;
 maintain-power and guidance-readiness sit here too.</p>
+<h3 id="steering-speed-and-motion-are-three-separate-classes"><a class="header" href="#steering-speed-and-motion-are-three-separate-classes">Steering, speed and motion are three separate classes</a></h3>
+<p>Base class 1/2/3 says nothing about whether a tractor can be <em>driven</em> over the
+bus. That is carried by letter addenda, and §4.4.2 gives them separately:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Addendum</th><th>Clause</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>G</strong></td><td>§4.4.2.7</td><td>“shall support the external control of the guidance system” — curvature command, estimated curvature, readiness, lockout</td></tr>
+<tr><td><strong>P</strong></td><td>§4.4.2.8</td><td>“capable of accepting speed and/or drive strategy commands from an implement controller”</td></tr>
+<tr><td><strong>M</strong></td><td>§4.4.2.9</td><td>accepts “commands to initiate motion of the vehicle (forward or reverse)”</td></tr>
+</tbody>
+</table>
+</div>
+<p>A class 2G tractor steers on command and need not accept a speed command at all.
+Even with P, §4.4.2.8 says outright that bringing the tractor to a stop
+(speed <code>0.0</code>) is <strong>optional</strong> and “can be determined by an implement via the
+tractor facilities response message”.</p>
+<h3 id="the-handshake-is-not-optional-for-the-implement-either"><a class="header" href="#the-handshake-is-not-optional-for-the-implement-either">The handshake is not optional for the implement either</a></h3>
+<p>Two PGNs, and the second one is the part that surprises people:</p>
+<ul>
+<li><strong>0xFE09 Tractor Facilities Response</strong> — what the TECU has installed.</li>
+<li><strong>0xFE0A Required Tractor Facilities</strong> — what the implement needs.</li>
+</ul>
+<blockquote>
+<p>§4.4.2: “An implement CF can send the required tractor facilities message to
+the Tractor ECU <strong>to enable the transmission of the messages that provide the
+required facilities</strong>. A facility is not required if its corresponding bits are
+set to 0 in the implement CF required tractor facilities message. The Tractor
+ECU can then <strong>stop the transmission</strong> of this implement message to reduce
+bandwidth.”</p>
+</blockquote>
+<p>So a node that never declares what it needs may simply never receive it. That is
+why <a href="../tutorials/autodrive.html#the-tractor-has-to-advertise-the-facility-first"><code>AutoDrive</code></a>
+broadcasts the request on a cycle rather than only listening.</p>
 <h2 id="the-tecus-other-duties"><a class="header" href="#the-tecus-other-duties">The TECU’s other duties</a></h2>
 <p>Beyond the advertisement, a TECU is the source of the part-7 status broadcasts (speed,
 hitch, PTO) and the relay for some tractor-side services. In machbus a tractor node is
@@ -278,7 +314,7 @@ authority.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -378,18 +378,18 @@ no-zone case your default policy handles. Finally it records a position and emit
 the two position process-data payloads for the controller:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Build the position payload for `PGN_ECU_TO_TC`.
+</span>    // Position reaches the TC over PGN_GNSS_POSITION. It used to be sent as
+    // Process Data under DDI 0x0087/0x0088, which the ISO 11783-11 dictionary
+    // assigns to Device Element Offset Y and Z in millimetres — a latitude of
+    // 52 degrees told the TC the element sat 520 km off the datum.
     let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
     let mut tc2 = TCGEOInterface::new();
     tc2.set_position(GeoPoint {
         position: position_pos,
         timestamp_us: 0,
     });
-    let [lat_pd, lon_pd] = tc2.position_process_data_payloads().unwrap();
     println!(
-        "\n[wire] lat process-data: {:02X?}\n       lon process-data: {:02X?}",
-        lat_pd, lon_pd
-    );
+        "\n[state] TC-GEO position: {:?}",
 <span class="boring">}</span></code></pre>
 <p>The whole flow runs in software with no bus: you load a map, set a position,
 call <code>update</code>, and read the rate.</p>
@@ -535,7 +535,7 @@ position fixes come from.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

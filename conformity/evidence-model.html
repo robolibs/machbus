@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,12 +194,28 @@
 <tr><td>Property/fuzz smoke</td><td>Panic and bounds bugs</td><td>Semantic conformance gaps</td></tr>
 <tr><td>Session/role tests</td><td>Multi-role workflows</td><td>Real hardware timing</td></tr>
 <tr><td>Binding tests</td><td>C/Python wrapper drift</td><td>Every host platform</td></tr>
+<tr><td>Standards-text review</td><td>Rules never implemented right</td><td>Anything not written down</td></tr>
 <tr><td>Trace replay</td><td>Captured log regressions</td><td>Devices not in captures</td></tr>
 <tr><td>Hardware capture</td><td>Real bus behavior</td><td>Official certification</td></tr>
 <tr><td>AEF/PlugFest-style validation</td><td>Interoperability evidence</td><td>Future regressions</td></tr>
 </tbody>
 </table>
 </div>
+<h2 id="why-standards-text-review-earns-its-own-row"><a class="header" href="#why-standards-text-review-earns-its-own-row">Why standards-text review earns its own row</a></h2>
+<p>Every layer above it takes the implementation’s own assumptions as the baseline.
+Unit tests prove the code does what its author meant; fixtures pin the bytes it
+already produces; session tests run both halves of a conversation against each
+other. None of that can catch a wire rule that was reconstructed rather than
+read, because both sides of the test share the reconstruction.</p>
+<p>That is not hypothetical. The <a href="../reference/audit/standards-text-audit.html">standards-text
+audit</a> found nine defects, seven of
+which only misbehave against a <em>conformant peer</em> — over-strict receive paths and
+uniform defaults where the standard varies. Testing a stack against itself could
+not have surfaced any of them.</p>
+<p>The layer’s blind spot is the mirror image: it sees only what the documents
+write down. Much of ISO 11783 deliberately does not — PGN assignments, DDIs and
+NAMEs all live in the electronic database at isobus.net rather than in the
+standards, so no PGN constant in this crate is checkable this way.</p>
 <h2 id="repository-evidence-map"><a class="header" href="#repository-evidence-map">Repository evidence map</a></h2>
 <ul>
 <li><code>tests/protocol_fixtures.rs</code>: protocol fixture checks.</li>
@@ -209,6 +225,8 @@
 <li><code>examples/python_binding</code>: Python wheel/demo/regression smoke.</li>
 <li><code>tests/fuzz_targets.rs</code>: bounded fuzz/property smoke.</li>
 <li><code>book/src/reference/audit/</code>: previous audit evidence and rationale.</li>
+<li><code>book/src/reference/audit/standards-text-audit.md</code>: what was checked against
+the ISO/AEF/NMEA text, what it found, and what it cannot show.</li>
 </ul>
 <p>The new book should stay readable, but it should link back to evidence when a
 chapter makes a strong claim.</p>
@@ -261,7 +279,7 @@ chapter makes a strong claim.</p>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

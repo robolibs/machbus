@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,15 +184,122 @@
 <p>The C ABI has an explicit version surface and a generated header. ABI stability
 means C callers can rely on ownership and layout rules within the documented
 version boundary.</p>
-<h2 id="current-version-3"><a class="header" href="#current-version-3">Current version: 3</a></h2>
-<p>The ABI is now <strong>version 3</strong>, reported by <code>machbus_session_abi_version()</code>. This
-version marks the rewrite onto the <a href="../guide/session-facade.html">session facade</a>:
-the entire symbol set was renamed to the <code>machbus_session_*</code> prefix and the model
-changed to sans-IO (the caller bridges IO with feed/tick/poll instead of an
-internal virtual bus). That was a deliberate, breaking change, so stability
-guarantees start fresh from v3 — older <code>machbus.h</code> headers and any pre-v3 symbol
-names do not apply.</p>
-<p>C examples intentionally fail fast if the runtime reports a different version.</p>
+<h2 id="current-version-5"><a class="header" href="#current-version-5">Current version: 5</a></h2>
+<p>The ABI is <strong>version 5</strong>, reported by <code>machbus_session_abi_version()</code>.</p>
+<p>C examples intentionally fail fast if the runtime reports a different version.
+That guard is the only thing standing between a stale header and undefined
+behaviour, so it is load-bearing: a caller built against v3 that skipped it
+would call the five-argument <code>machbus_session_fs_client_seek</code> with four
+arguments, reading <code>out_tan</code> from an uninitialised stack slot and writing
+through it.</p>
+<h3 id="v4--v5"><a class="header" href="#v4--v5">v4 → v5</a></h3>
+<p>The largest change is a <strong>removal</strong>: the <code>Guidance</code> subsystem is gone, superseded
+by <code>AutoDrive</code>.</p>
+<ul>
+<li>
+<p><strong>All twelve <code>machbus_session_guidance_*</code> functions are removed</strong>, along with
+<code>MachbusConfig::enable_guidance</code> and the <code>MACHBUS_EVENT_KIND_GUIDANCE_STOP_REQUESTED</code>
+event kind. <code>Guidance</code> and <code>AutoDrive</code> were mutually exclusive authors of PGN
+0xAD00 with ~80 % duplicated safety logic; every audit round had to fix both,
+identically. Port to the <code>machbus_session_autodrive_*</code> family:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>removed</th><th>replacement</th></tr>
+</thead>
+<tbody>
+<tr><td><code>guidance_engage</code></td><td><code>autodrive_arm</code> then <code>autodrive_engage</code></td></tr>
+<tr><td><code>guidance_disengage</code></td><td><code>autodrive_disengage</code></td></tr>
+<tr><td><code>guidance_command_curvature(k)</code></td><td><code>autodrive_command(NAN, k)</code></td></tr>
+<tr><td><code>guidance_command_radius(r)</code></td><td><code>autodrive_command(NAN, 1000.0 / r)</code></td></tr>
+<tr><td><code>guidance_command_velocity(v, ω)</code></td><td><code>autodrive_command(v, (ω / v) * 1000.0)</code></td></tr>
+<tr><td><code>guidance_command_straight()</code></td><td><code>autodrive_command(NAN, 0.0)</code></td></tr>
+<tr><td><code>guidance_is_engaged</code></td><td><code>autodrive_is_engaged</code></td></tr>
+<tr><td><code>guidance_stop_reason</code></td><td><code>autodrive_stop_reason</code></td></tr>
+<tr><td><code>guidance_clear_stop</code></td><td><code>autodrive_clear_stop</code></td></tr>
+<tr><td><code>guidance_estimated_curvature</code></td><td>poll the <code>GuidanceMachineInfo</code> event</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>MachbusConfig</code> is unchanged in size (48 bytes) and no surviving field moved,
+so the layout assertions still hold — but a caller that set <code>enable_guidance</code>
+will no longer compile.</p>
+</li>
+<li>
+<p><strong><code>MACHBUS_EVENT_KIND_GUIDANCE_MACHINE_INFO</code>, <code>_LINK_LOST</code> and <code>_LINK_RESTORED</code>
+are unchanged and still fire</strong> — <code>AutoDrive</code> now emits them, so an
+event-driven C caller reading the steering ECU’s feedback needs no change.
+<code>_GUIDANCE_STOP_REQUESTED</code> is removed because
+<code>MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP</code> supersedes it and reports <em>which</em>
+trigger fired rather than only that something did.</p>
+</li>
+</ul>
+<p>Beyond that removal, the <strong>error contract</strong> of two functions changed.</p>
+<ul>
+<li><strong><code>machbus_session_autodrive_clear_stop</code> and
+<code>machbus_session_guidance_clear_stop</code> can now return <code>false</code>.</strong> Releasing a
+latched safe stop has been a conditional no-op inside the plugins since the
+ISB and GNSS hazard interlocks landed, but both C functions returned <code>true</code>
+unconditionally and cleared the last error. A caller that showed the fault as
+cleared on a <code>true</code> return re-enabled Engage with the latch still set. They
+now return <code>false</code> and set a last-error string naming the refusal
+(<code>stop_condition_live</code>) when the operator is still holding the Auxiliary
+Shortcut Button or a GNSS hazard is live.</li>
+</ul>
+<p>The Python <code>autodrive_clear_stop</code> / <code>guidance_clear_stop</code> raise <code>RuntimeError</code>
+in the same case.</p>
+<ul>
+<li>
+<p><strong><code>MachbusLanguageData</code> unit fields now carry <code>0xFF</code> for an unrecognised
+code</strong> instead of silently substituting the metric/English default. A
+Language Command whose unit codes this edition does not define is no longer
+discarded whole either, so a caller now receives the operator’s language code
+with <code>0xFF</code> in the fields it could not interpret. Treat <code>0xFF</code> as “not
+specified” rather than as a unit value.</p>
+</li>
+<li>
+<p><strong><code>machbus_session_autodrive_stop_reason</code> and
+<code>machbus_session_guidance_stop_reason</code> return <code>MachbusSafeStopTrigger</code></strong>
+instead of a bare <code>uint32_t</code>. The values are unchanged — the enum mirrors
+<code>SafeStopTrigger::as_code</code>, with <code>MACHBUS_SAFE_STOP_TRIGGER_NONE = 0</code> for “no
+stop latched” — but the return type is now named, so a C HMI no longer has to
+hardcode codes read out of the Rust source. <strong>Codes 2 and 3 are permanently
+retired</strong> (they were <code>TimStatusTimeout</code> and <code>FunctionRequestTimeout</code>, which
+had no producer); they must never be reused, or every value above them shifts
+for callers built against an older header.</p>
+</li>
+<li>
+<p><strong><code>MachbusEventKind</code> gained <code>TcServerClientDisconnected</code> (100).</strong> Additive:
+existing discriminants are unchanged. It fires when the TC server drops a
+client after six seconds without a Client Task message (ISO 11783-10 §6.6.3);
+<code>source</code> is the client address. A caller with an exhaustive switch over the
+enum must add an arm.</p>
+</li>
+</ul>
+<h3 id="v3--v4"><a class="header" href="#v3--v4">v3 → v4</a></h3>
+<p>Conformance work against ISO 11783-13 and ISO 11783-7 changed four things a C
+caller must audit:</p>
+<ul>
+<li><strong><code>machbus_session_fs_client_seek</code> gained an argument.</strong> It was
+<code>(handle, position: uint32_t, out_tan)</code>; it is now
+<code>(handle, mode: uint8_t, offset: int32_t, out_tan)</code>. <code>mode</code> is the ISO
+11783-13 B.17 Position Mode — 0 from the start, 1 from the current pointer,
+2 from the end — and the offset is signed, so a rewind is a negative value.</li>
+<li><strong>File Server error codes were renumbered to Annex B.9.</strong> Everything from 5
+upward moved: <code>InvalidHandle</code> is now 5 (was 7), <code>MediaNotPresent</code> 10 (was
+12), <code>NotSupported</code> 12 (was 20). A caller switching on the numeric value must
+be re-read against the table.</li>
+<li><strong><code>MachbusEvent</code>’s FS seek payload carries the resulting position</strong> rather
+than a unit success, per C.3.3.3.</li>
+<li><strong><code>repr(C)</code> PODs widened</strong> where a decoder gained a field (notably the GNSS
+position, which now carries DD209 integrity).</li>
+</ul>
+<h3 id="v2--v3"><a class="header" href="#v2--v3">v2 → v3</a></h3>
+<p>The rewrite onto the <a href="../guide/session-facade.html">session facade</a>: the entire
+symbol set was renamed to the <code>machbus_session_*</code> prefix and the model changed
+to sans-IO (the caller bridges IO with feed/tick/poll instead of an internal
+virtual bus). A deliberate breaking change; stability guarantees start fresh
+from v3, and older <code>machbus.h</code> headers and pre-v3 symbol names do not apply.</p>
 <h2 id="what-the-version-covers"><a class="header" href="#what-the-version-covers">What the version covers</a></h2>
 <p>Bump the ABI version whenever any of these change in a way C callers must audit:</p>
 <ul>
@@ -268,7 +375,7 @@ enums),</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

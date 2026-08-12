@@ -1,0 +1,649 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>AutoDrive (steering + speed) - machbus</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="A practical guide to using machbus for ISOBUS, J1939, and NMEA workflows">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-148778fb.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">machbus</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/robolibs/machbus/_edit/main/book/src/tutorials/autodrive.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="autodrive-steering--speed"><a class="header" href="#autodrive-steering--speed">AutoDrive (steering + speed)</a></h1>
+<p><code>AutoDrive</code> is the combined autonomous-driving controller: <strong>one engage lifecycle,
+one setpoint, one stop latch</strong> across both axes a moving machine has — where it
+steers and how fast it goes.</p>
+<p>It is the <strong>only</strong> guidance controller in machbus: an earlier <code>Guidance</code> plugin
+covered the same two messages with a weaker model and was removed. This page
+covers the lifecycle, the heartbeat contract, every way it stops, and the
+question that trips almost everyone up first: <strong>do I need TIM for this?</strong></p>
+<h2 id="safety-first"><a class="header" href="#safety-first">Safety first</a></h2>
+<p>Autonomy moves a machine with a person on it:</p>
+<ul>
+<li><strong>Operator-supervised, not autonomous.</strong> A human is in the seat.</li>
+<li><strong>machbus is not a safety system and is not certified.</strong> It moves setpoints on
+the wire. It does not plan paths, close a loop, or supervise anything.</li>
+</ul>
+<p>This plugin owns the <em>protocol</em> half of that: preconditions, a latching stop and
+refusals. The <em>operator input</em> half — a held dead-man, a deliberate arm latch,
+and treating a lost controller as a release — sits above it, in whatever drives
+the plugin. See <a href="drive-tool.html"><code>machbus drive</code>’s safety model</a> for a worked
+example you can read and copy.</p>
+<h2 id="do-i-need-tim"><a class="header" href="#do-i-need-tim">Do I need TIM?</a></h2>
+<p><strong>No — not for what <code>AutoDrive</code> does.</strong> This is the single most common confusion,
+so it is worth being precise.</p>
+<p>There are <strong>two unrelated protocols</strong> in ISOBUS that can influence a tractor’s
+speed and steering. They are not two implementations of one idea; they are
+different messages on different PGNs with different rules.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>ISO 11783-7 native — what <code>AutoDrive</code> speaks</th><th>AEF TIM — <a href="tim.html"><code>src/isobus/tim/</code></a></th></tr>
+</thead>
+<tbody>
+<tr><td>Steering</td><td><strong>PGN 0xAD00</strong> Guidance System Command</td><td>PGN 0x2400/0x2300, function <code>ExternalGuidance</code> (0x46)</td></tr>
+<tr><td>Speed</td><td><strong>PGN 0xFD43</strong> Machine Selected Speed Command</td><td>same PGN pair, function <code>VehicleSpeed</code> (0x44)</td></tr>
+<tr><td>Gate before you may command</td><td>none — broadcast</td><td>assignment table + authentication + heartbeat counter</td></tr>
+<tr><td>Also covers</td><td>nothing else</td><td>PTO, hitch, auxiliary valves</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>AutoDrive</code> has <strong>no TIM coupling at all</strong>. It never consults a TIM authority,
+never waits for an assignment, and never sends a TIM message. It claims an
+address and broadcasts.</p>
+<blockquote>
+<p><strong><code>NoAuthority</code> is still unused.</strong> <code>AutodriveRefusal::NoAuthority</code> sounds like
+TIM, and nothing in the crate constructs it. It is a placeholder for a
+TIM-gated path that does not exist yet — do not read it as evidence that one
+does. (<code>FacilityNotAdvertised</code> <em>is</em> now produced; see below.)</p>
+</blockquote>
+<h3 id="the-tractor-has-to-advertise-the-facility-first"><a class="header" href="#the-tractor-has-to-advertise-the-facility-first">The tractor has to advertise the facility first</a></h3>
+<p>This is the part that decides whether any of it works, and it is not TIM.</p>
+<p>ISO 11783-9:2012 §4.4.2 splits tractor capability into <strong>classes with letter
+addenda</strong>, and steering, speed and starting to move are three separate ones:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Addendum</th><th>Clause</th><th>What it means</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>G</strong></td><td>§4.4.2.7</td><td>The tractor “shall support the external control of the guidance system” — curvature command, estimated curvature, command status, request reset status, steering input position status, steering system readiness, mechanical lockout.</td></tr>
+<tr><td><strong>P</strong></td><td>§4.4.2.8</td><td>The tractor is “capable of accepting speed and/or drive strategy commands from an implement controller”.</td></tr>
+<tr><td><strong>M</strong></td><td>§4.4.2.9</td><td>The tractor accepts “commands to initiate motion of the vehicle (forward or reverse)”.</td></tr>
+</tbody>
+</table>
+</div>
+<p>So a class <strong>2G</strong> tractor steers on command but need not accept a speed command
+at all, and even a class <strong>2GP</strong> tractor need not <em>start moving</em> on one — §4.4.2.8
+says outright that bringing the tractor to a stop (speed <code>0.0</code>) is <strong>optional</strong>
+and “can be determined by an implement via the tractor facilities response
+message”.</p>
+<p>That message is the discovery mechanism, and it runs both ways:</p>
+<ul>
+<li><strong>PGN 0xFE09 Tractor Facilities Response</strong> — what the TECU has installed. The
+TECU sends it at power-up and on request.</li>
+<li><strong>PGN 0xFE0A Required Tractor Facilities</strong> — what <em>you</em> need. §4.4.2 is blunt
+about why this matters: “A facility is not required if its corresponding bits
+are set to 0 in the implement CF required tractor facilities message. <strong>The
+Tractor ECU can then stop the transmission of this implement message to reduce
+bandwidth.</strong>”</li>
+</ul>
+<p>In other words, a conforming TECU may simply not broadcast Guidance Machine Info
+to a node that never asked for it — and <code>AutoDrive</code> refuses to engage without
+Machine Info, so the symptom is a permanent <code>link_down</code> with a tractor that is
+working perfectly.</p>
+<p><code>AutoDrive</code> therefore broadcasts Required Tractor Facilities every
+<code>REQUIRED_FACILITIES_INTERVAL_MS</code> (1 s) once its address is claimed, asking for
+guidance + machine selected speed + speed command, and decodes the response:</p>
+<ul>
+<li>Response says <strong>no guidance</strong> → <code>arm()</code> and <code>engage()</code> refuse with
+<code>facility_not_advertised</code>, and a tractor that revokes it mid-drive trips a safe
+stop.</li>
+<li>Response says <strong>no speed command</strong> → a <code>DriveCommand</code> carrying a speed is
+refused; a steer-only command still goes through.</li>
+<li><strong>No response at all</strong> → nothing is refused. Silence is not a denial, and a
+bench, a replay or a retrofit box may never send one.</li>
+</ul>
+<h3 id="so-which-do-you-actually-need"><a class="header" href="#so-which-do-you-actually-need">So which do you actually need?</a></h3>
+<ul>
+<li>A retrofit guidance system, a test bench, or a machine that implements the
+11783-7 messages directly will act on <code>AutoDrive</code>’s broadcasts.</li>
+<li>A tractor that advertises <strong>G</strong> steers on 0xAD00 without any TIM involvement.
+That is the plain reading of §4.4.2.7 and it is why TIM is not required for
+steering.</li>
+<li>An <strong>AEF-certified TIM tractor</strong> may still ignore a bare 0xFD43 from an
+unauthenticated implement. Speed is the function OEMs guard hardest, and TIM
+exists precisely so that handing over speed authority is explicit and
+revocable.</li>
+</ul>
+<h3 id="tim-is-where-these-messages-are-heading"><a class="header" href="#tim-is-where-these-messages-are-heading">TIM is where these messages are heading</a></h3>
+<p>ISO 11783-7:2022 <strong>Clause 11</strong> says so directly, naming both PGNs <code>AutoDrive</code>
+uses:</p>
+<blockquote>
+<p>“In future editions of the ISO 11783 series, the command messages concept will
+be moved to a new concept termed ‘Tractor-Implement Management’ (TIM). The new
+concept is expected to eventually supersede or, at least, render redundant,
+some of the tractor control related messages… The messaging most likely to be
+impacted, and potentially deprecated, are: … Guidance system command
+(PGN 44288) … Machine selected speed command (PGN 64835) … Drive strategy
+command (PGN 64718).”</p>
+</blockquote>
+<p>So: TIM is <strong>not required today</strong> for a tractor that advertises G (and P), but
+the native command messages are explicitly flagged as the path being superseded.
+Plan for TIM on new work; do not assume you need it to steer a current machine.</p>
+<p>Also worth knowing: machbus’s <code>TimAuthority</code> currently guards <strong>PTO, hitch and
+auxiliary valves only</strong>. There is no plugin wiring TIM speed or TIM steering, so
+“use TIM instead” is not currently a thing you can do for these two axes.</p>
+<h2 id="what-the-design-gives-you"><a class="header" href="#what-the-design-gives-you">What the design gives you</a></h2>
+<p>Four properties are worth knowing about before you write a control loop, because
+each replaced something weaker.</p>
+<h3 id="1-an-automation-status-not-a-boolean"><a class="header" href="#1-an-automation-status-not-a-boolean">1. An automation status, not a boolean</a></h3>
+<p><code>AutoDrive</code> reports the ISO 11783-7 Table 45 <code>AutomationStatus</code>:</p>
+<pre><code>NotReady ──arm()──► ReadyToEnable ──engage()──► ActiveNotLimited
+                                                 ├─► ActiveLimitedHigh
+                                                 ├─► ActiveLimitedLow
+                                                 └─► Fault  (any safe stop)
+</code></pre>
+<p>This is not cosmetic. The plugin <strong>mirrors the machine’s own limit status into
+its status</strong>: when the steering ECU reports <code>LimitedHigh</code> / <code>LimitedLow</code>, it
+moves to <code>ActiveLimitedHigh</code> / <code>ActiveLimitedLow</code> and you can read it back with
+<code>status()</code>. That is the anti-windup signal an outer control loop needs — a
+tracker that does not know the steering ECU is saturated will wind up against a
+limit it cannot see.</p>
+<p><code>arm()</code> before <code>engage()</code> also keeps “preconditions are met” and “I am now asking
+for the wheel” as distinct states.</p>
+<h3 id="2-commands-are-refused-not-clamped"><a class="header" href="#2-commands-are-refused-not-clamped">2. Commands are refused, not clamped</a></h3>
+<pre><code class="language-rust ignore">d.command(DriveCommand {
+    speed_mps: Some(2.0),
+    curvature_km_inv: Some(12.5),
+})?;</code></pre>
+<p><code>command</code> returns <code>Result&lt;(), AutodriveRefusal&gt;</code> and has <strong>no infallible
+sibling</strong>, so the wire codec is never the only range check on a steering
+command. An out-of-range curvature would otherwise be clamped by the encoder to
+±8031.75 km⁻¹ — a 12 cm turn radius — and transmitted as a perfectly valid
+maximum-curvature command. It refuses instead, with <code>CurvatureOutOfRange</code>,
+<code>SpeedNotFinite</code>, <code>SpeedBelowMinimum</code>, <code>StopLatched</code> or <code>StatusNotActive</code>.</p>
+<p><code>DriveCommand</code>’s two <code>Option</code> fields also let you express <em>steer only</em> (leave
+speed to whoever owns it) with <code>DriveCommand::steer(k)</code>, or drive straight,
+without coupling the two axes through a twist.</p>
+<h3 id="3-the-stop-latch-is-fed-only-from-inside"><a class="header" href="#3-the-stop-latch-is-fed-only-from-inside">3. The stop latch is fed only from inside</a></h3>
+<p>There is no public way to trip the latch. Every producer is inside the plugin,
+and a source-scanning test enforces that each <code>SafeStopTrigger</code> variant has a
+real producer — so a trigger cannot be declared and then quietly never fire.</p>
+<h3 id="4-gnss-latches-a-stop"><a class="header" href="#4-gnss-latches-a-stop">4. GNSS latches a stop</a></h3>
+<p><code>GnssHazards</code> blocks <code>engage()</code> and <code>clear_stop()</code>, and additionally trips a
+<strong>latching</strong> stop on <code>PositionStale</code> / <code>FixDegraded</code>, so a receiver that stops
+reporting halts the machine rather than only preventing re-engagement.</p>
+<h2 id="the-lifecycle"><a class="header" href="#the-lifecycle">The lifecycle</a></h2>
+<p>Plug it and claim, exactly like any other plugin:</p>
+<pre><code class="language-rust ignore">    // A driving node. `AutoDrive` supersedes `Guidance` and is mutually
+    // exclusive with it — both author PGN 0xAD00, and the builder refuses the
+    // combination rather than let one overwrite the other's safe stop.
+    let name = Name::default()
+        .with_identity_number(0x100)
+        .with_function_code(0x80)
+        .with_self_configurable(true);
+    let mut session = Session::builder(name, 0x80)
+        .plug(AutoDrive::new())
+        .build()?;
+    session.start()?;
+
+    let mut now = Instant::ZERO;
+    for _ in 0..40 {
+        now = now.add_millis(50);
+        session.tick(now);
+        while session.poll_transmit().is_some() {} // discard claim traffic
+        if session.is_claimed() {
+            break;
+        }
+    }</code></pre>
+<p>Then arm, then engage. Both report the <strong>first unmet precondition</strong> rather than
+failing silently, because an autonomy client that asks to steer and is ignored
+cannot tell “commanded” from “declined”:</p>
+<pre><code class="language-rust ignore">    // Engaging before a steering ECU answers is refused, and the refusal says
+    // which precondition failed — an autonomy client that asks to steer and is
+    // silently ignored cannot tell "commanded" from "declined".
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        match d.arm() {
+            Ok(()) =&gt; println!("[armed] with no machine info — unexpected"),
+            Err(refusal) =&gt; println!("[refused] arm before any ECU answered: {}", refusal.as_str()),
+        }
+    }
+
+    // The tractor starts broadcasting. Now the preconditions are met.
+    session.feed(0, &amp;machine_info_frame(), now);
+    now = now.add_millis(50);
+    session.tick(now);
+
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        // Both report the first unmet precondition rather than failing silently.
+        d.arm().expect("preconditions met once the ECU answers");
+        d.engage().expect("engage follows a successful arm");
+        println!("[engaged] status = {:?}", d.status());
+    }</code></pre>
+<p><code>arm()</code> and <code>engage()</code> check, in order: no latched stop, no held shortcut button,
+no live GNSS hazard, link alive, machine info present, then the machine’s own
+report — mechanical lockout clear and operator engage switch active.</p>
+<p>Those machine conditions are <strong>re-checked on every Machine Info broadcast</strong>, not
+just at engage. The operator dropping the engage switch or asserting the lockout
+mid-drive stops this node asking for the wheel.</p>
+<p><code>disengage()</code> is deliberately infallible and idempotent: a disengage must never be
+refused.</p>
+<h2 id="the-command-is-a-heartbeat"><a class="header" href="#the-command-is-a-heartbeat">The command is a heartbeat</a></h2>
+<p>This is the contract most likely to surprise you.</p>
+<p>While engaged, <code>AutoDrive</code> re-transmits at <code>MIN_TX_INTERVAL_MS</code> (100 ms, the ISO
+11783-7 §5.2.7.2 minimum for the guidance group) <strong>even when the setpoint has not
+changed</strong>, because the command <em>is</em> the heartbeat the steering ECU times out on.</p>
+<p>That turns a fail-silent path into a fail-active one. An application that dies
+used to emit no frames and let the ECU time out; with a heartbeat it would instead
+keep the machine steering at the last curvature forever. So:</p>
+<blockquote>
+<p><strong>You must call <code>command()</code> at least every <code>COMMAND_STALE_MS</code> (300 ms) while
+engaged</strong>, even with an unchanged setpoint. Miss it and <code>AutoDrive</code> trips
+<code>SafeStopTrigger::CommandStale</code>, falls to <code>DriveCommand::halt()</code> and latches.</p>
+</blockquote>
+<p>Tune with <code>with_command_stale_ms(ms)</code>; <code>0</code> disables the watchdog, which is only
+appropriate when something else guarantees liveness.</p>
+<p>The driving loop, then, refreshes the setpoint every cycle:</p>
+<pre><code class="language-rust ignore">    // The command is a heartbeat. While engaged the plugin re-transmits every
+    // 100 ms even when the setpoint has not changed, because that stream *is*
+    // what the steering ECU times out on. The flip side: an application that
+    // stops refreshing must not leave the machine steering forever, so
+    // `AutoDrive` stops itself after COMMAND_STALE_MS (300 ms) without a fresh
+    // command. Refresh every cycle, exactly as the drive tool does.
+    let mut steps = 0;
+    for _ in 0..10 {
+        now = now.add_millis(50);
+        session.feed(0, &amp;machine_info_frame(), now); // the ECU keeps answering
+
+        // A real controller computes this from the path and the GNSS pose; see
+        // `geo::guidance` for the pure-pursuit maths.
+        let cmd = DriveCommand {
+            speed_mps: Some(2.0),
+            curvature_km_inv: Some(20.0), // a 50 m-radius turn
+        };
+        if let Some(d) = session.get_mut::&lt;AutoDrive&gt;()
+            &amp;&amp; let Err(refusal) = d.command(cmd)
+        {
+            println!("[refused] command: {}", refusal.as_str());
+        }
+
+        session.tick(now);
+        while let Some((_, frame)) = session.poll_transmit() {
+            match frame.id.pgn() {
+                PGN_GUIDANCE_SYSTEM_CMD =&gt; steps += 1,
+                PGN_MACHINE_SELECTED_SPEED_CMD =&gt; {}
+                _ =&gt; {}
+            }
+        }
+    }
+    println!("[heartbeat] {steps} guidance commands in 500 ms of driving");</code></pre>
+<p>Releasing the dead-man disengages. <code>disengage()</code> is infallible and falls back to
+<code>DriveCommand::halt()</code> — and <strong>losing</strong> the dead-man has to land here too, not
+leave the last setpoint running:</p>
+<pre><code class="language-rust ignore">    // The operator releases the dead-man. `disengage` is infallible and
+    // idempotent — a disengage must never be refused — and it falls back to
+    // `DriveCommand::halt()`: zero speed, zero curvature.
+    //
+    // Losing the dead-man has to read the same as releasing it. In the drive
+    // tool that means a disconnected gamepad, or a SPACE key that stopped
+    // repeating, both land here rather than leaving the last setpoint running.
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        d.disengage(SafeStopTrigger::OperatorOverride);
+        println!(
+            "[released] status = {:?}   stop = {:?}",
+            d.status(),
+            d.stop_reason().map(SafeStopTrigger::as_str)
+        );
+    }</code></pre>
+<p>The stop is latching, so re-engaging is refused until it is explicitly cleared:</p>
+<pre><code class="language-rust ignore">    // The stop is *latching*: re-engaging is refused until it is explicitly
+    // cleared. Clearing a fault is not by itself consent to move, so it is a
+    // separate deliberate act — the `C` key in the drive tool, or a fresh
+    // 1.5 s arm hold on the gamepad.
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        match d.engage() {
+            Ok(()) =&gt; println!("[engaged] while latched — unexpected"),
+            Err(refusal) =&gt; println!("[refused] engage while latched: {}", refusal.as_str()),
+        }
+
+        // `clear_stop` itself refuses while the condition is still live, so it
+        // cannot re-arm autonomy against a held stop button or a stale fix.
+        match d.clear_stop() {
+            Ok(()) =&gt; println!("[cleared] latch released; re-engage is allowed again"),
+            Err(refusal) =&gt; println!("[refused] clear_stop: {}", refusal.as_str()),
+        }
+    }</code></pre>
+<h2 id="cadence-and-tuning"><a class="header" href="#cadence-and-tuning">Cadence and tuning</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Constant</th><th>Default</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MIN_TX_INTERVAL_MS</code></td><td>100 ms</td><td>Conformance minimum; <code>with_cadence</code> clamps to it</td></tr>
+<tr><td><code>MAX_TX_INTERVAL_MS</code></td><td>2000 ms</td><td>Idle re-broadcast when not active</td></tr>
+<tr><td><code>COMMAND_STALE_MS</code></td><td>300 ms</td><td>Unrefreshed setpoint → <code>CommandStale</code></td></tr>
+<tr><td><code>LINK_TIMEOUT_MS</code></td><td>300 ms</td><td>Three missed 100 ms Machine Info → <code>GuidanceLinkTimeout</code></td></tr>
+<tr><td><code>DEFAULT_MIN_SPEED_MPS</code></td><td>0.05 m/s</td><td>Below this a yaw rate does not define a curvature</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-rust ignore">AutoDrive::new()
+    .with_cadence(100, 2000)      // min is clamped up to MIN_TX_INTERVAL_MS
+    .with_command_stale_ms(300)
+    .with_min_speed(0.05)</code></pre>
+<h2 id="every-way-it-stops"><a class="header" href="#every-way-it-stops">Every way it stops</a></h2>
+<p>On any of these the plugin latches, sets <code>AutomationStatus::Fault</code>, replaces the
+setpoint with <code>DriveCommand::halt()</code> (speed 0, curvature 0) and emits
+<code>AutodriveEvent::SafeStop { trigger }</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Trigger</th><th>Cause</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GuidanceLinkTimeout</code></td><td>300 ms without Machine Info</td></tr>
+<tr><td><code>IsbStop</code></td><td>Operator holds the shortcut button, a seen ISB source goes silent, or the machine reports a mechanical lockout</td></tr>
+<tr><td><code>OperatorOverride</code></td><td>Engage switch dropped, or the ECU reports <code>OperatorLimitedControlled</code> / <code>NonRecoverableFault</code></td></tr>
+<tr><td><code>CommandStale</code></td><td>You stopped refreshing the setpoint</td></tr>
+<tr><td><code>SendFailed(pgn)</code></td><td>The network layer refused one of the two command PGNs</td></tr>
+<tr><td><code>PositionStale</code>, <code>FixDegraded</code></td><td>GNSS events, via <code>GnssHazards</code></td></tr>
+<tr><td><code>BusOff</code>, <code>AddressClaimLost</code>, <code>HeartbeatError</code>, <code>ClockWentBackwards</code>, <code>KeySwitchOff</code></td><td>Session events</td></tr>
+</tbody>
+</table>
+</div>
+<p>The latch is <strong>latching, not momentary</strong> — autonomy must not resume by itself
+because a button was released or a link came back.</p>
+<p><code>clear_stop()</code> is the only way out, and it is deliberately explicit: clearing a
+fault is not consent to move. It returns <code>Err(StopConditionLive)</code> while the
+shortcut button is still held or a GNSS hazard is still live, so an HMI cannot
+show “cleared” against a stop that is still asserted.</p>
+<h2 id="what-you-need-plugged"><a class="header" href="#what-you-need-plugged">What you need plugged</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Plugin</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AutoDrive</code></td><td>required</td></tr>
+<tr><td><code>Gnss</code></td><td><strong>strongly recommended</strong> — without it <code>GnssHazards</code> never fires, so <code>clear_stop()</code> can re-arm autonomy against a receiver that stopped reporting</td></tr>
+<tr><td><code>ShortcutButton</code></td><td>the ISO stop-all path</td></tr>
+<tr><td><code>Diagnostics</code></td><td>DTCs for the faults above</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="path--curvature-is-still-your-job"><a class="header" href="#path--curvature-is-still-your-job">Path → curvature is still your job</a></h2>
+<p>The plugin moves a curvature value; it does not produce one. Your pure-pursuit or Stanley tracker turns the planned line, the GNSS pose
+and the cross-track error into the single curvature that steers back onto the
+line, and it lives in your code. See <a href="serial-gnss.html">Serial GNSS</a> and
+<a href="nmea-2000.html">NMEA 2000</a> for pose, and <a href="tc-geo-prescription.html">TC geo</a> for
+where planned lines come from.</p>
+<h2 id="other-languages"><a class="header" href="#other-languages">Other languages</a></h2>
+<p>Both bindings expose the same surface behind an <code>enable_autodrive</code> flag, as
+session-level <code>autodrive_*</code> functions and methods: arm, engage, disengage,
+command, clear stop, and read back status / engaged / stop reason.</p>
+<p>In C, <code>machbus_session_autodrive_stop_reason</code> returns a
+<code>MachbusSafeStopTrigger</code> enum. Note that <strong>codes 2 and 3 are permanently
+retired</strong> — reusing them would shift every value above for callers built against
+an older header. See <a href="../bindings/abi-stability.html">ABI stability</a>.</p>
+<h2 id="validate-locally"><a class="header" href="#validate-locally">Validate locally</a></h2>
+<pre><code class="language-sh">cargo run --example autodrive_keyboard   # the full driving lifecycle
+cargo run --example guidance_autosteer   # the curvature conversation alone
+make test
+</code></pre>
+<p>The example claims an address, shows an engage refused before any ECU answers,
+drives for 500 ms at the 100 ms cadence, releases the dead-man into a latched
+stop, and clears it. See the <a href="../examples/autodrive.html">AutoDrive example</a> for a
+line-by-line reading of the output.</p>
+<h2 id="what-this-proves--does-not-prove"><a class="header" href="#what-this-proves--does-not-prove">What this proves / does not prove</a></h2>
+<p>Proves: <code>AutoDrive</code> commands curvature on PGN 0xAD00 and speed on PGN 0xFD43
+behind one engage lifecycle, refuses out-of-range and out-of-state requests
+before encoding, and latches a safe stop on each trigger above.</p>
+<p>Does not prove: anything about closed-loop steering or speed control, path
+planning, operator supervision, actuator safety, real-machine timing,
+interoperability with any specific tractor, whether a given tractor will act on an
+unauthenticated speed command, or any certification. machbus is not a safety
+system and is not certified.</p>
+<h2 id="see-also"><a class="header" href="#see-also">See also</a></h2>
+<ul>
+<li><a href="drive-tool.html"><code>machbus drive</code> safety model</a> — the operator-input layer:
+dead-man, arm latch, and what happens when the controller is lost.</li>
+<li><a href="../standards/automatic-guidance.html">Automatic guidance</a> — the curvature
+model and the two PGNs.</li>
+<li><a href="tim.html">TIM and automation</a> — the authority-gated path, for PTO/hitch/aux.</li>
+<li><a href="../standards/tim.html">TIM (AEF)</a> — why authority exists at all.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../tutorials/powertrain.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../tutorials/sequence-control.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../tutorials/powertrain.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../tutorials/sequence-control.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

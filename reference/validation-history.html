@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -246,6 +246,24 @@ matrices, package contents, hardware-evidence manifests, and a private-standard
 leak scan — were removed so <code>.rs</code> tests cover code, not documentation or repo
 layout. The non-disclosure boundary is now a maintained convention, not an
 automated scan.</p>
+<h2 id="review-against-the-standards-text"><a class="header" href="#review-against-the-standards-text">Review against the standards text</a></h2>
+<p>A pass over the implementation with licensed copies of ISO 11783-1 … -14,
+AEF 023 RIG 2 and the NMEA 2000 appendices, checking field orders, ranges,
+timings, default priorities and reserved-bit rules against the documents.</p>
+<ul>
+<li>Nine defects found and fixed; each carries a test that fails when the fix is
+reverted, and the full gate ran green before every commit.</li>
+<li>Seven of the nine only misbehave against a <em>conformant peer</em> — over-strict
+receive paths and uniform defaults where the standard varies — so no
+self-consistent test could have surfaced them.</li>
+<li>Four miscited clauses corrected; three judgement calls documented in place
+rather than changed.</li>
+<li>Recorded limitation: no PGN value in the crate is evidenced by the standards,
+because ISO 11783-1 §7, -7 §4.2 and -11 §4.1 all place the assignments in the
+electronic database at isobus.net.</li>
+</ul>
+<p>Detail, including what each document could and could not evidence:
+<a href="audit/standards-text-audit.html">audit against the standards text</a>.</p>
 <h2 id="focused-gates-retained"><a class="header" href="#focused-gates-retained">Focused gates retained</a></h2>
 <div class="table-wrapper">
 <table>
@@ -360,7 +378,7 @@ change Y” over long copied terminal logs.</p>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

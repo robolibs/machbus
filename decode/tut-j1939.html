@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -233,19 +233,23 @@ serialize back to the wire format you would transmit.</li>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>    // EEC1 (PGN 61444) — engine speed, torque, driver demand.
+    // Each parameter is a `Signal`: a value, or the engine reporting it as
+    // faulted / not provided. One absent parameter no longer costs the whole PG.
     let eec1 = Eec1 {
-        engine_speed_rpm: 1500.0,
-        driver_demand_percent: 40.0,
-        actual_engine_percent: 38.0,
-        engine_torque_percent: 35.0,
+        engine_speed_rpm: Signal::Value(1500.0),
+        driver_demand_percent: Signal::Value(40.0),
+        actual_engine_percent: Signal::Value(38.0),
+        engine_torque_percent: Signal::Value(35.0),
         starter_mode: 0,
         source_address: 0x00,
     };
     let bytes = eec1.encode(); // [u8; 8] you would put on the bus
     let back = Eec1::decode(&amp;bytes).expect("valid EEC1 payload");
     println!(
-        "EEC1: {:.0} rpm, driver demand {:.0}%, actual {:.0}%",
-        back.engine_speed_rpm, back.driver_demand_percent, back.actual_engine_percent
+        "EEC1: {:?} rpm, driver demand {:?}%, actual {:?}%",
+        back.engine_speed_rpm.value(),
+        back.driver_demand_percent.value(),
+        back.actual_engine_percent.value()
     );
 <span class="boring">}</span></code></pre>
 <p>Step through it:</p>
@@ -275,8 +279,9 @@ layer handed you. The second block decodes from one of those:</p>
     let msg = Message::new(61444, bytes.to_vec(), 0x00);
     if let Some(e) = Eec1::from_message(&amp;msg) {
         println!(
-            "from_message: {:.0} rpm from source 0x{:02X}",
-            e.engine_speed_rpm, msg.source
+            "from_message: {:?} rpm from source 0x{:02X}",
+            e.engine_speed_rpm.value(),
+            msg.source
         );
     }
 <span class="boring">}</span></code></pre>
@@ -308,11 +313,13 @@ with <code>DmDtcList</code>:</p>
                 spn: 110,
                 fmi: Fmi::AboveNormalModerate,
                 occurrence_count: 3,
+                conversion_method: false,
             }, // coolant temp high
             Dtc {
                 spn: 190,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             }, // engine speed low
         ],
     };
@@ -453,7 +460,7 @@ scale.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

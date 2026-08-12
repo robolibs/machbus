@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -285,6 +285,27 @@ the TC requests.</li>
 <p>The TC can ask for values on a <strong>trigger</strong> (every N ms, every N cm, on change, on
 threshold) so the network is not flooded. machbus exposes the process-data value
 helpers and the request/command path.</p>
+<h3 id="priority-follows-the-command-not-the-pgn"><a class="header" href="#priority-follows-the-command-not-the-pgn">Priority follows the command, not the PGN</a></h3>
+<p>All of this rides one parameter group (0xCB00), but Annex B.2 does <strong>not</strong> give
+it one priority. It splits three ways by the command nibble in byte 1:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Commands</th><th>What they are</th></tr>
+</thead>
+<tbody>
+<tr><td>3</td><td><code>3</code>, <code>A</code>, <code>E</code>, <code>F</code></td><td>value, set-value-and-ack, TC status, client task</td></tr>
+<tr><td>4</td><td><code>D</code></td><td>process data acknowledge (PDACK)</td></tr>
+<tr><td>5</td><td><code>0</code>, <code>1</code>, <code>2</code>, <code>4</code>–<code>9</code></td><td>capabilities, DDOP transfer, request value, measurement setup, peer control</td></tr>
+</tbody>
+</table>
+</div>
+<p>The split arrived in version 4 “giving higher priority to control and connection
+maintenance messages versus request and acknowledgement messages”. It matters
+because the TC Status (<code>E</code>) and Client Task (<code>F</code>) messages are the heartbeats
+each side declares the other dead over after six seconds — sending them at the
+same priority as a bulk DDOP transfer is how they get starved on a loaded bus.
+<code>ProcessDataCommands::priority()</code> carries the mapping.</p>
 <h2 id="peer-control-and-tc-geo"><a class="header" href="#peer-control-and-tc-geo">Peer control and TC-GEO</a></h2>
 <p>Two higher-order capabilities sit on the TC foundation:</p>
 <ul>
@@ -408,7 +429,7 @@ commercial TC or AEF TC certification — see <a href="../conformity/index.html"
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

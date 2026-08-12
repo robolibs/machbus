@@ -15,8 +15,8 @@
         <link rel="icon" href="../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-bd034089.js"></script>
+        <script src="../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,9 +182,23 @@
                     <main>
                         <h1 id="iso-11783-11--the-data-dictionary"><a class="header" href="#iso-11783-11--the-data-dictionary">ISO 11783-11 — the data dictionary</a></h1>
 <p>The Task Controller can only trade numbers if everyone agrees what each number <em>means</em>.
-Part 11 is that agreement: a public dictionary of <strong>DDIs</strong> — Data Dictionary
+Part 11 delegates that agreement to a public dictionary of <strong>DDIs</strong> — Data Dictionary
 Identifiers — each pinning a quantity to specific units and resolution. It is the
 vocabulary that makes one vendor’s “application rate” equal another vendor’s.</p>
+<blockquote>
+<p><strong>Part 11 does not contain the dictionary.</strong> The document is three pages. §4.1
+says the process-data variables “shall be as defined in the ISOBUS Data
+Dictionary, accessible at the ISOBUS website” — maintained by VDMA as the
+maintenance agency appointed by the ISO Technical Management Board — and §4.2
+fixes only the <em>shape</em> of an entry: “identification number; process data
+element definition; range of the process data element; resolution of the
+process data element; units of the process data element.”</p>
+<p>So the DDI values below are sourced from the online database, and no document
+in the ISO 11783 series can be used to check them. What <em>is</em> checkable is that
+every entry carries those five attributes, which
+<a href="https://docs.rs/machbus"><code>DDIDefinition</code></a> does. See the
+<a href="../reference/audit/standards-text-audit.html">standards-text audit</a>.</p>
+</blockquote>
 <h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
 <p>“Rate = 200” is meaningless without units and scale. Is that litres per hectare, or
 kilograms, or millilitres per square metre? At what resolution? Part 11 removes the
@@ -290,7 +304,7 @@ invisible.</li>
 
         <script src="../clipboard-1626706a.min.js"></script>
         <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-c22b7243.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -15,8 +15,8 @@
         <link rel="icon" href="../../favicon-de23e50b.svg">
         <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
         <link rel="stylesheet" href="../../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../../css/general-0392ca55.css">
-        <link rel="stylesheet" href="../../css/chrome-fc474251.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
         <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "../../searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-bd034089.js"></script>
+        <script src="../../toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -223,6 +223,7 @@ do not create that external evidence by themselves.</p>
 </thead>
 <tbody>
 <tr><td>Local build/test gate</td><td>Present</td><td><code>Makefile</code>, <code>book/src/reference/validation-history.md</code></td></tr>
+<tr><td>Standards-text review</td><td>Present for the areas named in the audit page</td><td><code>book/src/reference/audit/standards-text-audit.md</code></td></tr>
 <tr><td>Public claim boundary</td><td>Present</td><td>this page and <code>book/src/conformity/</code></td></tr>
 <tr><td>Protocol fixtures</td><td>Present for selected flows</td><td><code>tests/protocol_fixtures.rs</code>, <code>tests/fixtures/</code>, <code>book/src/reference/assets/protocol_matrix.csv</code></td></tr>
 <tr><td>AgIsoStack/reference-style bytes</td><td>Present for selected rows only</td><td><code>tests/agisostack_compat.rs</code>, <code>tests/fixtures/oracle/agisostack_manifest.txt</code></td></tr>
@@ -247,6 +248,16 @@ for completed evidence.</p>
 <li>No real machine safety claim is made.</li>
 <li>Nothing in this checkout is currently AEF-tested.</li>
 <li>No official ISO 11783 text is embedded in this repository.</li>
+<li>Reviewing behaviour against the standards text is <strong>not</strong> conformance
+testing. The <a href="standards-text-audit.html">standards-text audit</a> checked field
+orders, ranges, timings and reserved-bit rules against licensed copies of the
+documents; that says nothing about how a given tractor behaves and moves no
+row in this table. “Checked against the text” is safe wording; “conformant”
+remains on the forbidden list above.</li>
+<li>No PGN value in this crate is evidenced by the standards. ISO 11783-1 §7,
+ISO 11783-7 §4.2 and ISO 11783-11 §4.1 each place the assignments in the
+electronic database at isobus.net instead. Citations beside PGN constants name
+the clause defining the <em>message</em>, not one stating its number.</li>
 <li>No broad external peer compatibility statement is made beyond the exact
 local fixtures, virtual-bus tests, checked-in traces, and reports named in
 the docs.</li>
@@ -302,7 +313,7 @@ API and generated C/Python facades are the intended public surfaces.</li>
 
         <script src="../../clipboard-1626706a.min.js"></script>
         <script src="../../highlight-abc7f01d.js"></script>
-        <script src="../../book-c22b7243.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

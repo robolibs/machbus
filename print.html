@@ -16,8 +16,8 @@
         <link rel="icon" href="favicon-de23e50b.svg">
         <link rel="shortcut icon" href="favicon-8114d1fc.png">
         <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-0392ca55.css">
-        <link rel="stylesheet" href="css/chrome-fc474251.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
         <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a6b9b467.js";
+            window.path_to_searchindex_js = "searchindex-81116530.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-bd034089.js"></script>
+        <script src="toc-148778fb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -328,12 +328,28 @@ vendor validation process.</p>
 <tr><td>Property/fuzz smoke</td><td>Panic and bounds bugs</td><td>Semantic conformance gaps</td></tr>
 <tr><td>Session/role tests</td><td>Multi-role workflows</td><td>Real hardware timing</td></tr>
 <tr><td>Binding tests</td><td>C/Python wrapper drift</td><td>Every host platform</td></tr>
+<tr><td>Standards-text review</td><td>Rules never implemented right</td><td>Anything not written down</td></tr>
 <tr><td>Trace replay</td><td>Captured log regressions</td><td>Devices not in captures</td></tr>
 <tr><td>Hardware capture</td><td>Real bus behavior</td><td>Official certification</td></tr>
 <tr><td>AEF/PlugFest-style validation</td><td>Interoperability evidence</td><td>Future regressions</td></tr>
 </tbody>
 </table>
 </div>
+<h2 id="why-standards-text-review-earns-its-own-row"><a class="header" href="#why-standards-text-review-earns-its-own-row">Why standards-text review earns its own row</a></h2>
+<p>Every layer above it takes the implementation’s own assumptions as the baseline.
+Unit tests prove the code does what its author meant; fixtures pin the bytes it
+already produces; session tests run both halves of a conversation against each
+other. None of that can catch a wire rule that was reconstructed rather than
+read, because both sides of the test share the reconstruction.</p>
+<p>That is not hypothetical. The <a href="#audit-review-against-the-standards-text">standards-text
+audit</a> found nine defects, seven of
+which only misbehave against a <em>conformant peer</em> — over-strict receive paths and
+uniform defaults where the standard varies. Testing a stack against itself could
+not have surfaced any of them.</p>
+<p>The layer’s blind spot is the mirror image: it sees only what the documents
+write down. Much of ISO 11783 deliberately does not — PGN assignments, DDIs and
+NAMEs all live in the electronic database at isobus.net rather than in the
+standards, so no PGN constant in this crate is checkable this way.</p>
 <h2 id="repository-evidence-map"><a class="header" href="#repository-evidence-map">Repository evidence map</a></h2>
 <ul>
 <li><code>tests/protocol_fixtures.rs</code>: protocol fixture checks.</li>
@@ -343,6 +359,8 @@ vendor validation process.</p>
 <li><code>examples/python_binding</code>: Python wheel/demo/regression smoke.</li>
 <li><code>tests/fuzz_targets.rs</code>: bounded fuzz/property smoke.</li>
 <li><code>book/src/reference/audit/</code>: previous audit evidence and rationale.</li>
+<li><code>book/src/reference/audit/standards-text-audit.md</code>: what was checked against
+the ISO/AEF/NMEA text, what it found, and what it cannot show.</li>
 </ul>
 <p>The new book should stay readable, but it should link back to evidence when a
 chapter makes a strong claim.</p>
@@ -1824,6 +1842,27 @@ the TC requests.</li>
 <p>The TC can ask for values on a <strong>trigger</strong> (every N ms, every N cm, on change, on
 threshold) so the network is not flooded. machbus exposes the process-data value
 helpers and the request/command path.</p>
+<h3 id="priority-follows-the-command-not-the-pgn"><a class="header" href="#priority-follows-the-command-not-the-pgn">Priority follows the command, not the PGN</a></h3>
+<p>All of this rides one parameter group (0xCB00), but Annex B.2 does <strong>not</strong> give
+it one priority. It splits three ways by the command nibble in byte 1:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Commands</th><th>What they are</th></tr>
+</thead>
+<tbody>
+<tr><td>3</td><td><code>3</code>, <code>A</code>, <code>E</code>, <code>F</code></td><td>value, set-value-and-ack, TC status, client task</td></tr>
+<tr><td>4</td><td><code>D</code></td><td>process data acknowledge (PDACK)</td></tr>
+<tr><td>5</td><td><code>0</code>, <code>1</code>, <code>2</code>, <code>4</code>–<code>9</code></td><td>capabilities, DDOP transfer, request value, measurement setup, peer control</td></tr>
+</tbody>
+</table>
+</div>
+<p>The split arrived in version 4 “giving higher priority to control and connection
+maintenance messages versus request and acknowledgement messages”. It matters
+because the TC Status (<code>E</code>) and Client Task (<code>F</code>) messages are the heartbeats
+each side declares the other dead over after six seconds — sending them at the
+same priority as a bulk DDOP transfer is how they get starved on a loaded bus.
+<code>ProcessDataCommands::priority()</code> carries the mapping.</p>
 <h2 id="peer-control-and-tc-geo"><a class="header" href="#peer-control-and-tc-geo">Peer control and TC-GEO</a></h2>
 <p>Two higher-order capabilities sit on the TC foundation:</p>
 <ul>
@@ -1901,9 +1940,23 @@ commercial TC or AEF TC certification — see <a href="#conformity-and-evidence"
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="iso-11783-11--the-data-dictionary"><a class="header" href="#iso-11783-11--the-data-dictionary">ISO 11783-11 — the data dictionary</a></h1>
 <p>The Task Controller can only trade numbers if everyone agrees what each number <em>means</em>.
-Part 11 is that agreement: a public dictionary of <strong>DDIs</strong> — Data Dictionary
+Part 11 delegates that agreement to a public dictionary of <strong>DDIs</strong> — Data Dictionary
 Identifiers — each pinning a quantity to specific units and resolution. It is the
 vocabulary that makes one vendor’s “application rate” equal another vendor’s.</p>
+<blockquote>
+<p><strong>Part 11 does not contain the dictionary.</strong> The document is three pages. §4.1
+says the process-data variables “shall be as defined in the ISOBUS Data
+Dictionary, accessible at the ISOBUS website” — maintained by VDMA as the
+maintenance agency appointed by the ISO Technical Management Board — and §4.2
+fixes only the <em>shape</em> of an entry: “identification number; process data
+element definition; range of the process data element; resolution of the
+process data element; units of the process data element.”</p>
+<p>So the DDI values below are sourced from the online database, and no document
+in the ISO 11783 series can be used to check them. What <em>is</em> checkable is that
+every entry carries those five attributes, which
+<a href="https://docs.rs/machbus"><code>DDIDefinition</code></a> does. See the
+<a href="#audit-review-against-the-standards-text">standards-text audit</a>.</p>
+</blockquote>
 <h2 id="why-this-exists-8"><a class="header" href="#why-this-exists-8">Why this exists</a></h2>
 <p>“Rate = 200” is meaningless without units and scale. Is that litres per hectare, or
 kilograms, or millilitres per square metre? At what resolution? Part 11 removes the
@@ -2109,6 +2162,42 @@ capability</em>: “here is what I provide, at this class.” The implement read
 control, guidance). machbus models the facility set, the class matrix, and the
 <code>tractor()</code> preset plus the <code>Implement</code> facilities broadcast that advertises them;
 maintain-power and guidance-readiness sit here too.</p>
+<h3 id="steering-speed-and-motion-are-three-separate-classes"><a class="header" href="#steering-speed-and-motion-are-three-separate-classes">Steering, speed and motion are three separate classes</a></h3>
+<p>Base class 1/2/3 says nothing about whether a tractor can be <em>driven</em> over the
+bus. That is carried by letter addenda, and §4.4.2 gives them separately:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Addendum</th><th>Clause</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>G</strong></td><td>§4.4.2.7</td><td>“shall support the external control of the guidance system” — curvature command, estimated curvature, readiness, lockout</td></tr>
+<tr><td><strong>P</strong></td><td>§4.4.2.8</td><td>“capable of accepting speed and/or drive strategy commands from an implement controller”</td></tr>
+<tr><td><strong>M</strong></td><td>§4.4.2.9</td><td>accepts “commands to initiate motion of the vehicle (forward or reverse)”</td></tr>
+</tbody>
+</table>
+</div>
+<p>A class 2G tractor steers on command and need not accept a speed command at all.
+Even with P, §4.4.2.8 says outright that bringing the tractor to a stop
+(speed <code>0.0</code>) is <strong>optional</strong> and “can be determined by an implement via the
+tractor facilities response message”.</p>
+<h3 id="the-handshake-is-not-optional-for-the-implement-either"><a class="header" href="#the-handshake-is-not-optional-for-the-implement-either">The handshake is not optional for the implement either</a></h3>
+<p>Two PGNs, and the second one is the part that surprises people:</p>
+<ul>
+<li><strong>0xFE09 Tractor Facilities Response</strong> — what the TECU has installed.</li>
+<li><strong>0xFE0A Required Tractor Facilities</strong> — what the implement needs.</li>
+</ul>
+<blockquote>
+<p>§4.4.2: “An implement CF can send the required tractor facilities message to
+the Tractor ECU <strong>to enable the transmission of the messages that provide the
+required facilities</strong>. A facility is not required if its corresponding bits are
+set to 0 in the implement CF required tractor facilities message. The Tractor
+ECU can then <strong>stop the transmission</strong> of this implement message to reduce
+bandwidth.”</p>
+</blockquote>
+<p>So a node that never declares what it needs may simply never receive it. That is
+why <a href="#the-tractor-has-to-advertise-the-facility-first"><code>AutoDrive</code></a>
+broadcasts the request on a cycle rather than only listening.</p>
 <h2 id="the-tecus-other-duties"><a class="header" href="#the-tecus-other-duties">The TECU’s other duties</a></h2>
 <p>Beyond the advertisement, a TECU is the source of the part-7 status broadcasts (speed,
 hitch, PTO) and the relay for some tractor-side services. In machbus a tractor node is
@@ -2163,6 +2252,30 @@ tool can read and clear it long after it occurred).</p>
 faults; clearing one moves it to the “previously active” list. ISOBUS adds a sixth
 ECU-identification field and the control-function functionalities advertisement on top
 of the J1939 base.</p>
+<blockquote>
+<p><strong>ISOBUS DM1 and DM2 have no lamp bytes.</strong> Annex B.6 and B.7 define bytes 1–2
+as “Reserved, set to FF16” and put SPN/FMI/occurrence in bytes 3–6; the word
+“lamp” does not appear in ISO 11783-12 at all. J1939-73 <em>does</em> put lamp status
+there, which is why <code>DmDtcList</code> keeps two encoders — <code>encode()</code> for the J1939
+form and <code>encode_iso()</code> for the ISOBUS one. The diagnostics plugin broadcasts
+the ISOBUS form.</p>
+</blockquote>
+<h3 id="advertising-functionalities-is-forward-compatible-by-design"><a class="header" href="#advertising-functionalities-is-forward-compatible-by-design">Advertising functionalities is forward-compatible by design</a></h3>
+<p>The Control Function Functionalities message (PGN 0xFC8E) is how a node says
+which roles it implements and at which generation. Annex B.9 is unusually
+explicit that a reader must tolerate what it does not recognise:</p>
+<blockquote>
+<p>“Functionality characteristics values reserved for ISO assignment shall be
+parsed without generating an error.” … “If the number of option bytes is
+larger than specified in this document for a functionality, the receiving CF
+shall ignore the undefined functionality option bytes and parse the known
+option bytes for this functionality only.”</p>
+</blockquote>
+<p>Both halves matter, because A.10 keeps the 0–255 functionality list in the
+online database — it grows between revisions. A decoder that rejects the message
+over one unknown code throws away every functionality it <em>did</em> understand, so
+machbus skips unknown blocks using their own declared option length and keeps
+the rest.</p>
 <h2 id="how-machbus-expresses-it-1"><a class="header" href="#how-machbus-expresses-it-1">How machbus expresses it</a></h2>
 <p>Two plugins cover the family:</p>
 <ul>
@@ -2253,6 +2366,19 @@ files and directories.</p>
 </tbody>
 </table>
 </div>
+<h2 id="what-counts-as-malformed"><a class="header" href="#what-counts-as-malformed">What counts as malformed</a></h2>
+<p>Narrower than it looks. §4.9 scopes the malformed-request error to one thing:</p>
+<blockquote>
+<p>“The file server shall respond with Error Code 47 Malformed Request, if it
+receives a message, which is <strong>shorter than expected</strong>.”</p>
+</blockquote>
+<p>Length — not a surprising flag value. The volume flags (B.29) and volume mode
+(B.30) each describe their spare bits as “Reserved, send as 000000”, which binds
+the <em>sender</em>; nothing licenses a server to refuse a request over one. Refusing
+would also mean a later revision that defines one of those bits gets turned away
+rather than ignored, against the general rule that undefined bits are “received
+as ‘don’t care’”. machbus therefore masks them on receive while still refusing
+to transmit them set.</p>
 <h2 id="failure-modes-worth-knowing-5"><a class="header" href="#failure-modes-worth-knowing-5">Failure modes worth knowing</a></h2>
 <ul>
 <li><strong>TAN confusion</strong> — matching a response to the wrong request if TANs are not tracked.</li>
@@ -2393,10 +2519,24 @@ authority-state event and stop commanding.</li>
 that often pairs with TIM.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="automatic-guidance-autosteer"><a class="header" href="#automatic-guidance-autosteer">Automatic guidance (autosteer)</a></h1>
-<p>The first question everyone asks about ISOBUS autosteer is: <em>do I send points,
+<h1 id="automatic-guidance"><a class="header" href="#automatic-guidance">Automatic guidance</a></h1>
+<p>The first question everyone asks about ISOBUS guidance is: <em>do I send points,
 angles, or velocities?</em> The answer is <strong>none of those</strong> — you send a desired path
 <strong>curvature</strong>.</p>
+<blockquote>
+<p><strong>One capability, several names.</strong> <em>Automatic guidance</em>, <em>agricultural
+guidance</em> and <em>autosteer</em> all mean the same thing: this page. ISO 11783-7 calls
+the messages “Agricultural Guidance System Command” and “Agricultural Guidance
+Machine Info”; “autosteer” is the colloquial name for using them. There is no
+separate autosteer facility, message or plugin.</p>
+<p>In machbus one plugin speaks these messages:
+<a href="#autodrive-steering--speed"><code>AutoDrive</code></a>, which carries steering <strong>and</strong> speed
+behind a single engage lifecycle.</p>
+<p>Everything else you may see is supporting code, not another concept:
+<code>isobus::implement::guidance</code> is the wire codecs, <code>geo::guidance</code> is pure
+path-to-curvature maths, and <code>machbus drive</code> is a tool subcommand that drives
+a plugin.</p>
+</blockquote>
 <h2 id="points-vs-angles-vs-curvature"><a class="header" href="#points-vs-angles-vs-curvature">Points vs. angles vs. curvature</a></h2>
 <p>Three things you might imagine sending to make a tractor steer itself, and why
 only one of them is right:</p>
@@ -2418,9 +2558,24 @@ curvature and closes the loop on its own wheels — it owns the actuator, the
 mechanical limits, and the speed-dependent geometry. The guidance controller only
 has to say <em>how hard to turn</em>, not <em>how to move the wheels</em>.</p>
 <p><strong>Speed is a separate concern.</strong> A curvature command says nothing about how fast
-the machine travels. The tractor owns its speed. If you also want to influence
-speed, that is a different facility (see <a href="#tim--tractor-implement-management-aef">TIM</a>) and a different message.
-Keep the two ideas apart: guidance is geometry, not throttle.</p>
+the machine travels. The tractor owns its speed. Keep the two ideas apart:
+guidance is geometry, not throttle.</p>
+<p>If you also want to influence speed, there are <strong>two different facilities</strong>, and
+they are not interchangeable:</p>
+<ul>
+<li><strong>Machine Selected Speed Command (PGN 0xFD43)</strong> — the ISO 11783-7 message, sent
+as a plain broadcast with no authority handshake. This is what the
+<a href="#autodrive-steering--speed"><code>AutoDrive</code></a> plugin uses alongside the curvature
+command.</li>
+<li><strong><a href="#tim--tractor-implement-management-aef">TIM</a></strong> — a separate protocol on its own PGNs, where speed is a
+function that must be explicitly assigned and authenticated before you may
+command it.</li>
+</ul>
+<p>Which one a given tractor acts on is a property of that tractor. An AEF-certified
+machine will generally guard speed behind TIM; a retrofit or bench system will
+generally take the native message. See
+<a href="#do-i-need-tim">AutoDrive → Do I need TIM?</a> for the
+full comparison.</p>
 <p><strong>Turning a path into curvature is the application’s job.</strong> Each control cycle,
 something has to look at the planned line, the current GNSS position and heading,
 and the cross-track error, then compute the single curvature value that steers the
@@ -2447,9 +2602,9 @@ computes <code>κ = ω / v</code> and sends it as the Guidance System Command (P
 <strong>also</strong> sends <code>v</code> as a Machine Selected Speed Command (PGN 0xFD43) — so the two
 separate authorities each receive the message they expect, from one call. A
 near-zero <code>v</code> cannot define a forward path curvature, so it commands straight. See
-the <a href="#guidance-autosteer">Guidance tutorial</a>.</p>
+the <a href="#autodrive-steering--speed">Guidance tutorial</a>.</p>
 <h2 id="the-two-messages"><a class="header" href="#the-two-messages">The two messages</a></h2>
-<p>Autosteer is a two-way conversation between the <strong>guidance controller</strong> (the thing
+<p>Guidance is a two-way conversation between the <strong>guidance controller</strong> (the thing
 deciding where to go) and the tractor’s <strong>steering ECU</strong> (the thing that moves the
 wheels). Two messages carry it, each in one direction.</p>
 <pre><code>   guidance controller                         steering ECU (tractor)
@@ -2511,7 +2666,7 @@ the first signal that the ECU can be steered.</em> Inside it:</p>
 <tbody>
 <tr><td>Steering System Readiness State</td><td>The headline “am I ready?” flag.</td><td><strong>On / active</strong> = ready and engaged. Off/passive = not ready.</td></tr>
 <tr><td>Mechanical Lockout</td><td>A physical safety cut-out (e.g. a lockout switch).</td><td><strong>Not active.</strong> If it is Active, you cannot engage at all.</td></tr>
-<tr><td>Remote Engage Switch Status</td><td>The operator’s <strong>arm switch</strong> — most systems need the person in the seat to flip a switch or hold a button before autosteer is allowed to take the wheel.</td><td><strong>On / active</strong> (operator has armed it).</td></tr>
+<tr><td>Remote Engage Switch Status</td><td>The operator’s <strong>arm switch</strong> — most systems need the person in the seat to flip a switch or hold a button before guidance is allowed to take the wheel.</td><td><strong>On / active</strong> (operator has armed it).</td></tr>
 <tr><td>Steering Input Position Status</td><td>Whether the operator’s steering wheel is being moved — the basis for override detection.</td><td><em>(informational)</em></td></tr>
 <tr><td>Guidance Limit Status</td><td>Whether your command is being clamped, the system is at a limit, or has a non-recoverable fault.</td><td><strong>Not limited.</strong></td></tr>
 <tr><td>Exit / reason code</td><td><em>Why</em> the system is refusing or last dropped out (a diagnostic — see below).</td><td><strong>No reason / all clear.</strong></td></tr>
@@ -2584,21 +2739,23 @@ certification. Nothing here makes a machine safe for unattended steering. Real
 deployment needs official standards, functional-safety engineering, qualified
 hardware, and interoperability evidence this crate does not provide.</p>
 <h2 id="from-concept-to-code-17"><a class="header" href="#from-concept-to-code-17">From concept to code</a></h2>
-<p>The high-level <code>session::plugins::Guidance</code> plugin is the whole surface: <strong>engage</strong>
-(assert intent to steer) and <strong>disengage</strong>, command a curvature / radius / straight,
-and read back the steering system’s estimated curvature, readiness, and limit
-status. It is also exposed in the C and Python bindings (session-level <code>guidance_*</code>
-functions/methods, behind an <code>enable_guidance</code> flag).</p>
+<p>The <code>session::plugins::AutoDrive</code> plugin is the whole surface: <strong>arm</strong> and
+<strong>engage</strong> (assert intent to steer), <strong>disengage</strong>, command a curvature and
+optionally a speed, and read back the steering system’s estimated curvature,
+readiness and limit status. It is also exposed in the C and Python bindings
+(session-level <code>autodrive_*</code> functions/methods, behind an <code>enable_autodrive</code>
+flag).</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>You read about…</th><th>Build it with…</th><th>See…</th></tr>
 </thead>
 <tbody>
-<tr><td>Asking for / releasing the wheel (intent to steer)</td><td><code>Guidance::engage</code> / <code>Guidance::disengage</code> (sets the Curvature Command Status on 0xAD00)</td><td><a href="#guidance-autosteer">Guidance tutorial</a></td></tr>
-<tr><td>Commanding a path by curvature</td><td><code>session::plugins::Guidance</code> (<code>command_curvature</code>, <code>command_radius</code>, <code>command_straight</code>)</td><td><a href="#guidance-autosteer">Guidance tutorial</a></td></tr>
-<tr><td>Commanding in robotics (v, ω) terms</td><td><code>Guidance::command_velocity</code> (sends curvature on 0xAD00 + speed on 0xFD43)</td><td><a href="#guidance-autosteer">Guidance tutorial</a></td></tr>
-<tr><td>Reading the steering ECU’s feedback</td><td><code>Guidance::estimated_curvature</code>, <code>is_steering_ready</code>, <code>latest_machine_info</code>, <code>Event::Guidance</code></td><td><a href="#guidance-autosteer">Guidance tutorial</a></td></tr>
+<tr><td>Asking for / releasing the wheel (intent to steer)</td><td><code>AutoDrive::arm</code> + <code>engage</code> / <code>disengage</code> (sets the Curvature Command Status on 0xAD00)</td><td><a href="#autodrive-steering--speed">AutoDrive tutorial</a></td></tr>
+<tr><td>Commanding a path by curvature</td><td><code>AutoDrive::command(DriveCommand::steer(k))</code></td><td><a href="#autodrive-steering--speed">AutoDrive tutorial</a></td></tr>
+<tr><td>Converting a radius or a (v, ω) twist to curvature</td><td><code>geo::guidance::curvature_per_km_from_radius</code> / <code>curvature_per_km_from_twist</code></td><td><a href="#autodrive-steering--speed">AutoDrive tutorial</a></td></tr>
+<tr><td>Commanding steering <strong>and</strong> speed together</td><td><code>AutoDrive::command(DriveCommand { speed_mps, curvature_km_inv })</code></td><td><a href="#autodrive-steering--speed">AutoDrive tutorial</a></td></tr>
+<tr><td>Reading the steering ECU’s feedback</td><td><code>AutoDrive::estimated_curvature</code>, <code>steering_readiness_state</code>, <code>machine_info</code>, <code>Event::Guidance</code></td><td><a href="#autodrive-steering--speed">AutoDrive tutorial</a></td></tr>
 <tr><td>The tractor advertising it can steer</td><td>ISO 11783-9 facilities</td><td><a href="#iso-11783-9--the-tractor-ecu">ISO 11783-9 — the tractor ECU</a></td></tr>
 <tr><td>Steering as a granted, revocable authority</td><td><code>session::plugins::Tim</code></td><td><a href="#tim--tractor-implement-management-aef">TIM (AEF)</a></td></tr>
 </tbody>
@@ -2606,7 +2763,7 @@ functions/methods, behind an <code>enable_guidance</code> flag).</p>
 </div>
 <h2 id="see-also-18"><a class="header" href="#see-also-18">See also</a></h2>
 <ul>
-<li><a href="#guidance-autosteer">Guidance tutorial</a> — the <code>Guidance</code> plugin, end to end.</li>
+<li><a href="#autodrive-steering--speed">AutoDrive tutorial</a> — the plugin, end to end.</li>
 <li><a href="#iso-11783-9--the-tractor-ecu">ISO 11783-9 — the tractor ECU</a> — what the tractor advertises.</li>
 <li><a href="#tim--tractor-implement-management-aef">TIM (AEF)</a> — steering under granted authority.</li>
 <li><a href="#positioning-nmea-and-gnss">Positioning: NMEA and GNSS</a> — where the position and heading that
@@ -2711,7 +2868,7 @@ into cached state plus <code>GnssEvent</code>s, and can broadcast a few of them:
 <tbody>
 <tr><td>Decoding NMEA 2000 GNSS PGNs</td><td><code>session::plugins::Gnss</code></td><td><a href="#nmea-2000">NMEA 2000</a></td></tr>
 <tr><td>Serial NMEA 0183 receivers</td><td><code>nmea</code> parser</td><td><a href="#serial-gnss">Serial GNSS</a></td></tr>
-<tr><td>Steering on top of the fix</td><td>guidance helpers</td><td><a href="#guidance-autosteer">Guidance</a></td></tr>
+<tr><td>Steering on top of the fix</td><td>guidance helpers</td><td><a href="#autodrive-steering--speed">Guidance</a></td></tr>
 <tr><td>Position → setpoint</td><td>TC-GEO + DDOP geometry</td><td><a href="#tc-geo-prescription">TC-GEO prescription</a></td></tr>
 </tbody>
 </table>
@@ -2739,7 +2896,7 @@ stale, not current.</li>
 <li><a href="#the-task-controller-and-the-data-dictionary">The Task Controller and the data dictionary</a> — where the fix
 becomes a setpoint.</li>
 <li><a href="#the-networking-foundation">The networking foundation</a> — Fast Packet and the transport family.</li>
-<li><a href="#guidance-autosteer">Guidance</a> — steering and curvature on top of the fix.</li>
+<li><a href="#autodrive-steering--speed">Guidance</a> — steering and curvature on top of the fix.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="decode-without-isobus"><a class="header" href="#decode-without-isobus">Decode without ISOBUS</a></h1>
@@ -3344,7 +3501,7 @@ several PGNs at different rates. A decoder typically fuses them.</p>
 <p>How to think about them together:</p>
 <ul>
 <li><strong>129025 (rapid position)</strong> and <strong>129026 (rapid COG/SOG)</strong> are the fast, lightweight
-feeds — what an autosteer controller leans on. They fit in single frames.</li>
+feeds — what a guidance controller leans on. They fit in single frames.</li>
 <li><strong>129029 (detailed GNSS)</strong> is the rich, slower record — it is a <strong>Fast Packet</strong> message
 because it carries altitude, fix type, satellite count, and reference-station data all
 at once. This is the one that needs reassembly.</li>
@@ -3695,19 +3852,23 @@ serialize back to the wire format you would transmit.</li>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>    // EEC1 (PGN 61444) — engine speed, torque, driver demand.
+    // Each parameter is a `Signal`: a value, or the engine reporting it as
+    // faulted / not provided. One absent parameter no longer costs the whole PG.
     let eec1 = Eec1 {
-        engine_speed_rpm: 1500.0,
-        driver_demand_percent: 40.0,
-        actual_engine_percent: 38.0,
-        engine_torque_percent: 35.0,
+        engine_speed_rpm: Signal::Value(1500.0),
+        driver_demand_percent: Signal::Value(40.0),
+        actual_engine_percent: Signal::Value(38.0),
+        engine_torque_percent: Signal::Value(35.0),
         starter_mode: 0,
         source_address: 0x00,
     };
     let bytes = eec1.encode(); // [u8; 8] you would put on the bus
     let back = Eec1::decode(&amp;bytes).expect("valid EEC1 payload");
     println!(
-        "EEC1: {:.0} rpm, driver demand {:.0}%, actual {:.0}%",
-        back.engine_speed_rpm, back.driver_demand_percent, back.actual_engine_percent
+        "EEC1: {:?} rpm, driver demand {:?}%, actual {:?}%",
+        back.engine_speed_rpm.value(),
+        back.driver_demand_percent.value(),
+        back.actual_engine_percent.value()
     );
 <span class="boring">}</span></code></pre>
 <p>Step through it:</p>
@@ -3737,8 +3898,9 @@ layer handed you. The second block decodes from one of those:</p>
     let msg = Message::new(61444, bytes.to_vec(), 0x00);
     if let Some(e) = Eec1::from_message(&amp;msg) {
         println!(
-            "from_message: {:.0} rpm from source 0x{:02X}",
-            e.engine_speed_rpm, msg.source
+            "from_message: {:?} rpm from source 0x{:02X}",
+            e.engine_speed_rpm.value(),
+            msg.source
         );
     }
 <span class="boring">}</span></code></pre>
@@ -3770,11 +3932,13 @@ with <code>DmDtcList</code>:</p>
                 spn: 110,
                 fmi: Fmi::AboveNormalModerate,
                 occurrence_count: 3,
+                conversion_method: false,
             }, // coolant temp high
             Dtc {
                 spn: 190,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             }, // engine speed low
         ],
     };
@@ -4625,6 +4789,7 @@ own methods:</p>
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
 <span class="boring">}</span></code></pre>
@@ -5151,6 +5316,7 @@ a fault code on node A:</p>
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
 <span class="boring">}</span></code></pre>
@@ -5943,20 +6109,20 @@ exactly three meaningful parts:</p>
 times.” Build one and watch it survive a round-trip through its 4-byte wire form:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── DTC field encoding ────────────────────────────────────────
+</span>    }
+
+    // ─── DTC field encoding ────────────────────────────────────────
     let dtc = Dtc {
         spn: 0x1_2345,
         fmi: Fmi::MechanicalFail,
         occurrence_count: 12,
+        conversion_method: false,
     };
     let dtc_bytes = dtc.encode();
     let dtc_decoded = Dtc::decode(&amp;dtc_bytes).unwrap();
     println!(
         "\n[DTC] 4-byte field: SPN=0x{:05X} → wire {:02X?} → SPN=0x{:05X}",
         dtc.spn, dtc_bytes, dtc_decoded.spn,
-    );
-    assert_eq!(dtc, dtc_decoded);
-    println!("✓ DTC round-trips byte-exact");
 <span class="boring">}</span></code></pre>
 <p>The SPN here (<code>0x1_2345</code>) is wide on purpose: encoding clamps it to 19 bits and
 masks the count to 7 bits, so a <code>Dtc</code> always produces a <em>valid</em> wire field rather
@@ -5979,19 +6145,19 @@ the amber warning lamp on and two faults in the list:</p>
                 spn: 520,
                 fmi: Fmi::VoltageLow,
                 occurrence_count: 0,
+                conversion_method: false,
             },
             Dtc {
                 spn: 190,
                 fmi: Fmi::AbnormalRateChange,
                 occurrence_count: 7,
+                conversion_method: false,
             },
         ],
     };
     println!(
         "[DM1] {} active DTCs, amber={:?}",
         dm1.dtcs.len(),
-        dm1.lamps.amber_warning
-    );
 <span class="boring">}</span></code></pre>
 <p>The lamp panel and the DTC list are <strong>independent fields</strong>. A DTC says what is
 wrong; the lamp says how loudly to alert the operator. We lit <code>amber_warning</code> and
@@ -6004,7 +6170,9 @@ call <code>DmDtcList::decode(..)</code>. Here we do both ends in one breath so y
 the bytes survive the trip:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let bytes = dm1.encode();
+</span>    );
+
+    let bytes = dm1.encode();
     let decoded = DmDtcList::decode(&amp;bytes).unwrap();
     println!(
         "[encode/decode] {} bytes round-trip → {} DTCs",
@@ -6015,8 +6183,6 @@ the bytes survive the trip:</p>
         println!(
             "  SPN=0x{:05X} FMI={:?} OC={}",
             d.spn, d.fmi, d.occurrence_count
-        );
-    }
 <span class="boring">}</span></code></pre>
 <p><code>encode</code> always produces at least 8 bytes (lamps, then the DTCs), and <code>decode</code>
 returns the faults back as a <code>Vec&lt;Dtc&gt;</code>.</p>
@@ -6468,7 +6634,7 @@ version) that owns one <strong>device element</strong> (the <code>Root</code> of
 </span>    let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer 600")
                 .with_software_version("1.0.0"),
         )
@@ -9499,7 +9665,7 @@ couple of PGNs, blocks one, and then feeds frames through it.</p>
 </span>    let mut niu = Niu::new(
         NiuConfig::default()
             .name("demo-niu")
-            .mode(NiuFilterMode::BlockAll),
+            .mode(NiuFilterMode::PassSpecific),
     );
     niu.allow_pgn(PGN_HEARTBEAT, true);
     niu.allow_pgn_rate_limited(PGN_DM1, 100, true); // 1 frame / 100 ms
@@ -11590,7 +11756,7 @@ building a small DDOP that names the device and one element:</p>
 </span>    let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer 600")
                 .with_software_version("1.0.0"),
         )
@@ -12228,7 +12394,7 @@ runs it through the full upload handshake. Here is the pool it builds:</p>
 </span>    let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer 600")
                 .with_software_version("1.0.0"),
         )
@@ -12597,18 +12763,18 @@ no-zone case your default policy handles. Finally it records a position and emit
 the two position process-data payloads for the controller:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Build the position payload for `PGN_ECU_TO_TC`.
+</span>    // Position reaches the TC over PGN_GNSS_POSITION. It used to be sent as
+    // Process Data under DDI 0x0087/0x0088, which the ISO 11783-11 dictionary
+    // assigns to Device Element Offset Y and Z in millimetres — a latitude of
+    // 52 degrees told the TC the element sat 520 km off the datum.
     let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
     let mut tc2 = TCGEOInterface::new();
     tc2.set_position(GeoPoint {
         position: position_pos,
         timestamp_us: 0,
     });
-    let [lat_pd, lon_pd] = tc2.position_process_data_payloads().unwrap();
     println!(
-        "\n[wire] lat process-data: {:02X?}\n       lon process-data: {:02X?}",
-        lat_pd, lon_pd
-    );
+        "\n[state] TC-GEO position: {:?}",
 <span class="boring">}</span></code></pre>
 <p>The whole flow runs in software with no bus: you load a map, set a position,
 call <code>update</code>, and read the rate.</p>
@@ -13043,7 +13209,7 @@ not provide.</p>
 <ul>
 <li><a href="#implement-ecu">Implement ECU</a> — the other side of every message here.</li>
 <li><a href="#powertrain">Powertrain</a> — the P-addendum speed-control surface in depth.</li>
-<li><a href="#guidance-autosteer">Guidance</a> — the G-addendum steering surface.</li>
+<li><a href="#autodrive-steering--speed">Guidance</a> — the G-addendum steering surface.</li>
 <li><a href="#tractor-implement-management-tim">TIM and automation</a> — implement-driven tractor automation.</li>
 <li><a href="#address-claim">Address claim</a> — the prerequisite every TECU runs first.</li>
 </ul>
@@ -13390,6 +13556,21 @@ reading</em> rather than a real value.</p>
 consumer keeps the latest decoded value per source address and acts on it. A
 frame is a snapshot, not a stream of deltas: if a newer frame never arrives,
 the last one simply ages, and it is the <em>receiver’s</em> job to notice staleness.</p>
+<h3 id="when-j1939-and-isobus-disagree-isobus-wins"><a class="header" href="#when-j1939-and-isobus-disagree-isobus-wins">When J1939 and ISOBUS disagree, ISOBUS wins</a></h3>
+<p>ISO 11783-8 is three pages and its whole substance is a precedence rule:</p>
+<blockquote>
+<p>§4.2 — “Any parameters defined in SAE J 1939/71 that are also given in
+ISO 11783-7 shall use the parameter definitions <strong>according to ISO 11783-7</strong>.”</p>
+</blockquote>
+<p>§4.3 says the same for parameter <em>groups</em>. This is not academic. Wheel-based
+speed and distance (0xFE48) and ground-based (0xFE49) are ISO 11783-7
+parameters — ISO 11783-9 §4.4.2 classifies a TECU on them — and under part 7
+their trailing two bytes carry <strong>key switch state and maximum time of tractor
+power</strong>, the fields part 9’s ignition-off sequence depends on. Read them the
+plain J1939 way and those bytes look like <code>0xFF</code> padding.</p>
+<p>So <code>SpeedAndDistance::decode</code> — which demands that padding — is the wrong entry
+point for real tractor traffic. Use <code>decode_measurement_prefix</code> for these three
+PGNs; it takes the speed/distance prefix and leaves the status bytes alone.</p>
 <h2 id="anatomy-the-message-groups"><a class="header" href="#anatomy-the-message-groups">Anatomy: the message groups</a></h2>
 <p><code>machbus</code> ports each powertrain frame as a small <code>Copy</code> struct with <code>encode</code>
 returning the 8-byte wire form and <code>decode</code> returning <code>Option&lt;Self&gt;</code> — <code>None</code>
@@ -13507,34 +13688,34 @@ builds an <code>Eec1</code>, encodes it, decodes it back, and prints the enginee
 values — the canonical pattern for a callback that received a raw frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let eec1 = Eec1 {
-        engine_torque_percent: 50.0,
-        driver_demand_percent: 75.0,
-        actual_engine_percent: 45.0,
-        engine_speed_rpm: 1500.0,
+</span>    // EEC1 — Electronic Engine Controller 1.
+    let eec1 = Eec1 {
+        engine_torque_percent: Signal::Value(50.0),
+        driver_demand_percent: Signal::Value(75.0),
+        actual_engine_percent: Signal::Value(45.0),
+        engine_speed_rpm: Signal::Value(1500.0),
         starter_mode: 1,
         source_address: 0x00,
     };
     let bytes = eec1.encode();
     let d = Eec1::decode(&amp;bytes).unwrap();
     println!(
-        "[EEC1]  rpm={:.1}, torque={:.1}%, driver_demand={:.1}%",
-        d.engine_speed_rpm, d.engine_torque_percent, d.driver_demand_percent
-    );
+        "[EEC1]  rpm={:?}, torque={:?}%, driver_demand={:?}%",
+        d.engine_speed_rpm.value(),
 <span class="boring">}</span></code></pre>
 <p><code>EngineHours</code> works the same way, carrying the lifetime counters:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let hours = EngineHours {
-        total_hours: 1234.75,
-        total_revolutions: 1_000_000.0,
-    };
-    let hbytes = hours.encode();
-    let hd = EngineHours::decode(&amp;hbytes).unwrap();
+</span>    let fbytes = fe.encode();
+    let fd = FuelEconomy::decode(&amp;fbytes).unwrap();
     println!(
-        "[Hours] total={:.2} h, revs={:.0}",
-        hd.total_hours, hd.total_revolutions
+        "[LFE]   rate={:?} L/h, inst={:?} L/h, throttle={:?}%",
+        fd.fuel_rate_lph.value(),
+        fd.instantaneous_lph.value(),
+        fd.throttle_position.value()
     );
+
+    // Engine hours.
 <span class="boring">}</span></code></pre>
 <p>To wire these into a low-level loop, register a callback for the relevant PGN
 with <code>IsoNet::register_pgn_callback</code> and call the matching <code>decode</code> inside it.
@@ -13665,55 +13846,185 @@ powertrain and tractor state to coordinate work.</li>
 a claimed source address first.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="guidance-autosteer"><a class="header" href="#guidance-autosteer">Guidance (autosteer)</a></h1>
-<p>ISOBUS automatic guidance steers a tractor by <strong>curvature</strong>. You do not stream
-waypoints and you do not command a raw steering angle — you send a desired path
-curvature in <strong>1/km</strong> (the inverse of the turn radius; 0 = straight, the sign
-chooses the turn direction). The tractor’s steering ECU closes the loop on its own
-wheels. This tutorial drives that conversation through the high-level
-<code>session::plugins::Guidance</code> plugin.</p>
-<p>If you have not read the concept page yet, start with
-<a href="#automatic-guidance-autosteer">Automatic guidance (autosteer)</a> — it explains the
-points-vs-angles-vs-curvature answer and the two PGNs in full. Here we build.</p>
+<h1 id="autodrive-steering--speed"><a class="header" href="#autodrive-steering--speed">AutoDrive (steering + speed)</a></h1>
+<p><code>AutoDrive</code> is the combined autonomous-driving controller: <strong>one engage lifecycle,
+one setpoint, one stop latch</strong> across both axes a moving machine has — where it
+steers and how fast it goes.</p>
+<p>It is the <strong>only</strong> guidance controller in machbus: an earlier <code>Guidance</code> plugin
+covered the same two messages with a weaker model and was removed. This page
+covers the lifecycle, the heartbeat contract, every way it stops, and the
+question that trips almost everyone up first: <strong>do I need TIM for this?</strong></p>
 <h2 id="safety-first"><a class="header" href="#safety-first">Safety first</a></h2>
-<p>Autosteer moves a machine with a person on it. Two things stay true no matter what
-your code does:</p>
+<p>Autonomy moves a machine with a person on it:</p>
 <ul>
-<li><strong>It is operator-supervised, not autonomous.</strong> A human is in the seat and ready
-to take over. Touching the wheel drops the system out of automatic mode at once.</li>
-<li><strong>machbus is not a safety system and is not certified.</strong> It moves curvature
-commands on the wire. It does not plan paths, close the steering loop, or
-supervise the operator. Treat everything below as protocol plumbing.</li>
+<li><strong>Operator-supervised, not autonomous.</strong> A human is in the seat.</li>
+<li><strong>machbus is not a safety system and is not certified.</strong> It moves setpoints on
+the wire. It does not plan paths, close a loop, or supervise anything.</li>
 </ul>
-<h2 id="the-plugin-in-one-minute"><a class="header" href="#the-plugin-in-one-minute">The plugin in one minute</a></h2>
-<p><code>Guidance</code> is a session plugin. Plug it, claim an address, and you can:</p>
+<p>This plugin owns the <em>protocol</em> half of that: preconditions, a latching stop and
+refusals. The <em>operator input</em> half — a held dead-man, a deliberate arm latch,
+and treating a lost controller as a release — sits above it, in whatever drives
+the plugin. See <a href="#machbus-drive--the-operator-safety-model"><code>machbus drive</code>’s safety model</a> for a worked
+example you can read and copy.</p>
+<h2 id="do-i-need-tim"><a class="header" href="#do-i-need-tim">Do I need TIM?</a></h2>
+<p><strong>No — not for what <code>AutoDrive</code> does.</strong> This is the single most common confusion,
+so it is worth being precise.</p>
+<p>There are <strong>two unrelated protocols</strong> in ISOBUS that can influence a tractor’s
+speed and steering. They are not two implementations of one idea; they are
+different messages on different PGNs with different rules.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>ISO 11783-7 native — what <code>AutoDrive</code> speaks</th><th>AEF TIM — <a href="#tractor-implement-management-tim"><code>src/isobus/tim/</code></a></th></tr>
+</thead>
+<tbody>
+<tr><td>Steering</td><td><strong>PGN 0xAD00</strong> Guidance System Command</td><td>PGN 0x2400/0x2300, function <code>ExternalGuidance</code> (0x46)</td></tr>
+<tr><td>Speed</td><td><strong>PGN 0xFD43</strong> Machine Selected Speed Command</td><td>same PGN pair, function <code>VehicleSpeed</code> (0x44)</td></tr>
+<tr><td>Gate before you may command</td><td>none — broadcast</td><td>assignment table + authentication + heartbeat counter</td></tr>
+<tr><td>Also covers</td><td>nothing else</td><td>PTO, hitch, auxiliary valves</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>AutoDrive</code> has <strong>no TIM coupling at all</strong>. It never consults a TIM authority,
+never waits for an assignment, and never sends a TIM message. It claims an
+address and broadcasts.</p>
+<blockquote>
+<p><strong><code>NoAuthority</code> is still unused.</strong> <code>AutodriveRefusal::NoAuthority</code> sounds like
+TIM, and nothing in the crate constructs it. It is a placeholder for a
+TIM-gated path that does not exist yet — do not read it as evidence that one
+does. (<code>FacilityNotAdvertised</code> <em>is</em> now produced; see below.)</p>
+</blockquote>
+<h3 id="the-tractor-has-to-advertise-the-facility-first"><a class="header" href="#the-tractor-has-to-advertise-the-facility-first">The tractor has to advertise the facility first</a></h3>
+<p>This is the part that decides whether any of it works, and it is not TIM.</p>
+<p>ISO 11783-9:2012 §4.4.2 splits tractor capability into <strong>classes with letter
+addenda</strong>, and steering, speed and starting to move are three separate ones:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Addendum</th><th>Clause</th><th>What it means</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>G</strong></td><td>§4.4.2.7</td><td>The tractor “shall support the external control of the guidance system” — curvature command, estimated curvature, command status, request reset status, steering input position status, steering system readiness, mechanical lockout.</td></tr>
+<tr><td><strong>P</strong></td><td>§4.4.2.8</td><td>The tractor is “capable of accepting speed and/or drive strategy commands from an implement controller”.</td></tr>
+<tr><td><strong>M</strong></td><td>§4.4.2.9</td><td>The tractor accepts “commands to initiate motion of the vehicle (forward or reverse)”.</td></tr>
+</tbody>
+</table>
+</div>
+<p>So a class <strong>2G</strong> tractor steers on command but need not accept a speed command
+at all, and even a class <strong>2GP</strong> tractor need not <em>start moving</em> on one — §4.4.2.8
+says outright that bringing the tractor to a stop (speed <code>0.0</code>) is <strong>optional</strong>
+and “can be determined by an implement via the tractor facilities response
+message”.</p>
+<p>That message is the discovery mechanism, and it runs both ways:</p>
 <ul>
-<li><strong>engage / disengage</strong> — <code>engage()</code> asks for the wheel (sets the <em>intent to steer</em>
-flag the steering ECU needs); <code>disengage()</code> releases it and commands straight. The
-plugin starts <strong>disengaged</strong>, so commands do not steer until you engage;</li>
-<li><strong>command</strong> a curvature — <code>command_curvature(1/km)</code>, or the convenience
-<code>command_radius(metres)</code> and <code>command_straight()</code>;</li>
-<li><strong>command</strong> in robotics <code>(v, ω)</code> terms — <code>command_velocity(linear_mps, angular_rad_s)</code>,
-which sends both the steering curvature and a speed command;</li>
-<li><strong>read back</strong> the steering ECU’s own view — <code>is_steering_ready()</code> and
-<code>estimated_curvature() -&gt; Option&lt;f64&gt;</code>;</li>
-<li><strong>react</strong> to inbound Agricultural Guidance Machine Info as an
-<code>Event::Guidance(GuidanceEvent::MachineInfo { .. })</code>.</li>
+<li><strong>PGN 0xFE09 Tractor Facilities Response</strong> — what the TECU has installed. The
+TECU sends it at power-up and on request.</li>
+<li><strong>PGN 0xFE0A Required Tractor Facilities</strong> — what <em>you</em> need. §4.4.2 is blunt
+about why this matters: “A facility is not required if its corresponding bits
+are set to 0 in the implement CF required tractor facilities message. <strong>The
+Tractor ECU can then stop the transmission of this implement message to reduce
+bandwidth.</strong>”</li>
 </ul>
-<p>The plugin sends the Guidance System Command (PGN 0xAD00) when you command, and
-decodes Agricultural Guidance Machine Info (PGN 0xAC00) when the steering ECU
-broadcasts it.</p>
-<h2 id="1-plug-guidance-and-claim"><a class="header" href="#1-plug-guidance-and-claim">1. Plug Guidance and claim</a></h2>
-<p>A guidance-controller node is a session with the <code>Guidance</code> plugin plugged in. The
-session core is sans-IO, so you drive it: tick it forward and let it claim an
-address before you command anything.</p>
-<pre><code class="language-rust ignore">    // A guidance-controller node. The session core is sans-IO; we drive it.
-    let mut session = Session::builder(make_name(0x100), 0x80)
-        .plug(Guidance::new())
+<p>In other words, a conforming TECU may simply not broadcast Guidance Machine Info
+to a node that never asked for it — and <code>AutoDrive</code> refuses to engage without
+Machine Info, so the symptom is a permanent <code>link_down</code> with a tractor that is
+working perfectly.</p>
+<p><code>AutoDrive</code> therefore broadcasts Required Tractor Facilities every
+<code>REQUIRED_FACILITIES_INTERVAL_MS</code> (1 s) once its address is claimed, asking for
+guidance + machine selected speed + speed command, and decodes the response:</p>
+<ul>
+<li>Response says <strong>no guidance</strong> → <code>arm()</code> and <code>engage()</code> refuse with
+<code>facility_not_advertised</code>, and a tractor that revokes it mid-drive trips a safe
+stop.</li>
+<li>Response says <strong>no speed command</strong> → a <code>DriveCommand</code> carrying a speed is
+refused; a steer-only command still goes through.</li>
+<li><strong>No response at all</strong> → nothing is refused. Silence is not a denial, and a
+bench, a replay or a retrofit box may never send one.</li>
+</ul>
+<h3 id="so-which-do-you-actually-need"><a class="header" href="#so-which-do-you-actually-need">So which do you actually need?</a></h3>
+<ul>
+<li>A retrofit guidance system, a test bench, or a machine that implements the
+11783-7 messages directly will act on <code>AutoDrive</code>’s broadcasts.</li>
+<li>A tractor that advertises <strong>G</strong> steers on 0xAD00 without any TIM involvement.
+That is the plain reading of §4.4.2.7 and it is why TIM is not required for
+steering.</li>
+<li>An <strong>AEF-certified TIM tractor</strong> may still ignore a bare 0xFD43 from an
+unauthenticated implement. Speed is the function OEMs guard hardest, and TIM
+exists precisely so that handing over speed authority is explicit and
+revocable.</li>
+</ul>
+<h3 id="tim-is-where-these-messages-are-heading"><a class="header" href="#tim-is-where-these-messages-are-heading">TIM is where these messages are heading</a></h3>
+<p>ISO 11783-7:2022 <strong>Clause 11</strong> says so directly, naming both PGNs <code>AutoDrive</code>
+uses:</p>
+<blockquote>
+<p>“In future editions of the ISO 11783 series, the command messages concept will
+be moved to a new concept termed ‘Tractor-Implement Management’ (TIM). The new
+concept is expected to eventually supersede or, at least, render redundant,
+some of the tractor control related messages… The messaging most likely to be
+impacted, and potentially deprecated, are: … Guidance system command
+(PGN 44288) … Machine selected speed command (PGN 64835) … Drive strategy
+command (PGN 64718).”</p>
+</blockquote>
+<p>So: TIM is <strong>not required today</strong> for a tractor that advertises G (and P), but
+the native command messages are explicitly flagged as the path being superseded.
+Plan for TIM on new work; do not assume you need it to steer a current machine.</p>
+<p>Also worth knowing: machbus’s <code>TimAuthority</code> currently guards <strong>PTO, hitch and
+auxiliary valves only</strong>. There is no plugin wiring TIM speed or TIM steering, so
+“use TIM instead” is not currently a thing you can do for these two axes.</p>
+<h2 id="what-the-design-gives-you"><a class="header" href="#what-the-design-gives-you">What the design gives you</a></h2>
+<p>Four properties are worth knowing about before you write a control loop, because
+each replaced something weaker.</p>
+<h3 id="1-an-automation-status-not-a-boolean"><a class="header" href="#1-an-automation-status-not-a-boolean">1. An automation status, not a boolean</a></h3>
+<p><code>AutoDrive</code> reports the ISO 11783-7 Table 45 <code>AutomationStatus</code>:</p>
+<pre><code>NotReady ──arm()──► ReadyToEnable ──engage()──► ActiveNotLimited
+                                                 ├─► ActiveLimitedHigh
+                                                 ├─► ActiveLimitedLow
+                                                 └─► Fault  (any safe stop)
+</code></pre>
+<p>This is not cosmetic. The plugin <strong>mirrors the machine’s own limit status into
+its status</strong>: when the steering ECU reports <code>LimitedHigh</code> / <code>LimitedLow</code>, it
+moves to <code>ActiveLimitedHigh</code> / <code>ActiveLimitedLow</code> and you can read it back with
+<code>status()</code>. That is the anti-windup signal an outer control loop needs — a
+tracker that does not know the steering ECU is saturated will wind up against a
+limit it cannot see.</p>
+<p><code>arm()</code> before <code>engage()</code> also keeps “preconditions are met” and “I am now asking
+for the wheel” as distinct states.</p>
+<h3 id="2-commands-are-refused-not-clamped"><a class="header" href="#2-commands-are-refused-not-clamped">2. Commands are refused, not clamped</a></h3>
+<pre><code class="language-rust ignore">d.command(DriveCommand {
+    speed_mps: Some(2.0),
+    curvature_km_inv: Some(12.5),
+})?;</code></pre>
+<p><code>command</code> returns <code>Result&lt;(), AutodriveRefusal&gt;</code> and has <strong>no infallible
+sibling</strong>, so the wire codec is never the only range check on a steering
+command. An out-of-range curvature would otherwise be clamped by the encoder to
+±8031.75 km⁻¹ — a 12 cm turn radius — and transmitted as a perfectly valid
+maximum-curvature command. It refuses instead, with <code>CurvatureOutOfRange</code>,
+<code>SpeedNotFinite</code>, <code>SpeedBelowMinimum</code>, <code>StopLatched</code> or <code>StatusNotActive</code>.</p>
+<p><code>DriveCommand</code>’s two <code>Option</code> fields also let you express <em>steer only</em> (leave
+speed to whoever owns it) with <code>DriveCommand::steer(k)</code>, or drive straight,
+without coupling the two axes through a twist.</p>
+<h3 id="3-the-stop-latch-is-fed-only-from-inside"><a class="header" href="#3-the-stop-latch-is-fed-only-from-inside">3. The stop latch is fed only from inside</a></h3>
+<p>There is no public way to trip the latch. Every producer is inside the plugin,
+and a source-scanning test enforces that each <code>SafeStopTrigger</code> variant has a
+real producer — so a trigger cannot be declared and then quietly never fire.</p>
+<h3 id="4-gnss-latches-a-stop"><a class="header" href="#4-gnss-latches-a-stop">4. GNSS latches a stop</a></h3>
+<p><code>GnssHazards</code> blocks <code>engage()</code> and <code>clear_stop()</code>, and additionally trips a
+<strong>latching</strong> stop on <code>PositionStale</code> / <code>FixDegraded</code>, so a receiver that stops
+reporting halts the machine rather than only preventing re-engagement.</p>
+<h2 id="the-lifecycle-1"><a class="header" href="#the-lifecycle-1">The lifecycle</a></h2>
+<p>Plug it and claim, exactly like any other plugin:</p>
+<pre><code class="language-rust ignore">    // A driving node. `AutoDrive` supersedes `Guidance` and is mutually
+    // exclusive with it — both author PGN 0xAD00, and the builder refuses the
+    // combination rather than let one overwrite the other's safe stop.
+    let name = Name::default()
+        .with_identity_number(0x100)
+        .with_function_code(0x80)
+        .with_self_configurable(true);
+    let mut session = Session::builder(name, 0x80)
+        .plug(AutoDrive::new())
         .build()?;
     session.start()?;
 
-    // Drive the address claim (no contention → claims by advancing time).
     let mut now = Instant::ZERO;
     for _ in 0..40 {
         now = now.add_millis(50);
@@ -13723,157 +14034,226 @@ address before you command anything.</p>
             break;
         }
     }</code></pre>
-<h2 id="2-command-a-curvature"><a class="header" href="#2-command-a-curvature">2. Command a curvature</a></h2>
-<p>Commanding is the whole point. Pick how you want to express the turn:</p>
-<ul>
-<li><code>command_curvature(c)</code> — the native form, <code>c</code> in 1/km.</li>
-<li><code>command_radius(r)</code> — <code>r</code> in metres, converted to <code>1000 / r</code> 1/km for you.</li>
-<li><code>command_straight()</code> — the same as <code>command_curvature(0.0)</code>.</li>
-</ul>
-<p>The command is queued on the plugin and flushed to the transmit buffer on the next
-<code>tick</code>, where it becomes a Guidance System Command frame (PGN 0xAD00).</p>
-<pre><code class="language-rust ignore">    // Engage (assert "intend to steer"), then command a 50 m-radius turn
-    // (curvature = 1000/50 = 20/km). Without engaging, the command is sent with
-    // status "not intended to steer" and a conformant steering ECU will not move.
-    // `command_curvature(0.0)` is the same as `command_straight`.
+<p>Then arm, then engage. Both report the <strong>first unmet precondition</strong> rather than
+failing silently, because an autonomy client that asks to steer and is ignored
+cannot tell “commanded” from “declined”:</p>
+<pre><code class="language-rust ignore">    // Engaging before a steering ECU answers is refused, and the refusal says
+    // which precondition failed — an autonomy client that asks to steer and is
+    // silently ignored cannot tell "commanded" from "declined".
     {
-        let g = session.get_mut::&lt;Guidance&gt;().expect("guidance plugged");
-        g.engage();
-        g.command_radius(50.0);
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        match d.arm() {
+            Ok(()) =&gt; println!("[armed] with no machine info — unexpected"),
+            Err(refusal) =&gt; println!("[refused] arm before any ECU answered: {}", refusal.as_str()),
+        }
     }
 
+    // The tractor starts broadcasting. Now the preconditions are met.
+    session.feed(0, &amp;machine_info_frame(), now);
     now = now.add_millis(50);
-    session.tick(now); // flushes the queued command to the transmit buffer
+    session.tick(now);
 
-    while let Some((port, frame)) = session.poll_transmit() {
-        if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD {
-            println!(
-                "TX port{port}  Guidance System Command (PGN 0x{:04X})  data={:02X?}",
-                frame.id.pgn(),
-                frame.data
-            );
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        // Both report the first unmet precondition rather than failing silently.
+        d.arm().expect("preconditions met once the ECU answers");
+        d.engage().expect("engage follows a successful arm");
+        println!("[engaged] status = {:?}", d.status());
+    }</code></pre>
+<p><code>arm()</code> and <code>engage()</code> check, in order: no latched stop, no held shortcut button,
+no live GNSS hazard, link alive, machine info present, then the machine’s own
+report — mechanical lockout clear and operator engage switch active.</p>
+<p>Those machine conditions are <strong>re-checked on every Machine Info broadcast</strong>, not
+just at engage. The operator dropping the engage switch or asserting the lockout
+mid-drive stops this node asking for the wheel.</p>
+<p><code>disengage()</code> is deliberately infallible and idempotent: a disengage must never be
+refused.</p>
+<h2 id="the-command-is-a-heartbeat"><a class="header" href="#the-command-is-a-heartbeat">The command is a heartbeat</a></h2>
+<p>This is the contract most likely to surprise you.</p>
+<p>While engaged, <code>AutoDrive</code> re-transmits at <code>MIN_TX_INTERVAL_MS</code> (100 ms, the ISO
+11783-7 §5.2.7.2 minimum for the guidance group) <strong>even when the setpoint has not
+changed</strong>, because the command <em>is</em> the heartbeat the steering ECU times out on.</p>
+<p>That turns a fail-silent path into a fail-active one. An application that dies
+used to emit no frames and let the ECU time out; with a heartbeat it would instead
+keep the machine steering at the last curvature forever. So:</p>
+<blockquote>
+<p><strong>You must call <code>command()</code> at least every <code>COMMAND_STALE_MS</code> (300 ms) while
+engaged</strong>, even with an unchanged setpoint. Miss it and <code>AutoDrive</code> trips
+<code>SafeStopTrigger::CommandStale</code>, falls to <code>DriveCommand::halt()</code> and latches.</p>
+</blockquote>
+<p>Tune with <code>with_command_stale_ms(ms)</code>; <code>0</code> disables the watchdog, which is only
+appropriate when something else guarantees liveness.</p>
+<p>The driving loop, then, refreshes the setpoint every cycle:</p>
+<pre><code class="language-rust ignore">    // The command is a heartbeat. While engaged the plugin re-transmits every
+    // 100 ms even when the setpoint has not changed, because that stream *is*
+    // what the steering ECU times out on. The flip side: an application that
+    // stops refreshing must not leave the machine steering forever, so
+    // `AutoDrive` stops itself after COMMAND_STALE_MS (300 ms) without a fresh
+    // command. Refresh every cycle, exactly as the drive tool does.
+    let mut steps = 0;
+    for _ in 0..10 {
+        now = now.add_millis(50);
+        session.feed(0, &amp;machine_info_frame(), now); // the ECU keeps answering
+
+        // A real controller computes this from the path and the GNSS pose; see
+        // `geo::guidance` for the pure-pursuit maths.
+        let cmd = DriveCommand {
+            speed_mps: Some(2.0),
+            curvature_km_inv: Some(20.0), // a 50 m-radius turn
+        };
+        if let Some(d) = session.get_mut::&lt;AutoDrive&gt;()
+            &amp;&amp; let Err(refusal) = d.command(cmd)
+        {
+            println!("[refused] command: {}", refusal.as_str());
+        }
+
+        session.tick(now);
+        while let Some((_, frame)) = session.poll_transmit() {
+            match frame.id.pgn() {
+                PGN_GUIDANCE_SYSTEM_CMD =&gt; steps += 1,
+                PGN_MACHINE_SELECTED_SPEED_CMD =&gt; {}
+                _ =&gt; {}
+            }
+        }
+    }
+    println!("[heartbeat] {steps} guidance commands in 500 ms of driving");</code></pre>
+<p>Releasing the dead-man disengages. <code>disengage()</code> is infallible and falls back to
+<code>DriveCommand::halt()</code> — and <strong>losing</strong> the dead-man has to land here too, not
+leave the last setpoint running:</p>
+<pre><code class="language-rust ignore">    // The operator releases the dead-man. `disengage` is infallible and
+    // idempotent — a disengage must never be refused — and it falls back to
+    // `DriveCommand::halt()`: zero speed, zero curvature.
+    //
+    // Losing the dead-man has to read the same as releasing it. In the drive
+    // tool that means a disconnected gamepad, or a SPACE key that stopped
+    // repeating, both land here rather than leaving the last setpoint running.
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        d.disengage(SafeStopTrigger::OperatorOverride);
+        println!(
+            "[released] status = {:?}   stop = {:?}",
+            d.status(),
+            d.stop_reason().map(SafeStopTrigger::as_str)
+        );
+    }</code></pre>
+<p>The stop is latching, so re-engaging is refused until it is explicitly cleared:</p>
+<pre><code class="language-rust ignore">    // The stop is *latching*: re-engaging is refused until it is explicitly
+    // cleared. Clearing a fault is not by itself consent to move, so it is a
+    // separate deliberate act — the `C` key in the drive tool, or a fresh
+    // 1.5 s arm hold on the gamepad.
+    {
+        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
+        match d.engage() {
+            Ok(()) =&gt; println!("[engaged] while latched — unexpected"),
+            Err(refusal) =&gt; println!("[refused] engage while latched: {}", refusal.as_str()),
+        }
+
+        // `clear_stop` itself refuses while the condition is still live, so it
+        // cannot re-arm autonomy against a held stop button or a stale fix.
+        match d.clear_stop() {
+            Ok(()) =&gt; println!("[cleared] latch released; re-engage is allowed again"),
+            Err(refusal) =&gt; println!("[refused] clear_stop: {}", refusal.as_str()),
         }
     }</code></pre>
-<p>Every command also carries the controller’s <strong>intent to steer</strong> — and that is what
-<code>engage()</code> sets. A curvature number on its own is never a request to take the wheel:
-while the plugin is disengaged, commands ride the bus with <em>not intended to steer</em>
-and a conformant steering ECU moves nothing. Call <code>engage()</code> once to flip that flag
-(it re-sends the last curvature immediately), then <code>disengage()</code> to release the wheel
-and command straight. The controller is also expected to keep sending a fresh command
-on a fixed cadence; it is a heartbeat, and a stalled stream is itself a reason for the
-steering system to drop out.</p>
-<pre><code class="language-rust ignore">let g = session.get_mut::&lt;Guidance&gt;().unwrap();
-g.engage();              // assert intent to steer
-g.command_radius(50.0);  // 50 m-radius turn, now actually requested
-// …later…
-g.disengage();           // release the wheel; commands straight</code></pre>
-<h2 id="commanding-like-a-robot-v-ω"><a class="header" href="#commanding-like-a-robot-v-ω">Commanding like a robot: (v, ω)</a></h2>
-<p>If you think in mobile-robotics terms — a linear velocity <code>v</code> and an angular (yaw)
-velocity <code>ω</code> — use <code>command_velocity(v, ω)</code>. Because curvature is just <code>κ = ω / v</code>,
-the plugin takes a twist directly:</p>
-<pre><code class="language-rust ignore">// Drive at 2 m/s while yawing left at 0.04 rad/s.
-// → κ = ω / v = 0.02 /m = 20 /km (a 50 m-radius turn).
-session
-    .get_mut::&lt;Guidance&gt;()
-    .unwrap()
-    .command_velocity(2.0, 0.04);</code></pre>
-<p>That single call sends <strong>two</strong> messages, because in ISOBUS steering and speed are
-separate authorities:</p>
-<ul>
-<li>the steering <strong>curvature</strong> (<code>κ = ω / v</code>) as a Guidance System Command (PGN 0xAD00);</li>
-<li>the target <strong>speed</strong> (<code>v</code>) as a Machine Selected Speed Command (PGN 0xFD43), with
-reverse encoded as the command’s direction.</li>
-</ul>
-<p>A few things to keep in mind:</p>
-<ul>
-<li>A near-zero <code>v</code> cannot define a forward path curvature, so it commands straight
-(<code>κ = 0</code>) while still sending the (near-zero) speed.</li>
-<li>The curvature sign follows the ISO wire convention; if your platform’s left/right
-sign differs, negate <code>ω</code>.</li>
-<li><code>v</code> here is <em>both</em> the speed setpoint and the denominator of the curvature. If you
-do not want machbus to command speed at all, use <code>command_curvature</code> /
-<code>command_radius</code> and leave speed to the operator.</li>
-</ul>
-<h2 id="3-read-the-steering-ecus-feedback"><a class="header" href="#3-read-the-steering-ecus-feedback">3. Read the steering ECU’s feedback</a></h2>
-<p>You command through 0xAD00 and you verify through 0xAC00. The steering ECU
-broadcasts Agricultural Guidance Machine Info; the plugin decodes it and exposes
-the tractor’s own view:</p>
-<ul>
-<li><code>is_steering_ready()</code> — <code>true</code> when the steering system reports it is engaged and
-in a state that allows an external command to steer. Gate on this: if it is not
-ready, your command moves nothing.</li>
-<li><code>estimated_curvature()</code> — <code>Some(c)</code> with the curvature the wheels are actually
-producing now, or <code>None</code> if the steering reports none. Never assume the machine
-reached the curvature you asked for — read it back here.</li>
-<li><code>latest_machine_info()</code> — the full decoded record when you need more than the two
-headline reads: mechanical lockout, the operator’s remote-engage switch, steering
-limit status, and the exit/reason code that explains <em>why</em> a system refused or
-dropped out. See <a href="#what-each-signal-means-in-plain-terms">the signals, in plain terms</a>.</li>
-</ul>
-<pre><code class="language-rust ignore">    // A real steering ECU would broadcast Guidance Machine Info (PGN 0xAC00);
-    // the plugin decodes it and exposes the tractor's view:
-    let g = session.get::&lt;Guidance&gt;().expect("guidance plugged");
-    println!(
-        "steering ready: {}   estimated curvature: {:?} (1/km)",
-        g.is_steering_ready(),
-        g.estimated_curvature()
-    );</code></pre>
-<h2 id="4-react-to-the-machine-info-event"><a class="header" href="#4-react-to-the-machine-info-event">4. React to the machine-info event</a></h2>
-<p>If you run an async event loop, each inbound Agricultural Guidance Machine Info
-surfaces as an event rather than something you poll for. Match on it to see who
-sent it, the estimated curvature, the readiness flag, and the raw limit status (0 =
-not limited; non-zero = at a limit or fault):</p>
-<pre><code class="language-rust ignore">use machbus::session::{Event, GuidanceEvent};
-
-match event {
-    Event::Guidance(GuidanceEvent::MachineInfo {
-        source,
-        estimated_curvature,
-        steering_ready,
-        limit_status,
-    }) =&gt; {
-        if !steering_ready || limit_status != 0 {
-            // not in a state to follow — stop asserting intent.
-        }
-        // otherwise: compare estimated_curvature against what you commanded.
-    }
-    _ =&gt; {}
-}</code></pre>
-<h2 id="path--curvature-is-your-job"><a class="header" href="#path--curvature-is-your-job">Path → curvature is your job</a></h2>
-<p>The plugin moves a curvature value; it does not produce one. Each control cycle,
-your application looks at the planned line, the current GNSS position and heading,
-and the cross-track error, and computes the single curvature that steers the
-machine back onto the line. That is a pure-pursuit or Stanley tracker, and it lives
-in your code, not in machbus. See <a href="#serial-gnss">Serial GNSS</a> and
-<a href="#nmea-2000">NMEA 2000</a> for getting position and heading into the stack, and
-<a href="#tc-geo-prescription">TC geo / prescriptions</a> for where planned lines come from.</p>
+<h2 id="cadence-and-tuning"><a class="header" href="#cadence-and-tuning">Cadence and tuning</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Constant</th><th>Default</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MIN_TX_INTERVAL_MS</code></td><td>100 ms</td><td>Conformance minimum; <code>with_cadence</code> clamps to it</td></tr>
+<tr><td><code>MAX_TX_INTERVAL_MS</code></td><td>2000 ms</td><td>Idle re-broadcast when not active</td></tr>
+<tr><td><code>COMMAND_STALE_MS</code></td><td>300 ms</td><td>Unrefreshed setpoint → <code>CommandStale</code></td></tr>
+<tr><td><code>LINK_TIMEOUT_MS</code></td><td>300 ms</td><td>Three missed 100 ms Machine Info → <code>GuidanceLinkTimeout</code></td></tr>
+<tr><td><code>DEFAULT_MIN_SPEED_MPS</code></td><td>0.05 m/s</td><td>Below this a yaw rate does not define a curvature</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-rust ignore">AutoDrive::new()
+    .with_cadence(100, 2000)      // min is clamped up to MIN_TX_INTERVAL_MS
+    .with_command_stale_ms(300)
+    .with_min_speed(0.05)</code></pre>
+<h2 id="every-way-it-stops"><a class="header" href="#every-way-it-stops">Every way it stops</a></h2>
+<p>On any of these the plugin latches, sets <code>AutomationStatus::Fault</code>, replaces the
+setpoint with <code>DriveCommand::halt()</code> (speed 0, curvature 0) and emits
+<code>AutodriveEvent::SafeStop { trigger }</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Trigger</th><th>Cause</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GuidanceLinkTimeout</code></td><td>300 ms without Machine Info</td></tr>
+<tr><td><code>IsbStop</code></td><td>Operator holds the shortcut button, a seen ISB source goes silent, or the machine reports a mechanical lockout</td></tr>
+<tr><td><code>OperatorOverride</code></td><td>Engage switch dropped, or the ECU reports <code>OperatorLimitedControlled</code> / <code>NonRecoverableFault</code></td></tr>
+<tr><td><code>CommandStale</code></td><td>You stopped refreshing the setpoint</td></tr>
+<tr><td><code>SendFailed(pgn)</code></td><td>The network layer refused one of the two command PGNs</td></tr>
+<tr><td><code>PositionStale</code>, <code>FixDegraded</code></td><td>GNSS events, via <code>GnssHazards</code></td></tr>
+<tr><td><code>BusOff</code>, <code>AddressClaimLost</code>, <code>HeartbeatError</code>, <code>ClockWentBackwards</code>, <code>KeySwitchOff</code></td><td>Session events</td></tr>
+</tbody>
+</table>
+</div>
+<p>The latch is <strong>latching, not momentary</strong> — autonomy must not resume by itself
+because a button was released or a link came back.</p>
+<p><code>clear_stop()</code> is the only way out, and it is deliberately explicit: clearing a
+fault is not consent to move. It returns <code>Err(StopConditionLive)</code> while the
+shortcut button is still held or a GNSS hazard is still live, so an HMI cannot
+show “cleared” against a stop that is still asserted.</p>
+<h2 id="what-you-need-plugged"><a class="header" href="#what-you-need-plugged">What you need plugged</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Plugin</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AutoDrive</code></td><td>required</td></tr>
+<tr><td><code>Gnss</code></td><td><strong>strongly recommended</strong> — without it <code>GnssHazards</code> never fires, so <code>clear_stop()</code> can re-arm autonomy against a receiver that stopped reporting</td></tr>
+<tr><td><code>ShortcutButton</code></td><td>the ISO stop-all path</td></tr>
+<tr><td><code>Diagnostics</code></td><td>DTCs for the faults above</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="path--curvature-is-still-your-job"><a class="header" href="#path--curvature-is-still-your-job">Path → curvature is still your job</a></h2>
+<p>The plugin moves a curvature value; it does not produce one. Your pure-pursuit or Stanley tracker turns the planned line, the GNSS pose
+and the cross-track error into the single curvature that steers back onto the
+line, and it lives in your code. See <a href="#serial-gnss">Serial GNSS</a> and
+<a href="#nmea-2000">NMEA 2000</a> for pose, and <a href="#tc-geo-prescription">TC geo</a> for
+where planned lines come from.</p>
 <h2 id="other-languages"><a class="header" href="#other-languages">Other languages</a></h2>
-<p>The same surface is exposed in the C and Python bindings as session-level
-<code>guidance_*</code> functions/methods, enabled with an <code>enable_guidance</code> flag when the
-session is built. The shape mirrors the Rust plugin: command by curvature, radius,
-or <code>(v, ω)</code> twist (<code>guidance_command_velocity</code>), command straight, and read back
-estimated curvature and readiness.</p>
+<p>Both bindings expose the same surface behind an <code>enable_autodrive</code> flag, as
+session-level <code>autodrive_*</code> functions and methods: arm, engage, disengage,
+command, clear stop, and read back status / engaged / stop reason.</p>
+<p>In C, <code>machbus_session_autodrive_stop_reason</code> returns a
+<code>MachbusSafeStopTrigger</code> enum. Note that <strong>codes 2 and 3 are permanently
+retired</strong> — reusing them would shift every value above for callers built against
+an older header. See <a href="#abi-stability">ABI stability</a>.</p>
 <h2 id="validate-locally-31"><a class="header" href="#validate-locally-31">Validate locally</a></h2>
-<pre><code class="language-sh">cargo run --example guidance_autosteer
+<pre><code class="language-sh">cargo run --example autodrive_keyboard   # the full driving lifecycle
+cargo run --example guidance_autosteer   # the curvature conversation alone
 make test
 </code></pre>
-<p>The example claims an address, commands a 50 m-radius turn, prints the resulting
-Guidance System Command frame, and reads back the steering readiness and estimated
-curvature.</p>
+<p>The example claims an address, shows an engage refused before any ECU answers,
+drives for 500 ms at the 100 ms cadence, releases the dead-man into a latched
+stop, and clears it. See the <a href="#autodrive-example">AutoDrive example</a> for a
+line-by-line reading of the output.</p>
 <h2 id="what-this-proves--does-not-prove-34"><a class="header" href="#what-this-proves--does-not-prove-34">What this proves / does not prove</a></h2>
-<p>Proves: the <code>Guidance</code> plugin commands curvature on PGN 0xAD00 and decodes
-Agricultural Guidance Machine Info from PGN 0xAC00 into typed feedback.</p>
-<p>Does not prove: anything about closed-loop steering, path planning, operator
-supervision, actuator safety, real-machine timing, interoperability with a specific
-steering system, or any certification. machbus is not a safety system and is not
-certified for steering of any kind.</p>
+<p>Proves: <code>AutoDrive</code> commands curvature on PGN 0xAD00 and speed on PGN 0xFD43
+behind one engage lifecycle, refuses out-of-range and out-of-state requests
+before encoding, and latches a safe stop on each trigger above.</p>
+<p>Does not prove: anything about closed-loop steering or speed control, path
+planning, operator supervision, actuator safety, real-machine timing,
+interoperability with any specific tractor, whether a given tractor will act on an
+unauthenticated speed command, or any certification. machbus is not a safety
+system and is not certified.</p>
 <h2 id="see-also-51"><a class="header" href="#see-also-51">See also</a></h2>
 <ul>
-<li><a href="#automatic-guidance-autosteer">Automatic guidance (autosteer)</a> — the curvature model
-and the two PGNs, explained.</li>
-<li><a href="#tractor-implement-management-tim">TIM and automation</a> — steering under granted, revocable authority.</li>
-<li><a href="#tractor-ecu">Tractor ECU</a> — how a tractor advertises it can be steered.</li>
-<li><a href="#serial-gnss">Serial GNSS</a> — getting position and heading into the stack.</li>
+<li><a href="#machbus-drive--the-operator-safety-model"><code>machbus drive</code> safety model</a> — the operator-input layer:
+dead-man, arm latch, and what happens when the controller is lost.</li>
+<li><a href="#automatic-guidance">Automatic guidance</a> — the curvature
+model and the two PGNs.</li>
+<li><a href="#tractor-implement-management-tim">TIM and automation</a> — the authority-gated path, for PTO/hitch/aux.</li>
+<li><a href="#tim--tractor-implement-management-aef">TIM (AEF)</a> — why authority exists at all.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sequence-control"><a class="header" href="#sequence-control">Sequence Control</a></h1>
@@ -13996,8 +14376,9 @@ reserved <code>Initialization</code>);</li>
 <li>byte 2 — the current sequence/step number, or the <code>0xFF</code>
 not-applicable sentinel when the sequence is merely ready;</li>
 <li>byte 3 — the sequence state (<code>SCSequenceState</code>);</li>
-<li>byte 4 — two busy flags (non-volatile-memory busy, SCD-parsing busy);</li>
-<li>bytes 5–7 — reserved, held at <code>0xFF</code>.</li>
+<li>byte 4 — two busy flags in bits 1–2 (non-volatile-memory busy, SCD-parsing
+busy); bits 3–8 are unallocated, transmitted as <code>1</code> and ignored on receive;</li>
+<li>bytes 5–7 — reserved, held at <code>0xFF</code> on transmit and ignored on receive.</li>
 </ul>
 <p><strong>Client status</strong> (<code>PGN_SC_CLIENT_STATUS</code>) mirrors it: a client message code in
 byte 0, the client state (<code>SCClientState</code>: <code>Disabled</code>, <code>Enabled</code>, or reserved
@@ -14471,7 +14852,7 @@ grant through <code>set_interlocks</code>, and the machine returns to a safe sta
 and the vehicle-speed options let an implement coordinate steering and travel
 speed together — for example holding a guidance line while slowing for load.
 Each function is still negotiated and bounded independently; granting hitch
-control says nothing about speed control. See <a href="#guidance-autosteer">Guidance</a>.</li>
+control says nothing about speed control. See <a href="#autodrive-steering--speed">Guidance</a>.</li>
 <li><strong>Who is liable.</strong> Because the implement is borrowing authority over a machine
 it does not own, the boundaries matter legally as well as technically. The
 tractor’s published limits and interlocks define what the implement is <em>able</em>
@@ -14515,7 +14896,7 @@ operator — none of which <code>machbus</code> provides.</p>
 <ul>
 <li><a href="#sequence-control">Sequence control</a> — ordered, conditional command
 sequences that often drive TIM functions.</li>
-<li><a href="#guidance-autosteer">Guidance</a> — curvature and steering, frequently combined with TIM
+<li><a href="#autodrive-steering--speed">Guidance</a> — curvature and steering, frequently combined with TIM
 speed control.</li>
 <li>Shortcut button and safe state — the operator’s always-available path to stop
 automation and return the machine to safe.</li>
@@ -14597,20 +14978,20 @@ and masks the occurrence count to 7 bits, so a DTC always round-trips through a
 valid wire field:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── DTC field encoding ────────────────────────────────────────
+</span>    }
+
+    // ─── DTC field encoding ────────────────────────────────────────
     let dtc = Dtc {
         spn: 0x1_2345,
         fmi: Fmi::MechanicalFail,
         occurrence_count: 12,
+        conversion_method: false,
     };
     let dtc_bytes = dtc.encode();
     let dtc_decoded = Dtc::decode(&amp;dtc_bytes).unwrap();
     println!(
         "\n[DTC] 4-byte field: SPN=0x{:05X} → wire {:02X?} → SPN=0x{:05X}",
         dtc.spn, dtc_bytes, dtc_decoded.spn,
-    );
-    assert_eq!(dtc, dtc_decoded);
-    println!("✓ DTC round-trips byte-exact");
 <span class="boring">}</span></code></pre>
 <p>Two helpers matter for fault bookkeeping. <code>Dtc::matches</code> compares two DTCs by
 <code>(spn, fmi)</code> only, ignoring the occurrence count — that is the right notion of
@@ -14760,6 +15141,7 @@ raise a DTC, and watch a peer receive the DM1:</p>
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
 <span class="boring">}</span></code></pre>
@@ -14785,11 +15167,13 @@ logic. The example builds a DM1 with two DTCs, encodes it, and decodes it back:<
                 spn: 520,
                 fmi: Fmi::VoltageLow,
                 occurrence_count: 0,
+                conversion_method: false,
             },
             Dtc {
                 spn: 190,
                 fmi: Fmi::AbnormalRateChange,
                 occurrence_count: 7,
+                conversion_method: false,
             },
         ],
     };
@@ -14810,8 +15194,6 @@ logic. The example builds a DM1 with two DTCs, encodes it, and decodes it back:<
         println!(
             "  SPN=0x{:05X} FMI={:?} OC={}",
             d.spn, d.fmi, d.occurrence_count
-        );
-    }
 <span class="boring">}</span></code></pre>
 <p>This layer is right for tests, for embedded loops where you own every byte, and
 for any node that wants full control over which messages it speaks.</p>
@@ -15471,6 +15853,38 @@ solution, <code>altitude_m</code> stays <code>None</code> — it does not become
 This is why so many fields on <code>GNSSPosition</code> are <code>Option&lt;f64&gt;</code>: present means
 real, <code>None</code> means the receiver said “not available”. Inbound frames from the
 null or broadcast source address are also rejected outright before any decode.</p>
+<h2 id="each-pgn-has-its-own-transmit-priority"><a class="header" href="#each-pgn-has-its-own-transmit-priority">Each PGN has its own transmit priority</a></h2>
+<p>Appendix B.1 gives every parameter group a <strong>“Priority Default”</strong>, and they are
+not the same. Across the groups machbus sends they span four levels:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Priority</th><th>Groups</th></tr>
+</thead>
+<tbody>
+<tr><td>2</td><td>129025 position rapid, 129026 COG/SOG, 129027 position delta, 127250 heading, 127251 rate of turn, engine/transmission rapid</td></tr>
+<tr><td>3</td><td>129029 GNSS position data, 126992 system time, 127257 attitude, switch state</td></tr>
+<tr><td>5</td><td>127497 engine trip</td></tr>
+<tr><td>6</td><td>129539 DOPs, 129540 satellites in view, 127258 magnetic variation</td></tr>
+<tr><td>7</td><td>126993 heartbeat</td></tr>
+</tbody>
+</table>
+</div>
+<p>Lower wins arbitration, so this is not cosmetic: the 10 Hz position stream an
+autonomy consumer gates on is meant to outrank the once-a-second housekeeping
+groups. Sending everything at one priority — the J1939 general default of 6 is
+the easy mistake — puts a position fix behind its own dilution-of-precision
+report on a loaded bus. <code>nmea2000_default_priority()</code> holds the table, and the
+GNSS plugin applies it per frame.</p>
+<h2 id="a-reserved-sequence-id-costs-the-binding-not-the-data"><a class="header" href="#a-reserved-sequence-id-costs-the-binding-not-the-data">A reserved Sequence ID costs the binding, not the data</a></h2>
+<p>DD056 defines the SID as a correlation tag: “identical SID values within two or
+more different PGN transmissions identifies those PGN transmissions as a single
+related data set”. Values 0–252 bind, <strong>253–254 are reserved</strong>, 255 means “No
+binding provided”.</p>
+<p>Because the SID carries no measurement, machbus does not discard a parameter
+group over a reserved one — it maps it to 255 and decodes the rest. You still
+cannot correlate that frame with a matching COG/SOG, which is the honest outcome;
+you do not lose the position to punish its label.</p>
 <h2 id="why-fast-packet-for-the-big-ones"><a class="header" href="#why-fast-packet-for-the-big-ones">Why Fast Packet for the big ones</a></h2>
 <p>A classic CAN frame carries at most 8 bytes. The position-rapid and COG/SOG
 PGNs fit in one frame, which is exactly why they exist as separate “rapid” PGNs.
@@ -15973,6 +16387,216 @@ CAN instead of text on a serial wire.</li>
 geo-referenced task control.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="machbus-drive--the-operator-safety-model"><a class="header" href="#machbus-drive--the-operator-safety-model"><code>machbus drive</code> — the operator safety model</a></h1>
+<p><code>machbus drive</code> is the CLI’s driving mode: it owns an <a href="#autodrive-steering--speed"><code>AutoDrive</code></a>
+plugin and turns operator input into curvature and speed commands on a real bus.</p>
+<pre><code class="language-sh">machbus drive keyboard            # WASD, TUI
+machbus drive keyboard --daemon   # headless
+machbus drive joystick            # gamepad, TUI
+machbus drive joystick --daemon   # headless
+</code></pre>
+<p>Both modes share the same physics, the same arm latch and the same single gate
+to the bus. They differ only in <strong>what the operator holds</strong>.</p>
+<blockquote>
+<p><strong>This is a development and bench tool.</strong> machbus is not a safety system and
+is not certified. The model below is defence in depth against the obvious
+failure modes, not a substitute for a rated interlock.</p>
+</blockquote>
+<p>The shape of that defence is not arbitrary. ISO 11783-1 §6.13 (“Safe mode
+operation”) defers to ISO 11783-9 §4.7, whose eight clauses this page and the
+<a href="#autodrive-steering--speed">AutoDrive plugin</a> between them try to honour:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Clause</th><th>Requirement</th><th>Where</th></tr>
+</thead>
+<tbody>
+<tr><td>§4.7.1</td><td>fail-safe on loss of power or communication</td><td>link timeout, bus-off → safe stop</td></tr>
+<tr><td>§4.7.2</td><td>“The implement shall not start unexpectedly.”</td><td>arm latch, latching stop, deliberate clear</td></tr>
+<tr><td>§4.7.3</td><td>not “prevented from stopping once the command has been given”</td><td><code>disengage</code> is infallible and idempotent</td></tr>
+<tr><td>§4.7.7</td><td>stop automatically when a failure prevents remote control</td><td>dead-man, lost-controller handling below</td></tr>
+<tr><td>§4.7.8</td><td>“The operator shall have the ability to override”</td><td>emergency stop, ISB, operator engage switch</td></tr>
+</tbody>
+</table>
+</div>
+<p>Honouring the wording is not the same as being certified against it — §4.7.4,
+§4.7.5 and §4.7.6 are about the physical machine and are not machbus’s to meet.</p>
+<h2 id="three-layers"><a class="header" href="#three-layers">Three layers</a></h2>
+<p>Nothing reaches the wire unless all three agree.</p>
+<pre><code>   operator input        │  dead-man held?  arm latch satisfied?
+   ───────────────────── │
+   AutoDrive plugin      │  preconditions met?  (link, lockout, engage switch,
+                         │                       no latched stop, no GNSS hazard)
+   ───────────────────── │
+   stop latch            │  nothing tripped?
+   ───────────────────── ▼
+                      PGN 0xAD00 + 0xFD43
+</code></pre>
+<p>Layers 2 and 3 are documented on the <a href="#every-way-it-stops">AutoDrive page</a>.
+This page is about layer 1 — the part the tool owns.</p>
+<h2 id="the-dead-man-and-the-arm-latch"><a class="header" href="#the-dead-man-and-the-arm-latch">The dead-man and the arm latch</a></h2>
+<p>A dead-man switch has one job: <strong>losing it must read as released.</strong> Both modes
+implement the same two-stage latch.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Joystick</th><th>Keyboard</th></tr>
+</thead>
+<tbody>
+<tr><td>Dead-man</td><td><strong>R2 held</strong> (analog, &gt; 0.3)</td><td><strong>SPACE held</strong> (auto-repeat)</td></tr>
+<tr><td>Arm</td><td>hold R2 for <code>ARM_HOLD_SECS</code> (1.5 s)</td><td>hold SPACE for 1.5 s</td></tr>
+<tr><td>Release</td><td>let go of R2</td><td>stop pressing SPACE</td></tr>
+<tr><td>Emergency stop</td><td><strong>A / Cross</strong> — zero motion, disarm</td><td><strong>ENTER</strong> — zero motion, disarm</td></tr>
+<tr><td>Clear a latched stop</td><td>complete a fresh 1.5 s arm hold</td><td><strong>C</strong></td></tr>
+<tr><td>Re-arm after a disarm</td><td>must release R2 fully first</td><td>must release SPACE fully first</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Arming is deliberate.</strong> Until the dead-man has been held continuously for
+1.5 s, nothing is commanded — no throttle, no steer. The UI shows a fill bar
+(<code>⚠ HOLD R2 TO ARM [███░░░]</code>) so the operator can see the hold accumulating.
+This exists so that a controller left with a trigger pressed, or a stuck key,
+cannot steer the moment the tool starts.</p>
+<p><strong>Re-arming is deliberate too.</strong> <code>disarm()</code> sets a block that is only released
+once the dead-man is seen <em>fully released</em>. Hitting emergency stop while still
+holding R2 cannot silently re-arm the instant the latch clears — the UI says
+<code>⚠ RELEASE R2 TO RE-ARM</code> until you let go.</p>
+<h2 id="losing-the-controller-counts-as-releasing-it"><a class="header" href="#losing-the-controller-counts-as-releasing-it">Losing the controller counts as releasing it</a></h2>
+<p>This is the failure that motivated most of the model, and it is a normative
+requirement rather than a design preference. ISO 11783-9:2012 §4.7.7:</p>
+<blockquote>
+<p>“Implements remotely controlled by an operator shall be designed and
+constructed to stop automatically in the event a detectable failure prevents
+the operator from remotely controlling the implement.”</p>
+</blockquote>
+<p>A gamepad that has been unplugged is exactly that detectable failure.</p>
+<p><strong>Joystick.</strong> gilrs emits no button-release events when a pad disconnects. The
+tool therefore treats a disconnect — unplugged cable, flat battery, dropped
+Bluetooth link — as a full release: it clears the active pad, zeroes every axis
+and button, zeroes motion, and <strong>disarms</strong>. There is also a liveness check
+(<code>gamepad.is_connected()</code>) each poll, so an unplug that produces no event at all
+is still caught.</p>
+<p>Before that, the last trigger value persisted: unplugging the pad while R2 was
+held left the dead-man reading <em>pressed</em> indefinitely, and the machine kept
+steering at its last curvature.</p>
+<blockquote>
+<p>Note that <code>AutoDrive</code>’s <code>CommandStale</code> watchdog does <strong>not</strong> cover this. That
+watchdog fires when the application stops refreshing the setpoint — but the
+tool’s loop was still running and still refreshing, so the watchdog stayed
+fed. A dead-man that cannot be released is not protected by a liveness timer
+on the thing holding it.</p>
+</blockquote>
+<p><strong>Keyboard.</strong> SPACE is a <em>held</em> key, not a toggle. Each press refreshes a
+window; if no press arrives within <code>DEADMAN_WINDOW_S</code>, the dead-man reads
+released and the tool disengages. A released dead-man also zeroes the W/A/S/D
+key intensities, so a still-decaying keypress cannot keep feeding the physics —
+the setpoint decays to a stop rather than freezing at its last value.</p>
+<h3 id="the-keyboard-window-is-coarser-on-purpose"><a class="header" href="#the-keyboard-window-is-coarser-on-purpose">The keyboard window is coarser, on purpose</a></h3>
+<p><code>DEADMAN_WINDOW_S</code> is <strong>0.9 s</strong>, and that is a compromise you should understand
+before driving anything real from a keyboard.</p>
+<p>A terminal reports key <strong>repeats</strong>, not holds. X11 defaults to roughly a 660 ms
+delay before the first repeat, then a fast rate. The window has to outlast that
+initial gap or holding SPACE would drop out immediately after the first press.</p>
+<p>So the keyboard dead-man can take up to ~0.9 s to notice you let go, where the
+joystick’s analog trigger is effectively instant. It is <strong>bounded and correct</strong> —
+not “forever”, which is what a toggle gives you — but it is not equivalent.</p>
+<p><strong>Use the joystick on a real machine.</strong> The keyboard mode is for a bench, a
+virtual CAN, or a replay.</p>
+<p>(The fix for this is the kitty keyboard protocol, which reports true release
+events. It is terminal-dependent, so it would need a runtime probe and a
+fallback to the window above.)</p>
+<h2 id="refusals-are-shown-not-swallowed"><a class="header" href="#refusals-are-shown-not-swallowed">Refusals are shown, not swallowed</a></h2>
+<p><code>AutoDrive</code> refuses rather than silently ignoring, so the tool surfaces the
+refusal. The telemetry pane carries a line with the ISO 11783-7 Table 45
+automation status, any latched stop, and the last refusal:</p>
+<pre><code>aut  ACTIVE:LIM-HI   ■ STOP:position_stale   refused:stop_condition_live
+</code></pre>
+<ul>
+<li><strong>status</strong> — <code>ACTIVE</code>, <code>ACTIVE:LIM-HI</code> / <code>LIM-LO</code> (the steering ECU reporting
+saturation, which is the anti-windup signal), <code>READY</code>, <code>FAULT</code>, <code>not-ready</code>.</li>
+<li><strong>STOP</strong> — the latched trigger. Latching: it stays until explicitly cleared.</li>
+<li><strong>refused</strong> — why the last arm/engage/command was rejected, e.g.
+<code>link_down</code>, <code>mechanical_lockout</code>, <code>operator_not_engaged</code>,
+<code>stop_condition_live</code>, <code>curvature_out_of_range</code>,
+<code>facility_not_advertised</code> (the TECU answered and does not have the class “G”
+guidance or class “P” speed facility being commanded — see
+<a href="#the-tractor-has-to-advertise-the-facility-first">AutoDrive → the tractor has to advertise the facility</a>).</li>
+</ul>
+<p>An operator pressing engage and seeing nothing happen is the failure mode this
+line exists to prevent.</p>
+<h2 id="clearing-a-latched-stop"><a class="header" href="#clearing-a-latched-stop">Clearing a latched stop</a></h2>
+<p><code>AutoDrive</code> <strong>latches</strong>: once a stop trips, <code>engage()</code> refuses until the latch is
+explicitly cleared. Without an affordance for that, the first stop would end the
+session’s ability to drive.</p>
+<ul>
+<li><strong>Keyboard — <code>C</code>.</strong> A dedicated key, deliberately not folded into engage:
+clearing a fault is not by itself consent to move.</li>
+<li><strong>Joystick — a fresh arm hold.</strong> The pad has no spare button, so completing the
+1.5 s hold <em>is</em> the gesture: you already released the dead-man and deliberately
+held it again.</li>
+</ul>
+<p>Either way <code>AutoDrive::clear_stop</code> still refuses with <code>stop_condition_live</code> while
+the Auxiliary Shortcut Button is held or a GNSS hazard is live, so neither path
+can re-arm against a condition that is still asserted.</p>
+<h2 id="key-and-button-map"><a class="header" href="#key-and-button-map">Key and button map</a></h2>
+<p><strong>Keyboard</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SPACE</code></td><td><strong>dead-man — hold to drive</strong></td></tr>
+<tr><td><code>W</code> / <code>S</code></td><td>accelerate / brake</td></tr>
+<tr><td><code>A</code> / <code>D</code></td><td>steer left / right</td></tr>
+<tr><td><code>ENTER</code></td><td>emergency stop + disarm</td></tr>
+<tr><td><code>C</code></td><td>clear a latched safe stop</td></tr>
+<tr><td><code>I</code> / <code>K</code></td><td>speed limit ±</td></tr>
+<tr><td><code>H</code> / <code>J</code></td><td>hitch raise / lower</td></tr>
+<tr><td><code>P</code> / <code>O</code></td><td>PTO on / off</td></tr>
+<tr><td><code>X</code></td><td>cycle counter multiplier</td></tr>
+<tr><td><code>Q</code>, <code>Ctrl+C</code></td><td>quit</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Joystick</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Control</th><th>Action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>R2</code></td><td><strong>dead-man — hold to drive</strong> (hold 1.5 s to arm)</td></tr>
+<tr><td>Left stick</td><td>throttle (Y) and steer (X)</td></tr>
+<tr><td><code>A</code> / Cross</td><td>emergency stop + disarm</td></tr>
+<tr><td><code>B</code> / Circle</td><td>hitch raise</td></tr>
+<tr><td><code>X</code> / Square</td><td>hitch lower</td></tr>
+<tr><td><code>Y</code> / Triangle</td><td>PTO engage</td></tr>
+<tr><td>D-pad ↑ / ↓</td><td>speed limit ±</td></tr>
+<tr><td><code>Start</code></td><td>cycle counter multiplier</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="watching-without-driving"><a class="header" href="#watching-without-driving">Watching without driving</a></h2>
+<p><code>machbus live</code> has an <strong>AutoDrive tab</strong> (hotkey <code>6</code>, or <code>-T autodrive</code>) that
+decodes the same conversation read-only — commanded vs estimated curvature, the
+intent-to-steer flag, readiness, lockout, limit status and speed, each with a
+staleness age. It transmits nothing. Use it to see what another controller is
+doing, or to check your own commands from a second terminal.</p>
+<h2 id="what-this-proves--does-not-prove-41"><a class="header" href="#what-this-proves--does-not-prove-41">What this proves / does not prove</a></h2>
+<p>Proves: the tool gates commands behind a held dead-man and a deliberate arm
+latch, treats a lost controller as a release, and surfaces every refusal and
+latched stop.</p>
+<p>Does not prove: any safety rating, any certification, real-machine timing, that
+0.9 s is an adequate reaction window for your application, or that the layers
+above it behave as documented on a specific tractor. This is a development tool.</p>
+<h2 id="see-also-58"><a class="header" href="#see-also-58">See also</a></h2>
+<ul>
+<li><a href="#autodrive-steering--speed">AutoDrive (steering + speed)</a> — the plugin, its stop triggers
+and the heartbeat contract.</li>
+<li><a href="#automatic-guidance">Automatic guidance</a> — the curvature model.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="socketcan-replay"><a class="header" href="#socketcan-replay">SocketCAN replay</a></h1>
 <p>Trace replay lets you turn a capture into repeatable test evidence.</p>
 <p>Use it for:</p>
@@ -16111,6 +16735,64 @@ diagnostics, implement command, or facility behavior.</p>
 <li>section state</li>
 <li>receiving tractor commands</li>
 <li>participating in VT/TC/FS workflows</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="autodrive-example"><a class="header" href="#autodrive-example">AutoDrive example</a></h1>
+<p>The driving loop <code>machbus drive keyboard</code> runs, with the terminal taken out so
+it is readable and runnable offline.</p>
+<pre><code class="language-sh">cargo run --example autodrive_keyboard
+</code></pre>
+<p>Look for:</p>
+<ul>
+<li><code>examples/autodrive_keyboard.rs</code></li>
+</ul>
+<h2 id="expected-output-shape"><a class="header" href="#expected-output-shape">Expected output shape</a></h2>
+<pre><code class="language-text">=== AutoDrive: steering + speed behind one lifecycle ===
+
+[refused] arm before any ECU answered: link_down
+[engaged] status = ActiveNotLimited
+[heartbeat] 5 guidance commands in 500 ms of driving
+[released] status = Fault   stop = Some("operator_override")
+[refused] engage while latched: stop_latched
+[cleared] latch released; re-engage is allowed again
+</code></pre>
+<p>Each line is one of the four things that are easy to get wrong:</p>
+<ol>
+<li><strong><code>link_down</code></strong> — arming before any steering ECU answers is refused, and the
+refusal names the precondition. <code>AutoDrive</code> returns refusals rather than
+silently ignoring, because a client that asks to steer and is ignored cannot
+tell “commanded” from “declined”.</li>
+<li><strong>5 commands in 500 ms</strong> — the 100 ms cadence (<code>MIN_TX_INTERVAL_MS</code>, the ISO
+11783-7 §5.2.7.2 minimum). The command <em>is</em> the heartbeat the steering ECU
+times out on, so it goes out even when the setpoint has not changed.</li>
+<li><strong><code>Fault</code> + <code>operator_override</code></strong> — releasing the dead-man disengages and
+falls back to <code>DriveCommand::halt()</code>. Losing the dead-man must land in the
+same place; see the <a href="#machbus-drive--the-operator-safety-model">drive tool safety model</a>.</li>
+<li><strong><code>stop_latched</code> then cleared</strong> — the stop latches, so re-engaging is refused
+until an explicit, separate <code>clear_stop()</code>. Clearing a fault is not by itself
+consent to move.</li>
+</ol>
+<p>The example feeds itself Agricultural Guidance Machine Info (PGN 0xAC00), because
+<code>AutoDrive</code> will not engage without a steering ECU answering — that refusal is
+the first line of output.</p>
+<h2 id="what-this-proves"><a class="header" href="#what-this-proves">What this proves</a></h2>
+<ul>
+<li><code>AutoDrive</code> gates arm/engage on preconditions and reports which one failed.</li>
+<li>The command cadence is a heartbeat at the conformance minimum.</li>
+<li>A safe stop latches and needs a deliberate clear.</li>
+</ul>
+<h2 id="what-this-does-not-prove"><a class="header" href="#what-this-does-not-prove">What this does not prove</a></h2>
+<p>Anything about closed-loop steering or speed control, path planning, operator
+supervision, actuator safety, real-machine timing, interoperability with a
+specific tractor, or whether a given tractor acts on an unauthenticated speed
+command at all — see
+<a href="#do-i-need-tim">AutoDrive → Do I need TIM?</a>. machbus
+is not a safety system and is not certified.</p>
+<h2 id="see-also-59"><a class="header" href="#see-also-59">See also</a></h2>
+<ul>
+<li><a href="#autodrive-steering--speed">AutoDrive (steering + speed)</a> — the plugin.</li>
+<li><a href="#machbus-drive--the-operator-safety-model"><code>machbus drive</code> safety model</a> — the operator-input
+layer around it: dead-man, arm latch, and losing the controller.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="vt-server-example"><a class="header" href="#vt-server-example">VT server example</a></h1>
@@ -16543,15 +17225,122 @@ are strings such as <code>"raise"</code>, <code>"lower"</code>, <code>"engage"</
 <p>The C ABI has an explicit version surface and a generated header. ABI stability
 means C callers can rely on ownership and layout rules within the documented
 version boundary.</p>
-<h2 id="current-version-3"><a class="header" href="#current-version-3">Current version: 3</a></h2>
-<p>The ABI is now <strong>version 3</strong>, reported by <code>machbus_session_abi_version()</code>. This
-version marks the rewrite onto the <a href="#the-session-facade">session facade</a>:
-the entire symbol set was renamed to the <code>machbus_session_*</code> prefix and the model
-changed to sans-IO (the caller bridges IO with feed/tick/poll instead of an
-internal virtual bus). That was a deliberate, breaking change, so stability
-guarantees start fresh from v3 — older <code>machbus.h</code> headers and any pre-v3 symbol
-names do not apply.</p>
-<p>C examples intentionally fail fast if the runtime reports a different version.</p>
+<h2 id="current-version-5"><a class="header" href="#current-version-5">Current version: 5</a></h2>
+<p>The ABI is <strong>version 5</strong>, reported by <code>machbus_session_abi_version()</code>.</p>
+<p>C examples intentionally fail fast if the runtime reports a different version.
+That guard is the only thing standing between a stale header and undefined
+behaviour, so it is load-bearing: a caller built against v3 that skipped it
+would call the five-argument <code>machbus_session_fs_client_seek</code> with four
+arguments, reading <code>out_tan</code> from an uninitialised stack slot and writing
+through it.</p>
+<h3 id="v4--v5"><a class="header" href="#v4--v5">v4 → v5</a></h3>
+<p>The largest change is a <strong>removal</strong>: the <code>Guidance</code> subsystem is gone, superseded
+by <code>AutoDrive</code>.</p>
+<ul>
+<li>
+<p><strong>All twelve <code>machbus_session_guidance_*</code> functions are removed</strong>, along with
+<code>MachbusConfig::enable_guidance</code> and the <code>MACHBUS_EVENT_KIND_GUIDANCE_STOP_REQUESTED</code>
+event kind. <code>Guidance</code> and <code>AutoDrive</code> were mutually exclusive authors of PGN
+0xAD00 with ~80 % duplicated safety logic; every audit round had to fix both,
+identically. Port to the <code>machbus_session_autodrive_*</code> family:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>removed</th><th>replacement</th></tr>
+</thead>
+<tbody>
+<tr><td><code>guidance_engage</code></td><td><code>autodrive_arm</code> then <code>autodrive_engage</code></td></tr>
+<tr><td><code>guidance_disengage</code></td><td><code>autodrive_disengage</code></td></tr>
+<tr><td><code>guidance_command_curvature(k)</code></td><td><code>autodrive_command(NAN, k)</code></td></tr>
+<tr><td><code>guidance_command_radius(r)</code></td><td><code>autodrive_command(NAN, 1000.0 / r)</code></td></tr>
+<tr><td><code>guidance_command_velocity(v, ω)</code></td><td><code>autodrive_command(v, (ω / v) * 1000.0)</code></td></tr>
+<tr><td><code>guidance_command_straight()</code></td><td><code>autodrive_command(NAN, 0.0)</code></td></tr>
+<tr><td><code>guidance_is_engaged</code></td><td><code>autodrive_is_engaged</code></td></tr>
+<tr><td><code>guidance_stop_reason</code></td><td><code>autodrive_stop_reason</code></td></tr>
+<tr><td><code>guidance_clear_stop</code></td><td><code>autodrive_clear_stop</code></td></tr>
+<tr><td><code>guidance_estimated_curvature</code></td><td>poll the <code>GuidanceMachineInfo</code> event</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>MachbusConfig</code> is unchanged in size (48 bytes) and no surviving field moved,
+so the layout assertions still hold — but a caller that set <code>enable_guidance</code>
+will no longer compile.</p>
+</li>
+<li>
+<p><strong><code>MACHBUS_EVENT_KIND_GUIDANCE_MACHINE_INFO</code>, <code>_LINK_LOST</code> and <code>_LINK_RESTORED</code>
+are unchanged and still fire</strong> — <code>AutoDrive</code> now emits them, so an
+event-driven C caller reading the steering ECU’s feedback needs no change.
+<code>_GUIDANCE_STOP_REQUESTED</code> is removed because
+<code>MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP</code> supersedes it and reports <em>which</em>
+trigger fired rather than only that something did.</p>
+</li>
+</ul>
+<p>Beyond that removal, the <strong>error contract</strong> of two functions changed.</p>
+<ul>
+<li><strong><code>machbus_session_autodrive_clear_stop</code> and
+<code>machbus_session_guidance_clear_stop</code> can now return <code>false</code>.</strong> Releasing a
+latched safe stop has been a conditional no-op inside the plugins since the
+ISB and GNSS hazard interlocks landed, but both C functions returned <code>true</code>
+unconditionally and cleared the last error. A caller that showed the fault as
+cleared on a <code>true</code> return re-enabled Engage with the latch still set. They
+now return <code>false</code> and set a last-error string naming the refusal
+(<code>stop_condition_live</code>) when the operator is still holding the Auxiliary
+Shortcut Button or a GNSS hazard is live.</li>
+</ul>
+<p>The Python <code>autodrive_clear_stop</code> / <code>guidance_clear_stop</code> raise <code>RuntimeError</code>
+in the same case.</p>
+<ul>
+<li>
+<p><strong><code>MachbusLanguageData</code> unit fields now carry <code>0xFF</code> for an unrecognised
+code</strong> instead of silently substituting the metric/English default. A
+Language Command whose unit codes this edition does not define is no longer
+discarded whole either, so a caller now receives the operator’s language code
+with <code>0xFF</code> in the fields it could not interpret. Treat <code>0xFF</code> as “not
+specified” rather than as a unit value.</p>
+</li>
+<li>
+<p><strong><code>machbus_session_autodrive_stop_reason</code> and
+<code>machbus_session_guidance_stop_reason</code> return <code>MachbusSafeStopTrigger</code></strong>
+instead of a bare <code>uint32_t</code>. The values are unchanged — the enum mirrors
+<code>SafeStopTrigger::as_code</code>, with <code>MACHBUS_SAFE_STOP_TRIGGER_NONE = 0</code> for “no
+stop latched” — but the return type is now named, so a C HMI no longer has to
+hardcode codes read out of the Rust source. <strong>Codes 2 and 3 are permanently
+retired</strong> (they were <code>TimStatusTimeout</code> and <code>FunctionRequestTimeout</code>, which
+had no producer); they must never be reused, or every value above them shifts
+for callers built against an older header.</p>
+</li>
+<li>
+<p><strong><code>MachbusEventKind</code> gained <code>TcServerClientDisconnected</code> (100).</strong> Additive:
+existing discriminants are unchanged. It fires when the TC server drops a
+client after six seconds without a Client Task message (ISO 11783-10 §6.6.3);
+<code>source</code> is the client address. A caller with an exhaustive switch over the
+enum must add an arm.</p>
+</li>
+</ul>
+<h3 id="v3--v4"><a class="header" href="#v3--v4">v3 → v4</a></h3>
+<p>Conformance work against ISO 11783-13 and ISO 11783-7 changed four things a C
+caller must audit:</p>
+<ul>
+<li><strong><code>machbus_session_fs_client_seek</code> gained an argument.</strong> It was
+<code>(handle, position: uint32_t, out_tan)</code>; it is now
+<code>(handle, mode: uint8_t, offset: int32_t, out_tan)</code>. <code>mode</code> is the ISO
+11783-13 B.17 Position Mode — 0 from the start, 1 from the current pointer,
+2 from the end — and the offset is signed, so a rewind is a negative value.</li>
+<li><strong>File Server error codes were renumbered to Annex B.9.</strong> Everything from 5
+upward moved: <code>InvalidHandle</code> is now 5 (was 7), <code>MediaNotPresent</code> 10 (was
+12), <code>NotSupported</code> 12 (was 20). A caller switching on the numeric value must
+be re-read against the table.</li>
+<li><strong><code>MachbusEvent</code>’s FS seek payload carries the resulting position</strong> rather
+than a unit success, per C.3.3.3.</li>
+<li><strong><code>repr(C)</code> PODs widened</strong> where a decoder gained a field (notably the GNSS
+position, which now carries DD209 integrity).</li>
+</ul>
+<h3 id="v2--v3"><a class="header" href="#v2--v3">v2 → v3</a></h3>
+<p>The rewrite onto the <a href="#the-session-facade">session facade</a>: the entire
+symbol set was renamed to the <code>machbus_session_*</code> prefix and the model changed
+to sans-IO (the caller bridges IO with feed/tick/poll instead of an internal
+virtual bus). A deliberate breaking change; stability guarantees start fresh
+from v3, and older <code>machbus.h</code> headers and pre-v3 symbol names do not apply.</p>
 <h2 id="what-the-version-covers"><a class="header" href="#what-the-version-covers">What the version covers</a></h2>
 <p>Bump the ABI version whenever any of these change in a way C callers must audit:</p>
 <ul>
@@ -16815,7 +17604,7 @@ The embedded <code>Session</code> enables <code>IsoNet</code>’s direct message
 decoded messages are drained without a boxed callback listener at the session
 boundary. Hosted callback dispatch remains explicit and opt-in.
 Selected ISO 11783 application codecs are also embedded-available, including
-AUX, legacy file-transfer types, Functionalities, Group Function, Guidance,
+AUX, Functionalities, Group Function, guidance codecs,
 TIM, implement/tractor message codecs, and Sequence Control core
 state/recording/TAN helpers. <code>machbus::isobus::tc</code> also builds in embedded
 mode for heap-backed DDOP/object codecs, TC client/server pump state, TC-GEO,
@@ -16874,12 +17663,12 @@ imports and minimal loop shape in a dedicated test.</p>
 hosted transport path and is not part of the embedded profile. <code>async</code> is
 runtime-agnostic, but it does not make the session <code>Send</code> or thread-safe; it
 remains a local, explicitly pumped model.</p>
-<h2 id="what-this-proves--does-not-prove-41"><a class="header" href="#what-this-proves--does-not-prove-41">What this proves / does not prove</a></h2>
+<h2 id="what-this-proves--does-not-prove-42"><a class="header" href="#what-this-proves--does-not-prove-42">What this proves / does not prove</a></h2>
 <p>Feature flags describe compile-time surface area and dependencies. They do not
 claim official ISO 11783, SAE J1939, NMEA, or AEF certification. A real
 deployment still needs official standards access, hardware evidence, and
 interoperability testing.</p>
-<h2 id="see-also-58"><a class="header" href="#see-also-58">See also</a></h2>
+<h2 id="see-also-60"><a class="header" href="#see-also-60">See also</a></h2>
 <ul>
 <li><a href="#no_std-on-microcontrollers"><code>no_std</code> on microcontrollers</a></li>
 <li><a href="#crate-map">Crate map</a></li>
@@ -17082,7 +17871,7 @@ absent; <code>InvalidState</code> means the link may exist but the requested ste
 allowed from the current state.</li>
 <li><strong>The code is stable; the message is not.</strong> Branch on <code>code</code>. Log the message.</li>
 </ul>
-<h2 id="see-also-59"><a class="header" href="#see-also-59">See also</a></h2>
+<h2 id="see-also-61"><a class="header" href="#see-also-61">See also</a></h2>
 <ul>
 <li><a href="#crate-map">Crate map</a> — which layer returns errors and which emits events.</li>
 <li><a href="#feature-flags">Feature flags</a> — how disabled subsystems change the surface.</li>
@@ -18788,6 +19577,24 @@ matrices, package contents, hardware-evidence manifests, and a private-standard
 leak scan — were removed so <code>.rs</code> tests cover code, not documentation or repo
 layout. The non-disclosure boundary is now a maintained convention, not an
 automated scan.</p>
+<h2 id="review-against-the-standards-text"><a class="header" href="#review-against-the-standards-text">Review against the standards text</a></h2>
+<p>A pass over the implementation with licensed copies of ISO 11783-1 … -14,
+AEF 023 RIG 2 and the NMEA 2000 appendices, checking field orders, ranges,
+timings, default priorities and reserved-bit rules against the documents.</p>
+<ul>
+<li>Nine defects found and fixed; each carries a test that fails when the fix is
+reverted, and the full gate ran green before every commit.</li>
+<li>Seven of the nine only misbehave against a <em>conformant peer</em> — over-strict
+receive paths and uniform defaults where the standard varies — so no
+self-consistent test could have surfaced them.</li>
+<li>Four miscited clauses corrected; three judgement calls documented in place
+rather than changed.</li>
+<li>Recorded limitation: no PGN value in the crate is evidenced by the standards,
+because ISO 11783-1 §7, -7 §4.2 and -11 §4.1 all place the assignments in the
+electronic database at isobus.net.</li>
+</ul>
+<p>Detail, including what each document could and could not evidence:
+<a href="#audit-review-against-the-standards-text">audit against the standards text</a>.</p>
 <h2 id="focused-gates-retained"><a class="header" href="#focused-gates-retained">Focused gates retained</a></h2>
 <div class="table-wrapper">
 <table>
@@ -19146,6 +19953,152 @@ it. (see <a href="#the-virtual-terminal">Working sets and object pools</a>)</p>
 carries no ISO, SAE, NMEA, or AEF certification; real deployment still requires
 the official standards, hardware, and interoperability evidence.</em></p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="audit-review-against-the-standards-text"><a class="header" href="#audit-review-against-the-standards-text">Audit: review against the standards text</a></h1>
+<p>A pass over the implementation with the ISO 11783 series, AEF 023 RIG 2 and the
+NMEA 2000 appendices open beside it, checking field orders, ranges, timings,
+default priorities and reserved-bit rules against what the documents actually
+say.</p>
+<p>This is a distinct kind of evidence from the rest of the suite. Unit tests and
+fixtures prove the code does what its author intended; trace replay proves it
+matches a capture. Neither catches a wire rule that was <em>reconstructed</em> rather
+than read — and reconstructions are exactly where this pass found problems.</p>
+<blockquote>
+<p>The standards are <strong>not</strong> redistributed in this repository and never will be.
+This page records what was checked and what was found; reproducing it needs
+your own licensed copies.</p>
+</blockquote>
+<h2 id="what-each-document-could-evidence"><a class="header" href="#what-each-document-could-evidence">What each document could evidence</a></h2>
+<p>The series is not uniform. Three of its parts turn out to be short pointer
+documents that define no messages at all, and that shapes what can be checked.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Document</th><th>Substantive for this audit</th></tr>
+</thead>
+<tbody>
+<tr><td>ISO 11783-1:2017</td><td>§6.13 safe mode (defers to part 9), §7 electronic database</td></tr>
+<tr><td>ISO 11783-2:2019</td><td>bit rate and sample point, bus power minima, §9.6 fail-safe</td></tr>
+<tr><td>ISO 11783-3:2018</td><td>transport timeouts, size limits, Table 8 abort reasons</td></tr>
+<tr><td>ISO 11783-4:2011</td><td>Table 2 NIU function codes</td></tr>
+<tr><td>ISO 11783-5:2019</td><td>NAME self-configurable bit and claim behaviour</td></tr>
+<tr><td>ISO 11783-6:2018</td><td>VT object attribute tables, Annex D queries, Annex J auxiliary</td></tr>
+<tr><td>ISO 11783-7:2022</td><td>§5.2.4 Table 1 SLOT bands, §5.4 reserved bits, Clause 11 TIM</td></tr>
+<tr><td>ISO 11783-8:2006</td><td><strong>3 pages</strong> — §4.2/§4.3 precedence over J1939-71 only</td></tr>
+<tr><td>ISO 11783-9:2012</td><td>tractor classes, facilities handshake, §4.7 safe mode</td></tr>
+<tr><td>ISO 11783-10:2015</td><td>process data commands, TC/client status, DDOP, TimeLog</td></tr>
+<tr><td>ISO 11783-11:2011</td><td><strong>3 pages</strong> — §4.2 DDI entry shape only</td></tr>
+<tr><td>ISO 11783-12:2019</td><td>DM1/DM2, diagnostic protocol, B.9 functionalities</td></tr>
+<tr><td>ISO 11783-13:2022</td><td>error codes, flags, volume and file operations</td></tr>
+<tr><td>ISO 11783-14:2013</td><td>F.3 SCClientStatus and its timeouts</td></tr>
+<tr><td>AEF 023 RIG 2</td><td>TIM function messages, SLOTs and facility blocks</td></tr>
+<tr><td>NMEA 2000 App. A/B</td><td>per-PGN priorities, GNSS data dictionary items</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="the-limit-worth-knowing-about"><a class="header" href="#the-limit-worth-knowing-about">The limit worth knowing about</a></h2>
+<p><strong>No PGN number in this crate is verifiable from the standards.</strong> That is the
+series’ own design, stated three times over:</p>
+<ul>
+<li>ISO 11783-1 §7 — “The electronic database with the ISO 11783-1 parameter
+group, address and identity assignments is accessible at: www.isobus.net”,
+listing PGNs, industry groups, preferred addresses, NAMEs and manufacturer
+codes as living there.</li>
+<li>ISO 11783-7 §4.2 — the same for the part 7 PGN and SPN assignments.</li>
+<li>ISO 11783-11 §4.1 — the same for the DDIs, maintained by VDMA as the
+ISO-appointed maintenance agency.</li>
+</ul>
+<p>So this audit evidences <strong>message definitions</strong> — field order, widths, ranges,
+reserved-bit rules, timings, priorities — and not the numbers those messages
+travel under. A citation beside a PGN constant names the clause defining the
+message, never one stating its value. The same applies to every DDI range in
+<code>ddi_database</code>: only the five-attribute <em>shape</em> mandated by ISO 11783-11 §4.2 is
+checkable.</p>
+<h2 id="what-was-found"><a class="header" href="#what-was-found">What was found</a></h2>
+<p>Nine defects, each fixed with a test that fails when the fix is reverted.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Area</th><th>Defect</th><th>Clause</th></tr>
+</thead>
+<tbody>
+<tr><td>AutoDrive</td><td>never sent Required Tractor Facilities, so a conforming TECU may never broadcast the Machine Info it refuses to engage without</td><td>11783-9 §4.4.2</td></tr>
+<tr><td>AutoDrive</td><td>facility <em>request</em> set reserved bits to 1, asking for every undefined facility</td><td>11783-7 §5.4, 11783-9 §4.4.2</td></tr>
+<tr><td>File Server</td><td>rejected volume requests whose reserved bits were set</td><td>11783-13 B.29/B.30, §4.9</td></tr>
+<tr><td>Diagnostics</td><td>one unknown functionality code discarded the whole message</td><td>11783-12 B.9</td></tr>
+<tr><td>Task Controller</td><td>every Process Data message sent at priority 6</td><td>11783-10 B.2</td></tr>
+<tr><td>Task Controller</td><td>TimeLog encoder omitted five declared position columns</td><td>11783-10 Table 3</td></tr>
+<tr><td>Powertrain</td><td>Python exposed only the strict speed decoder, which rejects real frames</td><td>11783-8 §4.2</td></tr>
+<tr><td>NMEA 2000</td><td>every PGN transmitted at priority 6</td><td>NMEA 2000 App. B.1</td></tr>
+<tr><td>NMEA 2000</td><td>a reserved Sequence ID discarded the whole parameter group</td><td>NMEA 2000 DD056</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="the-pattern"><a class="header" href="#the-pattern">The pattern</a></h3>
+<p><strong>Seven of the nine only misbehave against a <em>conformant peer</em>.</strong> They are
+receive paths that were stricter than the standard allows, or defaults that were
+uniform where the standard varies. Testing a stack against itself cannot surface
+either: both sides share the same wrong assumption.</p>
+<p>The reserved-bit cases share one root. ISO 11783-7 §5.4 says both halves of the
+rule, and only the first half had been applied:</p>
+<blockquote>
+<p>“All undefined and reserved bits shall be transmitted with a value of ‘1’ …
+All undefined bits should be received as ‘don’t care’ (either masked out or
+ignored). This permits them to be defined and used in the future without
+causing any incompatibilities.”</p>
+</blockquote>
+<p>That clause also carries an exception which is easy to miss and which the
+facility messages fall under — feature-availability messages where “the default
+value is zero (‘0’) for forward compatibility. The value of zero indicates ‘not
+supported’”.</p>
+<p>The two priority defects are the same mistake in different subsystems: a
+per-message default collapsed into one constant. Worth checking wherever a
+plugin passes a literal priority.</p>
+<h2 id="corrections-to-citations"><a class="header" href="#corrections-to-citations">Corrections to citations</a></h2>
+<p>Four places named a clause that does not say what was claimed:</p>
+<ul>
+<li>Auxiliary functions were attributed to <strong>ISO 11783-11</strong>, which contains no
+mention of them; they are ISO 11783-6 <strong>Annex J</strong>. (The module body said
+“Annex G”, which is “Status Messages” in the 2018 edition.)</li>
+<li>The 100 ms guidance cadence cited ISO 11783-7 §5.2.7.2, which defines the
+<em>form</em> of an on-change rate but states no numbers — §5.2.7.1 puts every rate
+in the electronic database. Now cited to AEF 023 §D.7.1, which does state
+“2000 ms periodic, 100 ms on change”.</li>
+<li><code>Dm5Message</code> was labelled DM5. J1939-73’s DM5 is Diagnostic Readiness 1 on PGN
+65230; this is ISO 11783-12 B.5 “Diagnostic protocol” on PGN 64818.</li>
+<li>Wheel/ground/machine speed were attributed to J1939-71 alone, but ISO 11783-8
+§4.2 gives ISO 11783-7 precedence wherever both define a parameter.</li>
+</ul>
+<h2 id="judgement-calls-left-as-they-are"><a class="header" href="#judgement-calls-left-as-they-are">Judgement calls left as they are</a></h2>
+<p>Recorded rather than changed, because the normative text supports current
+behaviour and changing it would reject data that works today:</p>
+<ul>
+<li><strong>DDOP designators</strong> carry two limits: Table A.1’s normative range is 128
+<em>bytes</em> (enforced), while the description column says 32 <em>characters</em>. Annex A
+derives one from the other at 4 bytes/character. A 128-character ASCII
+designator therefore serializes.</li>
+<li><strong>Element number 4095</strong> is inside B.3.2’s stated 0–4095 range but is also how
+B.8.1/B.8.2 encode “element number not available”.</li>
+<li><strong>Auxiliary PGN constants</strong> are evidenced by Annex J for their message
+definitions only; the values are not printed in part 6.</li>
+</ul>
+<h2 id="what-this-evidence-is-not"><a class="header" href="#what-this-evidence-is-not">What this evidence is not</a></h2>
+<p>Reading the text is not conformance testing. It cannot show how a specific
+tractor behaves, cannot substitute for AEF validation, and does not move any row
+in the <a href="#conformance-and-claim-boundary">conformance boundary</a>. Several areas were confirmed
+<em>correct</em> against the text and are still untested against real hardware —
+<code>ISO 11783-7 §5.2.4</code> curvature banding and the AEF 023 TIM SLOTs among them.</p>
+<p>Its value is narrower and real: it is the only layer here that can catch a rule
+the implementation never got right in the first place.</p>
+<h2 id="see-also-62"><a class="header" href="#see-also-62">See also</a></h2>
+<ul>
+<li><a href="#evidence-model">Evidence model</a> — where this layer sits.</li>
+<li><a href="#conformance-and-claim-boundary">Conformance and claim boundary</a> — what may be claimed.</li>
+<li><a href="#machbus-drive--the-operator-safety-model"><code>machbus drive</code> safety model</a> — the ISO
+11783-9 §4.7 clauses the operator layer answers to.</li>
+<li><a href="#the-tractor-has-to-advertise-the-facility-first">AutoDrive</a>
+— the facilities handshake this pass added.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="binding-contracts"><a class="header" href="#binding-contracts">Binding contracts</a></h1>
 <p>This page explains how the Rust, C, and Python surfaces relate. It is written
 for maintainers who need to change a binding without accidentally promising
@@ -19271,6 +20224,7 @@ do not create that external evidence by themselves.</p>
 </thead>
 <tbody>
 <tr><td>Local build/test gate</td><td>Present</td><td><code>Makefile</code>, <code>book/src/reference/validation-history.md</code></td></tr>
+<tr><td>Standards-text review</td><td>Present for the areas named in the audit page</td><td><code>book/src/reference/audit/standards-text-audit.md</code></td></tr>
 <tr><td>Public claim boundary</td><td>Present</td><td>this page and <code>book/src/conformity/</code></td></tr>
 <tr><td>Protocol fixtures</td><td>Present for selected flows</td><td><code>tests/protocol_fixtures.rs</code>, <code>tests/fixtures/</code>, <code>book/src/reference/assets/protocol_matrix.csv</code></td></tr>
 <tr><td>AgIsoStack/reference-style bytes</td><td>Present for selected rows only</td><td><code>tests/agisostack_compat.rs</code>, <code>tests/fixtures/oracle/agisostack_manifest.txt</code></td></tr>
@@ -19295,6 +20249,16 @@ for completed evidence.</p>
 <li>No real machine safety claim is made.</li>
 <li>Nothing in this checkout is currently AEF-tested.</li>
 <li>No official ISO 11783 text is embedded in this repository.</li>
+<li>Reviewing behaviour against the standards text is <strong>not</strong> conformance
+testing. The <a href="#audit-review-against-the-standards-text">standards-text audit</a> checked field
+orders, ranges, timings and reserved-bit rules against licensed copies of the
+documents; that says nothing about how a given tractor behaves and moves no
+row in this table. “Checked against the text” is safe wording; “conformant”
+remains on the forbidden list above.</li>
+<li>No PGN value in this crate is evidenced by the standards. ISO 11783-1 §7,
+ISO 11783-7 §4.2 and ISO 11783-11 §4.1 each place the assignments in the
+electronic database at isobus.net instead. Citations beside PGN constants name
+the clause defining the <em>message</em>, not one stating its number.</li>
 <li>No broad external peer compatibility statement is made beyond the exact
 local fixtures, virtual-bus tests, checked-in traces, and reports named in
 the docs.</li>
@@ -19609,7 +20573,7 @@ accepted pool.</p>
 
         <script src="clipboard-1626706a.min.js"></script>
         <script src="highlight-abc7f01d.js"></script>
-        <script src="book-c22b7243.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

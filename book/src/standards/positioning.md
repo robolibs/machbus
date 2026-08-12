@@ -112,7 +112,7 @@ The hands-on paths are [NMEA 2000](../tutorials/nmea-2000.md) and
 | --- | --- | --- |
 | Decoding NMEA 2000 GNSS PGNs | `session::plugins::Gnss` | [NMEA 2000](../tutorials/nmea-2000.md) |
 | Serial NMEA 0183 receivers | `nmea` parser | [Serial GNSS](../tutorials/serial-gnss.md) |
-| Steering on top of the fix | guidance helpers | [Guidance](../tutorials/guidance.md) |
+| Steering on top of the fix | guidance helpers | [Guidance](../tutorials/autodrive.md) |
 | Position → setpoint | TC-GEO + DDOP geometry | [TC-GEO prescription](../tutorials/tc-geo-prescription.md) |
 
 ## Scope and honesty
@@ -140,4 +140,4 @@ the bus.
 - [The Task Controller and the data dictionary](task-controller.md) — where the fix
   becomes a setpoint.
 - [The networking foundation](foundations.md) — Fast Packet and the transport family.
-- [Guidance](../tutorials/guidance.md) — steering and curvature on top of the fix.
+- [Guidance](../tutorials/autodrive.md) — steering and curvature on top of the fix.

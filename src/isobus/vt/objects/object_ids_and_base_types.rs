@@ -160,13 +160,24 @@ impl From<ObjectID> for ChildRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MacroRef {
     pub event_id: u8,
-    pub macro_id: u8,
+    /// The referenced Macro object's ID.
+    ///
+    /// 16-bit because ISO 11783-6 §4.6.22.3 says so from VT version 5:
+    /// "Version 5 and later VTs, in addition to the 8-bit Macro Object IDs,
+    /// shall support Macros with an Object ID in the range of 0 to 65534 ...
+    /// An Event ID of 255 in the first byte of the Macro reference indicates
+    /// that two groupings shall be concatenated to a single grouping with a
+    /// 16-bit Macro Object ID reference."
+    ///
+    /// Decoding those four bytes as two 8-bit references registered two wrong
+    /// triggers and executed the wrong macro object.
+    pub macro_id: u16,
 }
 
 impl MacroRef {
     #[inline]
     #[must_use]
-    pub const fn new(event_id: u8, macro_id: u8) -> Self {
+    pub const fn new(event_id: u8, macro_id: u16) -> Self {
         Self { event_id, macro_id }
     }
 }
@@ -1281,16 +1292,25 @@ pub struct StringVariableBody {
 }
 
 impl StringVariableBody {
-    /// Encode to the ISO 11783-6 wire layout `[length:u16][value bytes]`.
-    /// The on-wire length is the actual `value` byte count so the pool
-    /// walker can recover the body without a separate length prefix; the
-    /// struct's `length` field is kept in step on decode.
+    /// Encode to the ISO 11783-6 Table B.44 layout `[length:u16][value bytes]`.
+    ///
+    /// The declared length is always the number of value bytes actually
+    /// written, so a pool walker can never desynchronise on a body that
+    /// promises more than it carries. A non-zero `length` still caps the
+    /// value, since B.44 defines it as the maximum fixed length; padding a
+    /// short value out to that maximum is the runtime's job, not the codec's.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let wire_len = self.value.len().min(u16::MAX as usize) as u16;
-        let mut data = Vec::with_capacity(2 + wire_len as usize);
+        let cap = if self.length == 0 {
+            self.value.len()
+        } else {
+            (self.length as usize).min(self.value.len())
+        };
+        let wire_len = u16::try_from(cap).unwrap_or(u16::MAX);
+        let written = wire_len as usize;
+        let mut data = Vec::with_capacity(2 + written);
         data.extend_from_slice(&wire_len.to_le_bytes());
-        data.extend_from_slice(&self.value[..wire_len as usize]);
+        data.extend_from_slice(&self.value[..written]);
         data
     }
 
@@ -1307,9 +1327,10 @@ impl StringVariableBody {
             };
         }
         let length = u16_le(&body[0..]);
+        let val_len = (body.len() - 2).min(length as usize);
         Self {
             length,
-            value: body[2..].to_vec(),
+            value: body[2..2 + val_len].to_vec(),
         }
     }
 }

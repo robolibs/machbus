@@ -3,6 +3,19 @@
 //!
 //! Mirrors the C++ `machbus::net::pgn_defs`. Values **must remain
 //! bit-identical** to the C++ source for cross-stack interoperability.
+//!
+//! None of these values can be checked against the ISO 11783 documents, and
+//! that is by the series' own design rather than an omission here. ISO
+//! 11783-1:2017 §7: "The electronic database with the ISO 11783-1 parameter
+//! group, address and identity assignments is accessible at: www.isobus.net",
+//! listing the PGN assignments, industry groups, preferred addresses, NAMEs and
+//! manufacturer codes as living there. ISO 11783-7:2022 §4.2 says the same of
+//! the part 7 PGN and SPN assignments, and ISO 11783-11:2011 §4.1 of the DDIs.
+//!
+//! So the standard PDFs evidence the *message definitions* — field order,
+//! widths, ranges, reserved-bit rules — while the numbers below come from the
+//! C++ stack and the online database. Treat a citation next to a constant as
+//! naming the clause that defines the message, not one that states its PGN.
 
 use super::types::Pgn;
 
@@ -83,15 +96,15 @@ pub const PGN_ECU_TO_TC: Pgn = 0xCC00;
 // ─── Vehicle / Machine Speed (J1939 / ISO 11783-7) ───────────────────────
 pub const PGN_TIME_DATE: Pgn = 0xFEE6;
 pub const PGN_VEHICLE_SPEED: Pgn = 0xFEF1;
+pub const PGN_ETC1: Pgn = 0xF005;
+pub const PGN_ETC2: Pgn = 0xF002;
 pub const PGN_WHEEL_SPEED: Pgn = 0xFE48;
 pub const PGN_GROUND_SPEED: Pgn = 0xFE49;
 pub const PGN_MACHINE_SPEED: Pgn = 0xF022;
 
 // ─── Guidance (ISO 11783-7) ──────────────────────────────────────────────
-pub const PGN_GUIDANCE_MACHINE: Pgn = 0xFE44;
-pub const PGN_GUIDANCE_SYSTEM: Pgn = 0xFE45;
 
-// ─── Auxiliary Functions (ISO 11783-11) ──────────────────────────────────
+// ─── Auxiliary Functions (ISO 11783-6 Annex J) ───────────────────────────
 pub const PGN_AUX_ASSIGNMENT: Pgn = 0xFD20;
 pub const PGN_AUX_INPUT_STATUS: Pgn = 0xFD21;
 pub const PGN_AUX_INPUT_TYPE2: Pgn = 0xFD22;
@@ -114,9 +127,9 @@ pub const PGN_SC_CLIENT_STATUS: Pgn = 0x8D00;
 
 // ─── Tractor Implement Management (ISO 11783-7/9) ────────────────────────
 pub const PGN_FRONT_PTO: Pgn = 0xFE54;
-pub const PGN_REAR_PTO: Pgn = 0xF003;
+pub const PGN_REAR_PTO: Pgn = 0xFE55;
 pub const PGN_FRONT_HITCH: Pgn = 0xFE08;
-pub const PGN_REAR_HITCH: Pgn = 0xF005;
+pub const PGN_REAR_HITCH: Pgn = 0xFE03;
 pub const PGN_AUX_VALVE_0_7: Pgn = 0xFE20;
 pub const PGN_AUX_VALVE_8_15: Pgn = 0xFE21;
 pub const PGN_AUX_VALVE_16_23: Pgn = 0xFE22;
@@ -137,7 +150,8 @@ pub const PGN_REQUIRED_TRACTOR_FACILITIES: Pgn = 0xFE0A;
 
 // ─── Auxiliary Valve Flow (ISO 11783-7 Class 2 TECU) ─────────────────────
 pub const PGN_AUX_VALVE_ESTIMATED_FLOW_BASE: Pgn = 0xFE10;
-pub const PGN_AUX_VALVE_MEASURED_FLOW_BASE: Pgn = 0xFE20;
+/// Alias: the measured-flow block starts at the same PGN as auxiliary valve 0.
+pub const PGN_AUX_VALVE_MEASURED_FLOW_BASE: Pgn = PGN_AUX_VALVE_0_7;
 
 // ─── Lighting (ISO 11783-7 Section 4.5) ──────────────────────────────────
 pub const PGN_LIGHTING_DATA: Pgn = 0xFE40;
@@ -151,11 +165,21 @@ pub const PGN_GROUND_BASED_SPEED_DIST: Pgn = PGN_GROUND_SPEED;
 /// Alias: Machine Selected Speed.
 pub const PGN_MACHINE_SELECTED_SPEED: Pgn = PGN_MACHINE_SPEED;
 
-// ─── Guidance Extended (ISO 11783-7 G Addendum) ────────────────────────
+// ─── Guidance (ISO 11783-7:2022 Section 11) ─────────────────────────────
+// 0xFE44/0xFE45/0xFE46 previously appeared here as guidance PGNs. No ISO
+// 11783 part defines them, and 0xFE46 collided bit-for-bit with PGN_AT2, so
+// a guidance frame could be decoded as a powertrain message. Only 44288 and
+// 44032 are real.
+/// Agricultural Guidance Machine Info (PGN 44032).
 pub const PGN_GUIDANCE_MACHINE_INFO: Pgn = 0xAC00;
-pub const PGN_GUIDANCE_CURVATURE_CMD: Pgn = 0xFE46;
 /// Class xG external steering.
 pub const PGN_GUIDANCE_SYSTEM_CMD: Pgn = 0xAD00;
+
+// ─── Tractor Implement Management (AEF 023, Annex A.2.2) ────────────────
+/// PGN 8960 — TIM server to TIM client, PDU1, default priority 6.
+pub const PGN_TIM_SERVER_TO_CLIENT: Pgn = 0x2300;
+/// PGN 9216 — TIM client to TIM server, PDU1, default priority 6.
+pub const PGN_TIM_CLIENT_TO_SERVER: Pgn = 0x2400;
 
 // ─── Drive Strategy (ISO 11783-7 Section 11) ─────────────────────────────
 pub const PGN_DRIVE_STRATEGY_CMD: Pgn = 0xFCCE;
@@ -184,17 +208,11 @@ pub const PGN_EFLP: Pgn = 0x0FEEF;
 pub const PGN_ENGINE_HOURS: Pgn = 0x0FEE5;
 pub const PGN_FUEL_ECONOMY: Pgn = 0x0FEF2;
 pub const PGN_FUEL_CONSUMPTION: Pgn = 0x0FEE9;
-/// Electronic Transmission Controller 1 (J1939 PGN 61442).
-pub const PGN_ETC1: Pgn = 0x0F002;
-/// Electronic Transmission Controller 2. NOTE: the canonical J1939 value is
-/// 0xF005, currently aliased by the (also-incorrect) `PGN_REAR_HITCH`; this is
-/// left at 0xF006 (unused, non-colliding) until the ISO 11783-7 hitch/PTO PGNs
-/// are corrected from a verified source.
-pub const PGN_ETC2: Pgn = 0x0F006;
 /// Alias for backwards compatibility.
 pub const PGN_TRANSMISSION_1: Pgn = PGN_ETC1;
 /// Cruise Control / Vehicle Speed.
-pub const PGN_CRUISE_CONTROL: Pgn = 0x0FEF1;
+/// Alias: CCVS carries both cruise control and vehicle speed.
+pub const PGN_CRUISE_CONTROL: Pgn = PGN_VEHICLE_SPEED;
 /// Torque/Speed Control 1 (J1939 PGN 0, destination-specific).
 pub const PGN_TSC1: Pgn = 0x00000;
 /// Vehicle Electrical Power 1.
@@ -218,7 +236,8 @@ pub const PGN_VEHICLE_ID: Pgn = 0x0FEEC;
 // ═════════════════════════════════════════════════════════════════════════
 
 // ─── NMEA2000 System / Network Management ────────────────────────────────
-pub const PGN_ISO_ADDRESS_CLAIM: Pgn = 60928;
+/// Alias: ISO 11783-5 spells Address Claimed as decimal 60928.
+pub const PGN_ISO_ADDRESS_CLAIM: Pgn = PGN_ADDRESS_CLAIMED;
 pub const PGN_SYSTEM_TIME: Pgn = 126992;
 pub const PGN_PRODUCT_INFO: Pgn = 126996;
 pub const PGN_CONFIG_INFO: Pgn = 126998;
@@ -320,3 +339,58 @@ pub const PGN_METEOROLOGICAL: Pgn = 130323;
 // ─── NMEA2000 Trim / Direction ───────────────────────────────────────────
 pub const PGN_TRIM_TAB: Pgn = 130576;
 pub const PGN_DIRECTION_DATA: Pgn = 130577;
+
+#[cfg(test)]
+mod tests {
+    /// F0.6 — two constants holding the same literal value are a bug: whichever
+    /// one a router or registry looks up first wins, and the other message is
+    /// silently decoded as the wrong type. `PGN_GUIDANCE_CURVATURE_CMD` and
+    /// `PGN_AT2` both held 0xFE46, so a guidance frame could surface as a
+    /// powertrain event.
+    ///
+    /// An intentional second name for one PGN is written as a symbolic alias
+    /// (`pub const A: Pgn = B;`), which this test accepts. Only bare literals
+    /// are checked, so the file itself records which duplicates are deliberate.
+    #[test]
+    fn pgn_constants_have_no_undeclared_duplicates() {
+        use alloc::collections::BTreeMap;
+        use alloc::vec::Vec;
+
+        let mut by_value: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
+        for line in include_str!("pgn_defs.rs").lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("pub const ") else {
+                continue;
+            };
+            let Some((name, value)) = rest.split_once(": Pgn = ") else {
+                continue;
+            };
+            let value = value.trim_end_matches(';').trim();
+            // Symbolic aliases are declared intent, not collisions.
+            let parsed = if let Some(hex) = value.strip_prefix("0x") {
+                u32::from_str_radix(hex, 16).ok()
+            } else {
+                value.parse::<u32>().ok()
+            };
+            if let Some(v) = parsed {
+                by_value.entry(v).or_default().push(name);
+            }
+        }
+
+        assert!(
+            by_value.len() > 100,
+            "parser found only {} constants — it has stopped matching the file",
+            by_value.len()
+        );
+
+        let collisions: Vec<_> = by_value
+            .iter()
+            .filter(|(_, names)| names.len() > 1)
+            .collect();
+        assert!(
+            collisions.is_empty(),
+            "PGN constants share a literal value; declare the intended one as an \
+             alias (`pub const A: Pgn = B;`) or correct the wrong one: {collisions:?}"
+        );
+    }
+}

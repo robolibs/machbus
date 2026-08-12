@@ -76,7 +76,7 @@ fn exercise_diagnostics(data: &[u8]) {
 }
 
 fn exercise_file_server(data: &[u8]) {
-    let _ = FileServerProperties::decode(data);
+    let _ = FileServerProperties::decode_response(data);
     let _ = FileServerStatus::decode(data);
     let _ = CCMMessage::decode(data);
     let _ = FileServerPropertiesV2::decode(data);

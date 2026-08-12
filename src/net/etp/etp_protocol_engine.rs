@@ -4,7 +4,8 @@ use alloc::{format, vec, vec::Vec};
 use crate::fixed::{FixedBytes, FixedMessage, FixedSlots};
 
 use super::constants::{
-    BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ETP_TIMEOUT_T1_MS, NULL_ADDRESS, TP_BYTES_PER_FRAME,
+    BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS,
+    ETP_TIMEOUT_T3_MS, NULL_ADDRESS, TP_BYTES_PER_FRAME,
     TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
 };
 use super::error::{Error, Result};
@@ -291,8 +292,8 @@ impl<const N: usize> EtpRxFixed<N> {
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
 
-        if !etp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) || !pgn_is_valid(cm_pgn)
-        {
+        // G3 — see the TP engine: reserved bytes are ignored on receive.
+        if !pgn_is_valid(cm_pgn) {
             return Ok(EtpRxFixedOutcome::default());
         }
 
@@ -720,18 +721,25 @@ impl ExtendedTransportProtocol {
     }
 
     /// Drive timeouts. WaitingForCTS / WaitingForData / WaitingForEndOfMsg
-    /// all share [`ETP_TIMEOUT_T1_MS`].
+    /// use the per-state deadlines of ISO 11783-3 §5.11.4.1.
     pub fn update(&mut self, elapsed_ms: u32) -> Vec<Frame> {
         let mut emitted = Vec::new();
         let mut i = 0;
         while i < self.sessions.len() {
             self.sessions[i].timer_ms = self.sessions[i].timer_ms.saturating_add(elapsed_ms);
-            let timed_out = matches!(
-                self.sessions[i].state,
-                SessionState::WaitingForCTS
-                    | SessionState::WaitingForData
-                    | SessionState::WaitingForEndOfMsg
-            ) && self.sessions[i].timer_ms >= ETP_TIMEOUT_T1_MS;
+            // Per-state deadlines, as the TP engine already does. T1 is the
+            // receiver's inter-packet window only; a transmitter waiting for a
+            // CTS or an EOMA is on T3, and a receiver that has just sent a CTS
+            // is on T2.
+            let deadline_ms = match self.sessions[i].state {
+                SessionState::WaitingForCTS | SessionState::WaitingForEndOfMsg => {
+                    ETP_TIMEOUT_T3_MS
+                }
+                SessionState::WaitingForData => ETP_TIMEOUT_T2_MS,
+                SessionState::ReceivingData => ETP_TIMEOUT_T1_MS,
+                _ => u32::MAX,
+            };
+            let timed_out = self.sessions[i].timer_ms >= deadline_ms;
 
             if timed_out {
                 tracing::warn!(target: "machbus.transport.etp", pgn = self.sessions[i].pgn, "ETP timeout");
@@ -818,6 +826,26 @@ impl ExtendedTransportProtocol {
             }
         }
         Ok(emitted)
+    }
+
+    /// Drop every session on `port` that uses `address` at either end, and
+    /// return the Conn_Abort frames announcing it.
+    ///
+    /// ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+    /// using the address". ETP is always destination-specific, so every
+    /// dropped session gets an abort. See the TP counterpart for why open
+    /// sessions used to outlive the address they were running on.
+    /// Nothing is transmitted; see the TP engine's counterpart. Every frame an
+    /// abort here could carry would have SA = the address the CF was just told
+    /// to stop using, and §4.4.2.4 restricts a CF that cannot claim to Cannot
+    /// Claim and Request for Address Claimed. The peer closes its half on
+    /// T2/T3 within 1250 ms.
+    pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
+        self.sessions.retain(|session| {
+            session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+        });
+        Vec::new()
     }
 
     #[inline]
@@ -911,15 +939,6 @@ impl ExtendedTransportProtocol {
         let src = frame.source();
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
-        if !etp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) {
-            tracing::warn!(
-                target: "machbus.transport.etp",
-                control_byte,
-                "dropping ETP CM frame with non-canonical reserved bytes"
-            );
-            self.note_dropped_frame();
-            return responses;
-        }
         if !pgn_is_valid(cm_pgn) {
             tracing::warn!(
                 target: "machbus.transport.etp",
@@ -1283,10 +1302,11 @@ impl ExtendedTransportProtocol {
             }
 
             etp_cm::ABORT => {
-                let Some(reason) = TransportAbortReason::try_from_u8(frame.data[1]) else {
-                    self.note_dropped_frame();
-                    return responses;
-                };
+                // A reason this build does not recognise is still an abort:
+                // the peer has torn the connection down. Dropping the frame
+                // left our half of the session open forever.
+                let reason = TransportAbortReason::try_from_u8(frame.data[1])
+                    .unwrap_or(TransportAbortReason::Other);
                 if let Some(idx) = self.session_position(|s| {
                     s.pgn == cm_pgn
                         && s.can_port == port
@@ -1452,13 +1472,6 @@ fn rx_buffer(
         .map_err(|_| TransportAbortReason::ResourcesUnavailable)?;
     data.resize(total_bytes as usize, 0xFF);
     Ok(data)
-}
-
-fn etp_cm_reserved_bytes_are_canonical(control_byte: u8, data: &[u8; 8]) -> bool {
-    match control_byte {
-        etp_cm::ABORT => data[2..5].iter().all(|&byte| byte == 0xFF),
-        _ => true,
-    }
 }
 
 fn make_rts(s: &TransportSession) -> Frame {

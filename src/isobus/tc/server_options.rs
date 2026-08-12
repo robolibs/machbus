@@ -2,6 +2,8 @@
 //!
 //! Mirrors the C++ `machbus::isobus::tc::server_options.hpp`.
 
+use crate::net::Priority;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum ObjectPoolActivationError {
@@ -170,6 +172,55 @@ impl ProcessDataCommands {
         }
     }
 
+    /// The CAN priority this command's Process Data message is sent at.
+    ///
+    /// ISO 11783-10 B.2 splits the Process Data PG's default priority three
+    /// ways: "3 for messages with Command values 3₁₆, A₁₆, E₁₆, or F₁₆",
+    /// "4 for messages with Command value D₁₆", and "5 for messages with
+    /// Command values 0₁₆, 1₁₆, 2₁₆, or 4₁₆ through 9₁₆".
+    ///
+    /// "The differentiation of the default priority of the Process Data message
+    /// into 3 different levels depending on the Command value has been
+    /// introduced in ISO 11783-10 version 4. Prior to version 4, the default
+    /// priority was 3 for all Process Data messages… giving higher priority to
+    /// control and connection maintenance messages versus request and
+    /// acknowledgement messages."
+    ///
+    /// Every TC message went out at the J1939 general default of 6 instead, so
+    /// the status and client-task heartbeats — the ones a peer times out on —
+    /// lost arbitration to ordinary request and measurement traffic.
+    #[must_use]
+    pub const fn priority(self) -> Priority {
+        match self {
+            Self::Value | Self::SetValueAndAcknowledge | Self::Status | Self::ClientTask => {
+                Priority::Normal
+            }
+            Self::Acknowledge => Priority::BelowNormal,
+            Self::TechnicalCapabilities
+            | Self::DeviceDescriptor
+            | Self::RequestValue
+            | Self::MeasurementTimeInterval
+            | Self::MeasurementDistanceInterval
+            | Self::MeasurementMinimumWithinThreshold
+            | Self::MeasurementMaximumWithinThreshold
+            | Self::MeasurementChangeThreshold
+            | Self::PeerControlAssignment => Priority::Low,
+        }
+    }
+
+    /// The priority for a raw Process Data payload, read from its command
+    /// nibble. Reserved commands (B₁₆, C₁₆) fall back to the request/ack tier.
+    #[must_use]
+    pub const fn priority_for_payload(data: &[u8]) -> Priority {
+        match data {
+            [first, ..] => match Self::try_from_u8(*first) {
+                Some(command) => command.priority(),
+                None => Priority::Low,
+            },
+            [] => Priority::Low,
+        }
+    }
+
     #[must_use]
     pub const fn try_from_u8(v: u8) -> Option<Self> {
         match v & 0x0F {
@@ -292,6 +343,62 @@ pub enum TCServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ISO 11783-10 B.2 — "3 for messages with Command values 3₁₆, A₁₆, E₁₆, or
+    /// F₁₆", "4 for messages with Command value D₁₆", "5 for messages with
+    /// Command values 0₁₆, 1₁₆, 2₁₆, or 4₁₆ through 9₁₆".
+    ///
+    /// Every TC message previously went out at the J1939 general default of 6,
+    /// so the status and client-task heartbeats a peer times out on lost
+    /// arbitration to ordinary request and measurement traffic.
+    #[test]
+    fn process_data_priority_follows_the_command_value() {
+        for command in [
+            ProcessDataCommands::Value,
+            ProcessDataCommands::SetValueAndAcknowledge,
+            ProcessDataCommands::Status,
+            ProcessDataCommands::ClientTask,
+        ] {
+            assert_eq!(command.priority(), Priority::Normal, "{command:?} is 3");
+        }
+
+        assert_eq!(
+            ProcessDataCommands::Acknowledge.priority(),
+            Priority::BelowNormal,
+            "PDACK is 4"
+        );
+
+        for command in [
+            ProcessDataCommands::TechnicalCapabilities,
+            ProcessDataCommands::DeviceDescriptor,
+            ProcessDataCommands::RequestValue,
+            ProcessDataCommands::MeasurementTimeInterval,
+            ProcessDataCommands::MeasurementDistanceInterval,
+            ProcessDataCommands::MeasurementMinimumWithinThreshold,
+            ProcessDataCommands::MeasurementMaximumWithinThreshold,
+            ProcessDataCommands::MeasurementChangeThreshold,
+            ProcessDataCommands::PeerControlAssignment,
+        ] {
+            assert_eq!(command.priority(), Priority::Low, "{command:?} is 5");
+        }
+
+        // Read off a payload's command nibble, which is how the plugins pick.
+        // The TC Status message (0xFE) must outrank a request value (0x2n).
+        assert_eq!(
+            ProcessDataCommands::priority_for_payload(&[0xFE, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF]),
+            Priority::Normal
+        );
+        assert_eq!(
+            ProcessDataCommands::priority_for_payload(&[0x12, 0x00, 0x01, 0x00, 0, 0, 0, 0]),
+            Priority::Low
+        );
+        // B₁₆ and C₁₆ are Reserved, and an empty payload has no command at all.
+        assert_eq!(
+            ProcessDataCommands::priority_for_payload(&[0x0B]),
+            Priority::Low
+        );
+        assert_eq!(ProcessDataCommands::priority_for_payload(&[]), Priority::Low);
+    }
 
     #[test]
     fn process_data_commands_round_trip() {

@@ -2,7 +2,12 @@
 # Command codes are encoded in the low nibble of byte 0; the low four
 # bits of the element number are encoded in byte 0 high nibble.
 
-tc_status_server_v4_b1_s8_c3=FE01000400000003
+# B.8.1: byte 2 is the element number and bytes 3-4 the DDI, all "set to not
+# available"; byte 5 is the TC/DL status bitfield; byte 8 is Reserved. This
+# vector carried the TC number, version and channel count in those fields, and
+# put the capability options in the status byte — so a TC-BAS announced "task
+# totals active" from power-up with no task running.
+tc_status_server_idle=FEFFFFFF000000FF
 tech_capabilities_request=00FFFFFFFFFFFFFF
 tech_capabilities_response_v4_b1_s8_c3=1004FF0000010803
 malformed_tech_capabilities_request_bad_padding=0000FFFFFFFFFFFF

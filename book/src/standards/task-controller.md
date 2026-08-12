@@ -124,6 +124,24 @@ The TC can ask for values on a **trigger** (every N ms, every N cm, on change, o
 threshold) so the network is not flooded. machbus exposes the process-data value
 helpers and the request/command path.
 
+### Priority follows the command, not the PGN
+
+All of this rides one parameter group (0xCB00), but Annex B.2 does **not** give
+it one priority. It splits three ways by the command nibble in byte 1:
+
+| Priority | Commands | What they are |
+| --- | --- | --- |
+| 3 | `3`, `A`, `E`, `F` | value, set-value-and-ack, TC status, client task |
+| 4 | `D` | process data acknowledge (PDACK) |
+| 5 | `0`, `1`, `2`, `4`–`9` | capabilities, DDOP transfer, request value, measurement setup, peer control |
+
+The split arrived in version 4 "giving higher priority to control and connection
+maintenance messages versus request and acknowledgement messages". It matters
+because the TC Status (`E`) and Client Task (`F`) messages are the heartbeats
+each side declares the other dead over after six seconds — sending them at the
+same priority as a bulk DDOP transfer is how they get starved on a loaded bus.
+`ProcessDataCommands::priority()` carries the mapping.
+
 ## Peer control and TC-GEO
 
 Two higher-order capabilities sit on the TC foundation:

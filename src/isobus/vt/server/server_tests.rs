@@ -253,13 +253,16 @@ mod tests {
         let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
         transfer.extend(pool.serialize().unwrap());
         s.handle_ecu_message(&ecu_msg(transfer, 0x42));
-        assert!(s.clients()[0].pool_uploaded);
-        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
+        // E5 — the transfer is staged; C.2.2 b)1) allows any number of sessions
+        // before End of Object Pool, so nothing is live until that arrives.
+        assert!(!s.clients()[0].pool_uploaded);
 
         // End of pool ⇒ no errors and the working set becomes active.
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x00);
         assert_eq!(out[0].data[6], 0x00);
+        assert!(s.clients()[0].pool_uploaded);
+        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
         assert_eq!(s.state(), VTServerState::Connected);
         assert_eq!(s.active_working_set(), 0x42);
     }
@@ -284,20 +287,33 @@ mod tests {
             "unknown object type must not create client"
         );
 
+        // E5 — C.2.2 b)1): transfers are staged and only End of Object Pool
+        // closes the upload, so the pool is not live until then.
         let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
         transfer.extend(valid_pool().serialize().unwrap());
         s.handle_ecu_message(&ecu_msg(transfer, 0x42));
+        assert!(
+            !s.clients()[0].pool_uploaded,
+            "a transfer is staged, not applied"
+        );
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(out[0].data[1], 0x00);
         let valid_pool_size = valid_pool().size();
         assert_eq!(s.clients()[0].pool.size(), valid_pool_size);
         assert!(s.clients()[0].pool_uploaded);
 
+        // A malformed replacement upload must not damage the live pool.
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         s.handle_ecu_message(&ecu_msg(
             vec![cmd::OBJECT_POOL_TRANSFER, 0x01, 0x00, 0x00],
             0x42,
         ));
-        assert_eq!(s.clients()[0].pool.size(), valid_pool_size);
-        assert!(s.clients()[0].pool_uploaded);
+        assert_eq!(
+            s.clients()[0].pool.size(),
+            valid_pool_size,
+            "a staged transfer must not touch the live pool"
+        );
     }
 
     #[test]
@@ -316,7 +332,10 @@ mod tests {
 
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x01);
-        assert_eq!(out[0].data[6], 0x02);
+        // E8 — C.2.5: bit 1 says the pool references an object it does not
+        // contain, bit 3 that the VT deleted it. This used to report bit 1
+        // alone, and never actually deleted the rejected pool.
+        assert_eq!(out[0].data[6], 0x02 | 0x08);
         assert_eq!(s.state(), VTServerState::WaitForPoolUpload);
         assert_eq!(s.active_working_set(), NULL_ADDRESS);
         assert!(!s.clients()[0].pool_activated);
@@ -329,7 +348,10 @@ mod tests {
         let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
         let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
         assert_eq!(out[0].data[1], 0x01);
-        assert_eq!(out[0].data[6], 0x02);
+        // E8 — nothing was transferred: "any other error" (bit 2), plus bit 3
+        // for the deletion. Reporting a missing object reference sent the
+        // Working Set hunting for a bad reference that does not exist.
+        assert_eq!(out[0].data[6], 0x04 | 0x08);
     }
 
     #[test]
@@ -354,6 +376,314 @@ mod tests {
         assert!(s.update(VT_STATUS_INTERVAL_MS - 1).is_none());
         let bytes = s.update(2).unwrap();
         assert_eq!(bytes[0], cmd::VT_STATUS);
+    }
+
+    /// E3 — Annex G.2: bytes 3-4 are the visible Data/Alarm Mask Object ID and
+    /// bytes 5-6 the visible Soft Key Mask, "or FFFF16 if no Working Set owns
+    /// the VT". These four bytes carried the working set's *source address*, so
+    /// a VT with the active set at SA 0x26 announced visible-mask Object ID
+    /// 0x2600 — not an object in any pool.
+    /// E2 — ISO 11783-6 §4.6.9: the Working Set Maintenance message is how the
+    /// VT knows a Working Set is still there. It was unhandled, so it fell
+    /// through to the catch-all: the VT answered every one with Unsupported VT
+    /// Function, once per second forever, and never detected a working set
+    /// going away.
+    #[test]
+    fn working_set_maintenance_is_consumed_and_watchdogged() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        let addr = 0x42;
+        let mut maintenance = [0xFFu8; 8];
+        maintenance[0] = cmd::WORKING_SET_MAINTENANCE;
+        maintenance[1] = 0x01; // Initiating, reserved bits clear (G.3 byte 2).
+        maintenance[2] = 5; // Compliant with VT version 5 (G.3 byte 3).
+
+        let out = s.handle_ecu_message(&ecu_msg(maintenance.to_vec(), addr));
+        assert!(
+            out.is_empty(),
+            "G.3 defines no response; the VT must not NACK it"
+        );
+        assert_eq!(
+            s.clients()
+                .iter()
+                .find(|c| c.client_address == addr)
+                .and_then(|c| c.declared_version),
+            Some(5),
+            "the working set's declared version is recorded"
+        );
+
+        // Cadence keeps it alive.
+        let mut later = maintenance;
+        later[1] = 0x00;
+        for _ in 0..5 {
+            s.update(1000);
+            assert!(s.handle_ecu_message(&ecu_msg(later.to_vec(), addr)).is_empty());
+        }
+        assert!(s.clients().iter().any(|c| c.client_address == addr));
+
+        // Three seconds of silence is an unexpected shutdown.
+        s.update(WORKING_SET_MAINTENANCE_TIMEOUT_MS);
+        assert!(
+            !s.clients().iter().any(|c| c.client_address == addr),
+            "a silent Working Set Master must be dropped"
+        );
+    }
+
+    /// §4.6.9: a *second* Initiating means the master restarted underneath us.
+    #[test]
+    fn a_second_initiating_maintenance_drops_the_working_set() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        let addr = 0x42;
+        let mut initiating = [0xFFu8; 8];
+        initiating[0] = cmd::WORKING_SET_MAINTENANCE;
+        initiating[1] = 0x01;
+        initiating[2] = 5;
+
+        s.handle_ecu_message(&ecu_msg(initiating.to_vec(), addr));
+        assert!(s.clients().iter().any(|c| c.client_address == addr));
+
+        s.handle_ecu_message(&ecu_msg(initiating.to_vec(), addr));
+        assert!(
+            !s.clients().iter().any(|c| c.client_address == addr),
+            "a repeated Initiating bit is an unexpected shutdown"
+        );
+    }
+
+    /// E5 — C.2.2 b)1): "The Working Set Master can send several single packet,
+    /// TP or ETP sessions or a combination of any of these to transfer the
+    /// entire pool. This can be required depending on the size of buffers
+    /// designed into the Working Set Master. Any number of sessions can be sent
+    /// before the End of Object Pool message is sent."
+    ///
+    /// Each session used to be deserialized on arrival and to *replace* the
+    /// pool, so only the last one survived: any ECU whose transmit buffer is
+    /// smaller than its pool — the case this clause exists for — silently lost
+    /// everything before it, and then failed End of Object Pool.
+    #[test]
+    fn a_pool_split_across_sessions_is_assembled_before_activation() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
+
+        let bytes = valid_pool().serialize().unwrap();
+        assert!(bytes.len() > 8, "the fixture pool needs splitting to matter");
+        let split = bytes.len() / 3;
+
+        // Three sessions, none of which is a whole pool on its own.
+        for chunk in [&bytes[..split], &bytes[split..split * 2], &bytes[split * 2..]] {
+            let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
+            transfer.extend_from_slice(chunk);
+            assert!(
+                s.handle_ecu_message(&ecu_msg(transfer, 0x42)).is_empty(),
+                "a transfer session has no Annex F response"
+            );
+        }
+
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(
+            out[0].data[1], 0x00,
+            "a pool sent in three sessions must assemble into one"
+        );
+        assert_eq!(s.clients()[0].pool.size(), valid_pool().size());
+        assert!(s.clients()[0].pool_activated);
+    }
+
+    /// C.2.6: "Only those objects that need to be changed are transmitted" —
+    /// a runtime update replaces the objects it carries and leaves the rest.
+    #[test]
+    fn a_runtime_pool_update_merges_rather_than_replacing() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        activate_valid_pool(&mut s, 0x42);
+        let original = s.clients()[0].pool.size();
+
+        // Re-open the upload window and send a single changed object.
+        let _ = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::GET_MEMORY), 0x42));
+        let update = ObjectPool::default().with_object(
+            create_output_string(
+                0x10,
+                &OutputStringBody {
+                    value: b"new".to_vec(),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
+        transfer.extend(update.serialize().unwrap());
+        s.handle_ecu_message(&ecu_msg(transfer, 0x42));
+
+        let out = s.handle_ecu_message(&ecu_msg(fixed_command(cmd::END_OF_POOL), 0x42));
+        assert_eq!(out[0].data[1], 0x00, "a runtime update is accepted");
+        assert_eq!(
+            s.clients()[0].pool.size(),
+            original,
+            "a runtime update must not discard the objects it does not carry"
+        );
+    }
+
+    /// The hand-maintained list above is only as complete as whoever last
+    /// edited it: `cmd::EXECUTE_EXTENDED_MACRO` was dispatched through
+    /// `annex_f_response` for a command `VtResponseShape::for_command` had no
+    /// arm for, so the macro ran and the Working Set was never answered. Scan
+    /// the dispatcher instead of trusting the list.
+    #[test]
+    fn every_dispatched_annex_f_command_has_a_response_shape() {
+        let dispatcher = include_str!("server_lifecycle_queries_upload.rs");
+        let shapes = include_str!("server_types_and_config.rs");
+        let table = shapes
+            .split("fn for_command")
+            .nth(1)
+            .expect("for_command exists");
+
+        let mut dispatched: Vec<&str> = Vec::new();
+        for (i, line) in dispatcher.lines().enumerate() {
+            let Some(rest) = line.trim().strip_prefix("cmd::") else {
+                continue;
+            };
+            let Some(name) = rest.split(|c: char| !c.is_ascii_uppercase() && c != '_').next() else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            // A block arm whose body answers via annex_f_response. Anchoring on
+            // `=> {` keeps single-expression arms such as `cmd::END_OF_POOL =>
+            // self.handle_end_of_pool(msg)` out of the scan.
+            if !line.trim_end().ends_with("=> {") {
+                continue;
+            }
+            let answers = dispatcher
+                .lines()
+                .skip(i + 1)
+                .take(3)
+                .any(|l| l.contains("self.annex_f_response(msg, outcome)"));
+            if answers && !dispatched.contains(&name) {
+                dispatched.push(name);
+            }
+        }
+        assert!(
+            dispatched.len() > 20,
+            "the scan found only {dispatched:?}; it stopped matching the dispatcher"
+        );
+        for name in dispatched {
+            assert!(
+                table.contains(&format!("cmd::{name}")),
+                "cmd::{name} is answered through annex_f_response but has no \
+                 VtResponseShape arm, so the VT carries the command out and \
+                 sends nothing (Annex F.1)"
+            );
+        }
+    }
+
+    /// E1 — Annex F.1: "The VT shall respond to these commands even if no object
+    /// pool of the originating Working Set is loaded. The originator shall wait
+    /// for a response before sending another command. Unless stated otherwise,
+    /// another command can be sent if a response is not received within 1,5 s."
+    ///
+    /// Every mutating command used to return no frame at all, so a conformant
+    /// Working Set blocked 1,5 s per command and retried three times before
+    /// declaring the VT unresponsive. A burst of Change Numeric Value updates
+    /// advanced at roughly one command per 1,5 s instead of one per CAN frame.
+    #[test]
+    fn every_annex_f_command_is_answered_even_with_no_pool_loaded() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        // Deliberately no pool: F.1 says the VT answers anyway.
+        for function in [
+            cmd::HIDE_SHOW,
+            cmd::ENABLE_DISABLE,
+            cmd::CONTROL_AUDIO_SIGNAL,
+            cmd::SET_AUDIO_VOLUME,
+            cmd::CHANGE_CHILD_LOCATION,
+            cmd::CHANGE_CHILD_POSITION,
+            cmd::CHANGE_SIZE,
+            cmd::CHANGE_BACKGROUND_COLOUR,
+            cmd::CHANGE_NUMERIC_VALUE,
+            cmd::CHANGE_END_POINT,
+            cmd::CHANGE_FONT_ATTRIBUTES,
+            cmd::CHANGE_LINE_ATTRIBUTES,
+            cmd::CHANGE_FILL_ATTRIBUTES,
+            cmd::CHANGE_ACTIVE_MASK,
+            cmd::CHANGE_SOFT_KEY_MASK,
+            cmd::CHANGE_ATTRIBUTE,
+            cmd::CHANGE_PRIORITY,
+            cmd::CHANGE_LIST_ITEM,
+            cmd::DELETE_OBJECT_POOL,
+            cmd::CHANGE_POLYGON_POINT,
+            cmd::CHANGE_POLYGON_SCALE,
+            cmd::SELECT_COLOUR_MAP,
+            cmd::LOCK_UNLOCK_MASK,
+            cmd::EXECUTE_MACRO,
+            cmd::EXECUTE_EXTENDED_MACRO,
+        ] {
+            let mut data = [0xFFu8; 8];
+            data[0] = function;
+            // A real, non-NULL Object ID: 0xFFFF means "no object" on several
+            // of these commands, which is a legitimate no-pool operation and
+            // would not exercise the missing-object path at all.
+            data[1..3].copy_from_slice(&0x1234u16.to_le_bytes());
+            let out = s.handle_ecu_message(&ecu_msg(data.to_vec(), 0x42));
+
+            assert_eq!(
+                out.len(),
+                1,
+                "function {function:#04X} must be answered (Annex F.1)"
+            );
+            let reply = &out[0].data;
+            assert_eq!(reply.len(), 8);
+            assert_eq!(
+                reply[0], function,
+                "F.1: the response echoes the command's function code"
+            );
+
+            // Commands that address an object cannot have succeeded with no
+            // pool loaded. Three do not address one: the two audio commands,
+            // and Delete Object Pool, which is idempotent — deleting nothing is
+            // not an error. F.1 only requires that they are *answered*.
+            let shape = VtResponseShape::for_command(function)
+                .expect("this command defines an Annex F response");
+            let addresses_an_object = !matches!(
+                function,
+                cmd::CONTROL_AUDIO_SIGNAL | cmd::SET_AUDIO_VOLUME | cmd::DELETE_OBJECT_POOL
+            );
+            if addresses_an_object {
+                assert_ne!(
+                    reply[shape.echo + 1],
+                    0,
+                    "function {function:#04X} cannot have succeeded with no pool"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vt_status_carries_the_visible_mask_object_ids() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+
+        // Nothing owns the VT yet.
+        let idle = s.update(VT_STATUS_INTERVAL_MS).unwrap();
+        assert_eq!(&idle[2..6], &[0xFF, 0xFF, 0xFF, 0xFF]);
+
+        // With an active working set the real Object IDs appear, little-endian.
+        let addr = 0x26;
+        s.ensure_client(addr);
+        if let Some(c) = s.clients.iter_mut().find(|c| c.client_address == addr) {
+            c.pool_activated = true;
+            c.object_state.active_data_mask = ObjectID(0x1234);
+            c.object_state.active_soft_key_mask = ObjectID(0x5678);
+        }
+        s.set_active_working_set(addr);
+
+        let active = s.update(VT_STATUS_INTERVAL_MS).unwrap();
+        assert_eq!(active[1], addr, "byte 2 is where the address belongs");
+        assert_eq!(u16_le(&active[2..]), 0x1234);
+        assert_eq!(u16_le(&active[4..]), 0x5678);
     }
 
     #[test]
@@ -425,9 +755,45 @@ mod tests {
         s.start().unwrap();
         activate_valid_pool(&mut s, 0x42);
 
+        // E1 — Annex F.1: "The originator shall wait for a response before
+        // sending another command." This used to assert `out.is_empty()`, i.e.
+        // that these commands produce no frame at all, which is the defect: a
+        // conformant Working Set then blocked 1,5 s per command.
         let send = |server: &mut VTServer, data: Vec<u8>| {
+            let function = data[0];
+            let out = server.handle_ecu_message(&ecu_msg(data.clone(), 0x42));
+            let shape = VtResponseShape::for_command(function)
+                .expect("every command here has an Annex F response");
+            assert_eq!(out.len(), 1, "function {function:#04X} must be answered");
+            let reply = &out[0].data;
+            assert_eq!(reply.len(), 8);
+            assert_eq!(reply[0], function, "F.1: the response echoes the function");
+            for i in 1..=shape.echo {
+                assert_eq!(
+                    reply[i], data[i],
+                    "F.1: byte {} must be echoed from the command",
+                    i + 1
+                );
+            }
+            assert_eq!(
+                reply[shape.echo + 1],
+                0,
+                "command {function:#04X} reported an error"
+            );
+        };
+
+        // A command the VT refuses still gets an Annex F response — that is the
+        // whole point of F.1 — but with the error byte set.
+        let send_rejected = |server: &mut VTServer, data: Vec<u8>| {
+            let function = data[0];
             let out = server.handle_ecu_message(&ecu_msg(data, 0x42));
-            assert!(out.is_empty(), "implemented ECU command must not NACK");
+            let shape = VtResponseShape::for_command(function).expect("has a response");
+            assert_eq!(out.len(), 1, "a refusal must still be answered");
+            assert_ne!(
+                out[0].data[shape.echo + 1],
+                0,
+                "command {function:#04X} was refused and must say so"
+            );
         };
 
         send(
@@ -672,7 +1038,8 @@ mod tests {
         );
         assert_eq!(state.executed_macros, vec![ObjectID(0x99)]);
 
-        send(
+        // 0x02 is not a canonical Hide/Show value (F.2: 0 = Hide, 1 = Show).
+        send_rejected(
             &mut s,
             vec![cmd::HIDE_SHOW, 0x11, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0xFF],
         );
@@ -680,6 +1047,51 @@ mod tests {
             s.clients()[0].object_state.visibility.get(&ObjectID(0x11)),
             Some(&true),
             "malformed canonical-bool command must not mutate cached VT state"
+        );
+    }
+
+    /// C3 — F.35 gives an invalid Working Set bit 0 and an invalid mask bit 1.
+    /// The table had the two swapped and folded the invalid-mask case into "any
+    /// other error", so bit 0 was never set for any input and a Working Set
+    /// whose runtime pool update removed the mask could not tell that the mask
+    /// ID was the problem — it retried instead of re-uploading, and the alarm
+    /// never came up.
+    #[test]
+    fn change_active_mask_separates_a_bad_working_set_from_a_bad_mask() {
+        let mut s = VTServer::new(VTServerConfig::default());
+        s.start().unwrap();
+        activate_valid_pool(&mut s, 0x42);
+
+        let error_byte = |server: &mut VTServer, ws: u16, mask: u16| {
+            let [ws_lo, ws_hi] = ws.to_le_bytes();
+            let [mask_lo, mask_hi] = mask.to_le_bytes();
+            let out = server.handle_ecu_message(&ecu_msg(
+                vec![
+                    cmd::CHANGE_ACTIVE_MASK,
+                    ws_lo,
+                    ws_hi,
+                    mask_lo,
+                    mask_hi,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                ],
+                0x42,
+            ));
+            assert_eq!(out.len(), 1, "F.1: the command must be answered");
+            out[0].data[3]
+        };
+
+        assert_eq!(error_byte(&mut s, 0x0001, 0x0002), 0x00, "the valid pair");
+        assert_eq!(
+            error_byte(&mut s, 0x7FFF, 0x0002),
+            0x01,
+            "F.35 bit 0: invalid Working Set Object ID"
+        );
+        assert_eq!(
+            error_byte(&mut s, 0x0001, 0x7FFE),
+            0x02,
+            "F.35 bit 1: invalid Data/Alarm Mask Object ID"
         );
     }
 

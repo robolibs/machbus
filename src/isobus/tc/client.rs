@@ -29,6 +29,9 @@ use crate::net::types::{Address, Pgn};
 /// of byte 0 plus byte 1, i.e. a 12-bit unsigned field.
 pub const MAX_TC_PROCESS_DATA_ELEMENT_NUMBER: u16 = 0x0FFF;
 
+/// §6.6.3: "a cyclic Client Task message at an interval of 2 s".
+pub const CLIENT_TASK_INTERVAL_MS: u32 = 2000;
+
 /// Client task status byte used in the TC client status payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -185,6 +188,21 @@ fn is_padded_fixed8(data: &[u8], used: usize) -> bool {
     data.len() == 8 && has_ff_tail(data, used)
 }
 
+/// B.6.9 Object-pool Transfer Response: byte 2 is the error code and bytes 3-6
+/// carry the received data size, with only bytes 7-8 reserved. Demanding FF
+/// from byte 3 onward rejected every conformant frame, so the pool upload could
+/// never complete against a real TC.
+fn is_object_pool_transfer_response(data: &[u8]) -> bool {
+    is_padded_fixed8(data, 6)
+}
+
+/// B.6.11 Object-pool Activate/Deactivate Response: byte 2 error codes, bytes
+/// 3-4 the parent object ID of the faulty object, bytes 5-6 the faulty object
+/// ID, byte 7 the object-pool error codes, byte 8 reserved.
+fn is_object_pool_activate_response(data: &[u8]) -> bool {
+    is_padded_fixed8(data, 7)
+}
+
 fn version_response_is_canonical(data: &[u8]) -> bool {
     data.len() == 8 && tc_options_byte_is_valid(data[3]) && data[4] == 0x00
 }
@@ -226,8 +244,16 @@ pub struct TaskControllerClient {
     state: StateMachine<TCState>,
     ddop: DDOP,
     timer_ms: u32,
+    /// Separate from `timer_ms`, which inbound TC Status resets: coupling the
+    /// two would silence the Client Task cadence whenever the TC is chatty.
+    client_task_timer_ms: u32,
+    /// Mirrored from TC Status byte 5 bit 1 (B.8.2).
+    task_totals_active: bool,
     tc_address: Address,
     tc_version: u8,
+    /// What this client advertises in its version response, and the ceiling on
+    /// the DDOP version it will serialize.
+    capabilities: TCClientCapabilities,
     num_booms: u8,
     num_sections: u8,
 
@@ -245,8 +271,11 @@ impl TaskControllerClient {
             state: StateMachine::new(TCState::Disconnected),
             ddop: DDOP::default(),
             timer_ms: 0,
+            client_task_timer_ms: 0,
+            task_totals_active: false,
             tc_address: NULL_ADDRESS,
             tc_version: 0,
+            capabilities: TCClientCapabilities::default(),
             num_booms: 0,
             num_sections: 0,
             value_cb: None,
@@ -335,6 +364,28 @@ impl TaskControllerClient {
         self.tc_version
     }
 
+    /// What this client advertises to the TC.
+    #[must_use]
+    pub const fn capabilities(&self) -> TCClientCapabilities {
+        self.capabilities
+    }
+
+    /// Override the advertised capabilities, including the DDOP version.
+    pub const fn set_capabilities(&mut self, capabilities: TCClientCapabilities) {
+        self.capabilities = capabilities;
+    }
+
+    /// The DDOP version actually used on the wire: the lower of what this
+    /// client and the TC report (A.2).
+    #[must_use]
+    pub const fn negotiated_ddop_version(&self) -> u8 {
+        if self.capabilities.version < self.tc_version {
+            self.capabilities.version
+        } else {
+            self.tc_version
+        }
+    }
+
     pub fn on_value_request<F>(&mut self, cb: F)
     where
         F: FnMut(ElementNumber, DDI) -> Result<i32> + 'static,
@@ -365,23 +416,28 @@ impl TaskControllerClient {
         fixed_mux_payload(tc_cmd::VERSION_REQUEST)
     }
 
-    /// Build the TC-client status payload. The first four bytes are the
-    /// process-data not-available sentinel (`FF FF FF FF`); bytes 4..6 carry
-    /// status, command-address, and command code; byte 7 is reserved zero.
+    /// Build the B.8.2 Client Task payload.
+    ///
+    /// "Byte 1: Client Task ... Byte 2: Element number, set to not available
+    /// FF16. Bytes 3, 4: DDI, set to not available FFFF16. Bytes 5 to 8: Bit 1
+    /// Actual TC or DL status: task totals active (as received in Task
+    /// Controller Status message, Byte 5, Bit 1)."
+    ///
+    /// Bytes 5-8 are one 32-bit field whose only defined content is that
+    /// mirrored bit. This used to reproduce the B.8.1 *server* layout here —
+    /// a status enum, a command address and a command code — none of which
+    /// B.8.2 defines, so a conformant TC read the client's echoed totals bit
+    /// out of a byte carrying something else entirely.
     #[must_use]
-    pub fn build_status(
-        status: TCClientTaskStatus,
-        command_address: Address,
-        command: u8,
-    ) -> [u8; 8] {
+    pub const fn build_client_task(task_totals_active: bool) -> [u8; 8] {
         [
             0xFF,
             0xFF,
             0xFF,
             0xFF,
-            status.as_u8(),
-            command_address,
-            command,
+            task_totals_active as u8,
+            0x00,
+            0x00,
             0x00,
         ]
     }
@@ -511,7 +567,13 @@ impl TaskControllerClient {
                 self.timer_ms = 0;
             }
             TCState::TransferDDOP => {
-                if let Ok(pool_data) = self.ddop.serialize() {
+                // A.2: the extended structure label "shall only be used when
+                // the versions of the TC and of the client are both reported as
+                // version 4 or higher", so the pool is written for the lower of
+                // the two. Serializing unconditionally at version 3 while
+                // advertising 4 produced a record no version-4 TC could parse.
+                let negotiated = self.capabilities.version.min(self.tc_version);
+                if let Ok(pool_data) = self.ddop.serialize_for_version(negotiated) {
                     let mut data = Vec::with_capacity(pool_data.len() + 1);
                     data.push(tc_cmd::OBJECT_POOL_TRANSFER);
                     data.extend_from_slice(&pool_data);
@@ -561,6 +623,28 @@ impl TaskControllerClient {
                 // connection is gone; drop to Disconnected so the app reconnects.
                 if self.timer_ms >= self.config.timeout_ms {
                     self.transition(TCState::Disconnected);
+                    return out;
+                }
+                // F2 — §6.6.3: "All clients that maintain a connection with a TC
+                // shall indicate their presence by transmitting to the TC a
+                // cyclic Client Task message at an interval of 2 s ... If the TC
+                // does not receive this message for at least 6 s, it assumes an
+                // uncontrolled shutdown of the client."
+                //
+                // Nothing was emitted here at all, so six seconds after the
+                // DDOP activated, every conformant TC declared the client dead
+                // and tore the connection down.
+                //
+                // Note this uses its own timer: `timer_ms` is reset by inbound
+                // TC Status and would otherwise couple the two watchdogs.
+                self.client_task_timer_ms = self.client_task_timer_ms.saturating_add(elapsed_ms);
+                if self.client_task_timer_ms >= CLIENT_TASK_INTERVAL_MS {
+                    self.client_task_timer_ms = 0;
+                    out.push(TCClientOutbound::to(
+                        PGN_ECU_TO_TC,
+                        Self::build_client_task(self.task_totals_active).to_vec(),
+                        self.tc_address,
+                    ));
                 }
             }
             _ => {}
@@ -605,7 +689,7 @@ impl TaskControllerClient {
                     "TC version request must be an 8-byte padded frame",
                 ));
             }
-            let data = Self::build_request_version_response(TCClientCapabilities::default());
+            let data = Self::build_request_version_response(self.capabilities);
             return Ok(vec![TCClientOutbound::to(
                 PGN_ECU_TO_TC,
                 data.to_vec(),
@@ -657,7 +741,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForPoolResponse, tc_cmd::OBJECT_POOL_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_transfer_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC object-pool response must be an 8-byte padded frame",
                     ));
@@ -666,7 +750,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForActivation, tc_cmd::ACTIVATE_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_activate_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC activate-pool response must be an 8-byte padded frame",
                     ));
@@ -675,7 +759,7 @@ impl TaskControllerClient {
                 Vec::new()
             }
             (TCState::WaitForDeactivation, tc_cmd::ACTIVATE_RESPONSE) => {
-                if !is_padded_fixed8(&msg.data, 2) {
+                if !is_object_pool_activate_response(&msg.data) {
                     return Err(Error::invalid_data(
                         "TC deactivate-pool response must be an 8-byte padded frame",
                     ));
@@ -737,7 +821,7 @@ impl TaskControllerClient {
     }
 
     fn handle_deactivate_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_activate_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -758,6 +842,11 @@ impl TaskControllerClient {
 
     fn handle_tc_status(&mut self, msg: &Message) {
         self.tc_address = msg.source;
+        // B.8.2: the Client Task message echoes "task totals active (as
+        // received in Task Controller Status message, Byte 5, Bit 1)".
+        if let Some(&status) = msg.data.get(4) {
+            self.task_totals_active = status & 0x01 != 0;
+        }
         match self.state() {
             TCState::WaitForServerStatus => {
                 self.transition(TCState::SendWorkingSetMaster);
@@ -828,7 +917,7 @@ impl TaskControllerClient {
     }
 
     fn handle_pool_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_transfer_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -840,7 +929,7 @@ impl TaskControllerClient {
     }
 
     fn handle_activate_response(&mut self, msg: &Message) {
-        if !is_padded_fixed8(&msg.data, 2) {
+        if !is_object_pool_activate_response(&msg.data) {
             return;
         }
         if msg.data[1] == 0 {
@@ -981,7 +1070,7 @@ mod tests {
 
     fn dummy_ddop() -> DDOP {
         DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(
                 DeviceElement::default()
                     .with_id(2)
@@ -991,7 +1080,7 @@ mod tests {
 
     fn named_ddop(name: &str) -> DDOP {
         DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator(name))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator(name))
             .with_element(
                 DeviceElement::default()
                     .with_id(2)
@@ -1068,6 +1157,67 @@ mod tests {
         ));
         assert_eq!(c.state(), TCState::Connected);
         c
+    }
+
+    /// F2 — ISO 11783-10 §6.6.3: "All clients that maintain a connection with a
+    /// TC shall indicate their presence by transmitting to the TC a cyclic
+    /// Client Task message at an interval of 2 s ... If the TC does not receive
+    /// this message for at least 6 s, it assumes an uncontrolled shutdown of
+    /// the client."
+    ///
+    /// In the Connected state the client emitted nothing at all, so six seconds
+    /// after the DDOP activated, every conformant TC declared the client dead
+    /// and closed the connection.
+    #[test]
+    fn a_connected_client_sends_the_cyclic_client_task_message() {
+        let mut c = connected_client();
+
+        // Nothing is due before the 2 s cadence.
+        let early = c.update(CLIENT_TASK_INTERVAL_MS - 1);
+        assert!(
+            !early
+                .iter()
+                .any(|o| o.data.first() == Some(&0xFF) && o.data[4] == 0x00 && o.data.len() == 8),
+            "no Client Task before the interval"
+        );
+
+        let due = c.update(1);
+        let task = due
+            .iter()
+            .find(|o| o.pgn == PGN_ECU_TO_TC && o.data.len() == 8 && o.data[0] == 0xFF)
+            .expect("a Client Task message is due");
+        assert_eq!(
+            task.data.as_slice(),
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00],
+            "B.8.2 layout with task totals inactive"
+        );
+
+        // It keeps flowing, so the TC's 6 s watchdog never expires.
+        let mut sent = 0;
+        for _ in 0..3 {
+            // Inbound TC Status keeps the *client's* watchdog fed; the Client
+            // Task cadence must be independent of it.
+            c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+            if c.update(CLIENT_TASK_INTERVAL_MS)
+                .iter()
+                .any(|o| o.data.len() == 8 && o.data[0] == 0xFF)
+            {
+                sent += 1;
+            }
+        }
+        assert_eq!(sent, 3, "the cadence must not depend on inbound traffic");
+
+        // B.8.2: the totals bit is mirrored from TC Status byte 5 bit 1.
+        c.handle_tc_message(&tc_msg(
+            vec![tc_cmd::TC_STATUS, 0, 0, 0, 0x01, 0, 0, 0],
+            0x33,
+        ));
+        let mirrored = c.update(CLIENT_TASK_INTERVAL_MS);
+        let task = mirrored
+            .iter()
+            .find(|o| o.data.len() == 8 && o.data[0] == 0xFF)
+            .expect("a Client Task message is due");
+        assert_eq!(task.data[4], 0x01, "task totals active is echoed back");
     }
 
     #[test]
@@ -1274,15 +1424,17 @@ mod tests {
 
         c.handle_tc_message(&tc_msg(vec![tc_cmd::OBJECT_POOL_RESPONSE, 0], 0x33));
         assert_eq!(c.state(), TCState::WaitForPoolResponse);
+        // B.6.9 reserves only bytes 7-8; bytes 3-6 carry the received data
+        // size, so a zero there is a conformant frame, not a malformed one.
         let mut bad_pool = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
-        bad_pool[2] = 0x00;
+        bad_pool[6] = 0x00;
         c.handle_tc_message(&tc_msg(bad_pool, 0x33));
         assert_eq!(c.state(), TCState::WaitForPoolResponse);
 
-        c.handle_tc_message(&tc_msg(
-            tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0),
-            0x33,
-        ));
+        // A real TC reports how many bytes it received; that must be accepted.
+        let mut good_pool = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
+        good_pool[2..6].copy_from_slice(&1234u32.to_le_bytes());
+        c.handle_tc_message(&tc_msg(good_pool, 0x33));
         assert_eq!(c.state(), TCState::ActivatePool);
         c.update(1);
         assert_eq!(c.state(), TCState::WaitForActivation);
@@ -1315,6 +1467,112 @@ mod tests {
             0x33,
         ));
         assert_eq!(c.state(), TCState::TransferDDOP);
+    }
+
+    /// C21 — the client advertises version 4 but serialized the DeviceObject
+    /// through the version-3 path, omitting the two extended-structure-label
+    /// attributes that A.2 places at record byte 31+N+M+O. Every field after
+    /// that point shifts, so no version-4 Task Controller can load the pool.
+    #[test]
+    fn ddop_is_serialized_at_the_negotiated_version() {
+        fn pool_bytes_against_tc(tc_version: u8) -> (Vec<u8>, u8) {
+            let mut c = TaskControllerClient::new(TCClientConfig::default());
+            c.set_ddop(dummy_ddop());
+            c.connect().unwrap();
+            c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+            c.update(1);
+            c.update(1);
+            c.handle_tc_message(&tc_msg(version_response(tc_version, 1, 4, 0), 0x33));
+            c.update(1);
+            let mut label = [0xFFu8; 8];
+            label[0] = tc_cmd::STRUCTURE_LABEL;
+            c.handle_tc_message(&tc_msg(label.to_vec(), 0x33));
+            assert_eq!(c.state(), TCState::TransferDDOP);
+            let negotiated = c.negotiated_ddop_version();
+            let out = c.update(1);
+            let transfer = out
+                .iter()
+                .find(|o| o.data.first() == Some(&tc_cmd::OBJECT_POOL_TRANSFER))
+                .expect("the pool is transferred");
+            (transfer.data.clone(), negotiated)
+        }
+
+        let (v4_bytes, v4_negotiated) = pool_bytes_against_tc(4);
+        let (v3_bytes, v3_negotiated) = pool_bytes_against_tc(3);
+
+        assert_eq!(v4_negotiated, 4, "both sides report 4");
+        assert_eq!(v3_negotiated, 3, "a version-3 TC pulls the pool down to 3");
+        assert_ne!(
+            v4_bytes, v3_bytes,
+            "the DeviceObject record differs between versions 3 and 4; \
+             serializing the same bytes for both is the defect"
+        );
+        assert!(
+            v4_bytes.len() > v3_bytes.len(),
+            "version 4 adds the extended structure label length byte"
+        );
+
+        // And the version-3 form must still be byte-identical to what a
+        // version-3 TC previously received.
+        assert_eq!(
+            v3_bytes[1..],
+            {
+                let mut expected = vec![];
+                expected.extend(dummy_ddop().serialize().unwrap());
+                expected
+            }[..],
+            "the version-3 wire form is unchanged"
+        );
+    }
+
+    /// C19/C20 — both responses were guarded as "8 bytes, all FF after byte 2",
+    /// which is not what ISO 11783-10 Annex B defines. B.6.9 puts the received
+    /// data size in bytes 3-6 and B.6.11 puts the faulty parent/object IDs in
+    /// bytes 3-6 with the object-pool error codes in byte 7. A conformant TC
+    /// was therefore refused: the pool upload could never complete and the DDOP
+    /// never activated, so the implement stayed permanently unavailable for
+    /// task operation — no section control, no rate control, no logging.
+    #[test]
+    fn conformant_pool_responses_carry_their_annex_b_fields() {
+        let mut c = TaskControllerClient::new(TCClientConfig::default());
+        c.set_ddop(dummy_ddop());
+        c.connect().unwrap();
+        c.handle_tc_message(&tc_msg(vec![tc_cmd::TC_STATUS, 0, 0, 0, 0, 0, 0, 0], 0x33));
+        c.update(1); // Working Set Master.
+        c.update(1); // Version request.
+        c.handle_tc_message(&tc_msg(version_response(4, 1, 4, 0), 0x33));
+        c.update(1);
+        // An all-FF structure label means the TC holds no matching pool.
+        let mut label = [0xFFu8; 8];
+        label[0] = tc_cmd::STRUCTURE_LABEL;
+        c.handle_tc_message(&tc_msg(label.to_vec(), 0x33));
+        assert_eq!(c.state(), TCState::TransferDDOP);
+        c.update(1);
+        assert_eq!(c.state(), TCState::WaitForPoolResponse);
+
+        // B.6.9: error code 0 and a real received-data-size in bytes 3-6.
+        let mut transfer = tc_fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0);
+        transfer[2..6].copy_from_slice(&4096u32.to_le_bytes());
+        c.handle_tc_message(&tc_msg(transfer, 0x33));
+        assert_eq!(
+            c.state(),
+            TCState::ActivatePool,
+            "a transfer response reporting its received size must be accepted"
+        );
+        c.update(1);
+        assert_eq!(c.state(), TCState::WaitForActivation);
+
+        // B.6.11: no errors, so the faulty parent/object IDs are the NULL
+        // object ID (0xFFFF) and the object-pool error codes byte is 0.
+        let mut activate = tc_fixed_response(tc_cmd::ACTIVATE_RESPONSE, 0);
+        activate[2..6].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        activate[6] = 0x00;
+        c.handle_tc_message(&tc_msg(activate, 0x33));
+        assert_eq!(
+            c.state(),
+            TCState::Connected,
+            "an activate response with the B.6.11 fields present must connect"
+        );
     }
 
     #[test]
@@ -1543,7 +1801,7 @@ mod tests {
             DDOP::default()
                 .with_device(
                     DeviceObject::default()
-                        .with_id(1)
+                        .with_id(0u16)
                         .with_designator("D")
                         .with_structure_label(*b"I++1.0 ")
                         .with_localization_label([1, 0, 0, 0, 0, 0, 0]),

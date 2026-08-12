@@ -8,12 +8,12 @@ use alloc::{
 };
 
 use super::error_codes::{
-    FSError, FileAttributes, OpenFlags, get_access_mode, has_attribute, has_flag,
-    open_flags_have_no_reserved_bits,
+    FILE_ATTRIBUTES_CLIENT_SETTABLE, FSError, FileAttributes, OpenFlags, get_access_mode,
+    has_attribute, has_flag, open_flags_have_no_reserved_bits,
 };
 use super::types::{
-    CCMMessage, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry, FileHandle, FileServerProperties,
-    FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, TANResponse,
+    CCM_FUNCTION_CODE, CCMMessage, FS_SUPPORTED_COUNT_MAX, FSFunction, FileEntry, FileHandle,
+    FileServerProperties, FileServerStatus, INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, TANResponse,
     VolumeState, dos_date_time_is_supported, has_wildcards, is_absolute_path, is_valid_fs_path,
     is_valid_volume_name, pack_dos_date, pack_dos_time,
 };
@@ -25,13 +25,16 @@ use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT}
 use crate::net::state_machine::StateMachine;
 use crate::net::types::{Address, Pgn};
 
-/// CCM (Client Connection Maintenance) sentinel function code (FF =
-/// "not a real function code; treat as keepalive").
-const CCM_FUNCTION_CODE: u8 = 0xFF;
-
-/// FS string lengths carried in command/response payloads are one byte.
-const FS_WIRE_STRING_MAX_LEN: usize = u8::MAX as usize;
+/// B.12 Path Name Length is two bytes, so a whole path may run to 65535 bytes.
+/// It used to be capped at one byte, which truncated any real task-data path —
+/// A.2.3.1 allows any number of components, each up to 255 bytes.
+const FS_WIRE_STRING_MAX_LEN: usize = u16::MAX as usize;
 const READ_FILE_REQUEST_LEN: usize = 8;
+const SEEK_FILE_REQUEST_LEN: usize = 8;
+/// B.17 Position Mode.
+const SEEK_MODE_FROM_START: u8 = 0;
+const SEEK_MODE_FROM_CURRENT: u8 = 1;
+const SEEK_MODE_FROM_END: u8 = 2;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;
@@ -114,6 +117,16 @@ pub struct FileServerConfig {
     pub tan_cache_timeout_ms: u32,
     pub max_open_files_per_client: u8,
     pub max_open_files_total: u8,
+    /// Which optional commands this server implements.
+    ///
+    /// These used to ride the Get File Server Properties capability byte,
+    /// where B.7 has no room for them. The standard signals a command it does
+    /// not implement with error code 12, so they are local policy now.
+    pub supports_directories: bool,
+    pub supports_file_attributes: bool,
+    pub supports_move_file: bool,
+    pub supports_delete_file: bool,
+    pub supports_volume_management: bool,
 }
 
 impl Default for FileServerConfig {
@@ -125,6 +138,11 @@ impl Default for FileServerConfig {
             tan_cache_timeout_ms: 10_000,
             max_open_files_per_client: 8,
             max_open_files_total: 32,
+            supports_directories: true,
+            supports_file_attributes: true,
+            supports_move_file: true,
+            supports_delete_file: true,
+            supports_volume_management: true,
         }
     }
 }
@@ -210,7 +228,8 @@ pub struct FileServer {
 
     clients: BTreeMap<Address, ServerClientConnection>,
 
-    busy: bool,
+    busy_reading: bool,
+    busy_writing: bool,
     status_timer_ms: u32,
     current_time_ms: u32,
 

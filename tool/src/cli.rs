@@ -203,7 +203,8 @@ pub struct LiveArgs {
     )]
     pub buffer: usize,
 
-    /// Initial tab: live | sniffer | pgn | nmea | nodes | stats | filter | help.
+    /// Initial tab: live | sniffer | pgn | nmea | nodes | autodrive | stats |
+    /// filter | help.
     #[arg(short = 'T', long = "tab", default_value = "live")]
     pub tab: String,
 

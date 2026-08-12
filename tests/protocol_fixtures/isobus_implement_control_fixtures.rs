@@ -65,8 +65,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.678,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.678.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 60,
         key_switch_state: 1,
@@ -79,8 +79,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
     assert_eq!(wheel.encode(), wheel_bytes);
     let decoded_wheel = WheelBasedSpeedDist::decode(&wheel_bytes).unwrap();
-    assert!((decoded_wheel.speed_mps - wheel.speed_mps).abs() < 1e-3);
-    assert!((decoded_wheel.distance_m - wheel.distance_m).abs() < 1e-3);
+    assert!((decoded_wheel.speed_mps.unwrap_or(f64::NAN)- wheel.speed_mps.unwrap_or(f64::NAN)).abs() < 1e-3);
+    assert!((decoded_wheel.distance_m.unwrap_or(f64::NAN)- wheel.distance_m.unwrap_or(f64::NAN)).abs() < 1e-3);
     assert_eq!(decoded_wheel.direction, MachineDirection::Forward);
     assert_eq!(decoded_wheel.max_power_time_min, 60);
     assert_eq!(
@@ -96,8 +96,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 3.0,
-        distance_m: 100.0,
+        speed_mps: 3.0.into(),
+        distance_m: 100.0.into(),
         direction: MachineDirection::Reverse,
     };
     let ground_bytes = parse_named_hex_frame(
@@ -124,8 +124,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let selected_full = MachineSelectedSpeedFull {
-        speed_mps: 2.5,
-        distance_m: 1000.0,
+        speed_mps: 2.5.into(),
+        distance_m: 1000.0.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
         limit_status: 1,
@@ -137,14 +137,19 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
     assert_eq!(selected_full.encode(), selected_full_bytes);
     let decoded_selected_full = MachineSelectedSpeedFull::decode(&selected_full_bytes).unwrap();
-    assert!((decoded_selected_full.speed_mps - 2.5).abs() < 1e-3);
+    assert!((decoded_selected_full.speed_mps.unwrap_or(f64::NAN)- 2.5).abs() < 1e-3);
     assert_eq!(decoded_selected_full.source, SpeedSource::GroundBased);
 
-    let selected_status = MachineSelectedSpeedMsg {
-        speed_raw: 5000,
+    // K3 — this fixture used to hold the second, contradictory layout for PGN
+    // 0xF022: direction/source/limit in byte 5 instead of byte 8, with a 2-bit
+    // speed source. There is one layout per PGN, and it is the Annex one.
+    let selected_status = MachineSelectedSpeedFull {
+        speed_mps: 5.0.into(),
+        distance_m: Signal::NotAvailable,
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::OperatorLimited,
+        limit_status: 1,
+        exit_code: 0x3F,
     };
     let selected_status_bytes = parse_named_hex_frame(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
@@ -152,7 +157,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
     assert_eq!(selected_status.encode(), selected_status_bytes);
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_status_bytes).unwrap(),
+        MachineSelectedSpeedFull::decode(&selected_status_bytes).unwrap(),
         selected_status
     );
     assert_eq!(
@@ -192,11 +197,11 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let rear_hitch_status = HitchStatus {
-        position_percent: 200,
+        position_percent: sig(80.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::OperatorCmd,
-        draft_force_n: -100_000.0,
+        draft_force_n: sig(-100_000.0),
         is_rear: true,
     };
     let rear_hitch_status_bytes = parse_named_hex_frame(
@@ -209,7 +214,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     assert_eq!(decoded_hitch.exit_code, ExitReasonCode::OperatorCmd);
 
     let front_pto_status = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: sig(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -230,8 +235,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
 
     let aux_flow = AuxValveFlowMsg {
         valve_index: 3,
-        extend_flow_percent: 200,
-        retract_flow_percent: 50,
+        extend_flow: Signal::Value(80.0),
+        retract_flow: Signal::Value(20.0),
         state: ValveState::Extending,
         limit_status: ValveLimitStatus::OperatorLimited,
         fail_safe: ValveFailSafe::Float,
@@ -279,37 +284,8 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
         lighting
     );
 
-    let curvature = CurvatureCommand {
-        curvature: 0.5,
-        curvature_rate: 0.0,
-    };
-    let curvature_bytes = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_curvature_cmd_0_5",
-    );
-    assert_eq!(curvature.encode(), curvature_bytes);
-    assert!(
-        (CurvatureCommand::decode(&curvature_bytes)
-            .unwrap()
-            .curvature
-            - 0.5)
-            .abs()
-            < 0.25
-    );
-    assert_eq!(
-        Frame::from_message(
-            Priority::Default,
-            PGN_GUIDANCE_CURVATURE_CMD,
-            0x80,
-            BROADCAST_ADDRESS,
-            &curvature_bytes,
-        )
-        .pgn(),
-        PGN_GUIDANCE_CURVATURE_CMD
-    );
-
     let machine_info = GuidanceMachineInfo {
-        estimated_curvature: -2.5,
+        estimated_curvature: Signal::Value(-2.5),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -341,34 +317,6 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
         PGN_GUIDANCE_MACHINE_INFO
     );
 
-    let system_status = GuidanceSystemStatus {
-        estimated_curvature: 1.0,
-        readiness: SteeringReadiness::FullyReady,
-        integrity_level: 2,
-    };
-    let system_status_bytes = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_system_status_1_0",
-    );
-    assert_eq!(system_status.encode(), system_status_bytes);
-    assert_eq!(
-        GuidanceSystemStatus::decode(&system_status_bytes)
-            .unwrap()
-            .readiness,
-        SteeringReadiness::FullyReady
-    );
-    assert_eq!(
-        Frame::from_message(
-            Priority::Default,
-            PGN_GUIDANCE_SYSTEM,
-            0x80,
-            BROADCAST_ADDRESS,
-            &system_status_bytes,
-        )
-        .pgn(),
-        PGN_GUIDANCE_SYSTEM
-    );
-
     let drive_strategy = DriveStrategyCmd {
         mode: DriveStrategyMode::MaxEconomy,
         target_speed_limit_percent: 200,
@@ -396,7 +344,7 @@ fn fixture_isobus_implement_controls_status_vectors_are_stable() {
     );
 
     let guidance_system_cmd = GuidanceSystemCmd {
-        commanded_curvature: -1.5,
+        commanded_curvature: Signal::Value(-1.5),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let guidance_system_cmd_bytes = parse_named_hex_frame(
@@ -672,18 +620,18 @@ fn fixture_isobus_tractor_ecu_and_implement_sentinels_are_stable() {
         "machine_selected_speed_status_not_available",
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::default().encode(),
+        MachineSelectedSpeedFull::default().encode(),
         selected_default
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_default).unwrap(),
-        MachineSelectedSpeedMsg::default()
+        MachineSelectedSpeedFull::decode(&selected_default).unwrap(),
+        MachineSelectedSpeedFull::default()
     );
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_default)
+        MachineSelectedSpeedFull::decode(&selected_default)
             .unwrap()
-            .speed_mps(),
-        0.0
+            .speed_mps,
+        Signal::NotAvailable
     );
 
     let speed_cmd_default = parse_named_hex_frame(
@@ -709,22 +657,6 @@ fn fixture_isobus_tractor_ecu_and_implement_sentinels_are_stable() {
         LightingState::default()
     );
 
-    let guidance_curvature_default = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_curvature_cmd_zero_default",
-    );
-    assert_eq!(
-        CurvatureCommand::default().encode(),
-        guidance_curvature_default
-    );
-    assert!(
-        CurvatureCommand::decode(&guidance_curvature_default)
-            .unwrap()
-            .curvature
-            .abs()
-            < f64::EPSILON
-    );
-
     let guidance_machine_default = parse_named_hex_frame(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "guidance_machine_info_default",
@@ -736,19 +668,6 @@ fn fixture_isobus_tractor_ecu_and_implement_sentinels_are_stable() {
     assert_eq!(
         GuidanceMachineInfo::decode(&guidance_machine_default).unwrap(),
         GuidanceMachineInfo::default()
-    );
-
-    let guidance_status_default = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_system_status_default",
-    );
-    assert_eq!(
-        GuidanceSystemStatus::default().encode(),
-        guidance_status_default
-    );
-    assert_eq!(
-        GuidanceSystemStatus::decode(&guidance_status_default).unwrap(),
-        GuidanceSystemStatus::default()
     );
 
     let drive_strategy_default = parse_named_hex_frame(
@@ -833,7 +752,8 @@ fn fixture_isobus_tractor_ecu_and_implement_sentinels_are_stable() {
     assert_eq!(decoded_full.direction, MachineDirection::NotAvailable);
     assert_eq!(decoded_full.source, SpeedSource::WheelBased);
     assert_eq!(decoded_full.limit_status, 0x07);
-    assert_eq!(decoded_full.exit_code, 0xFF);
+    // Exit reason is a 6-bit field: the two reserved bits are masked off.
+    assert_eq!(decoded_full.exit_code, 0x3F);
 }
 
 #[test]
@@ -954,8 +874,8 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "wheel_speed_dist_max_error",
     );
     let wheel_max_msg = WheelBasedSpeedDist {
-        speed_mps: 1.0e9,
-        distance_m: 1.0e12,
+        speed_mps: 1.0e9.into(),
+        distance_m: 1.0e12.into(),
         direction: MachineDirection::Error,
         max_power_time_min: 0xFE,
         key_switch_state: 2,
@@ -964,8 +884,8 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     };
     assert_eq!(wheel_max_msg.encode(), wheel_max);
     let decoded_wheel_max = WheelBasedSpeedDist::decode(&wheel_max).unwrap();
-    assert!((decoded_wheel_max.speed_mps - 64.255).abs() < 0.001);
-    assert!((decoded_wheel_max.distance_m - 4_211_081.215).abs() < 0.001);
+    assert!((decoded_wheel_max.speed_mps.unwrap_or(f64::NAN)- 64.255).abs() < 0.001);
+    assert!((decoded_wheel_max.distance_m.unwrap_or(f64::NAN)- 4_211_081.215).abs() < 0.001);
     assert_eq!(decoded_wheel_max.direction, MachineDirection::Error);
 
     let ground_max = parse_named_hex_frame(
@@ -973,14 +893,14 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "ground_speed_dist_max_error",
     );
     let ground_max_msg = GroundBasedSpeedDist {
-        speed_mps: 1.0e9,
-        distance_m: 1.0e12,
+        speed_mps: 1.0e9.into(),
+        distance_m: 1.0e12.into(),
         direction: MachineDirection::Error,
     };
     assert_eq!(ground_max_msg.encode(), ground_max);
     let decoded_ground_max = GroundBasedSpeedDist::decode(&ground_max).unwrap();
-    assert!((decoded_ground_max.speed_mps - 64.255).abs() < 0.001);
-    assert!((decoded_ground_max.distance_m - 4_211_081.215).abs() < 0.001);
+    assert!((decoded_ground_max.speed_mps.unwrap_or(f64::NAN)- 64.255).abs() < 0.001);
+    assert!((decoded_ground_max.distance_m.unwrap_or(f64::NAN)- 4_211_081.215).abs() < 0.001);
     assert_eq!(decoded_ground_max.direction, MachineDirection::Error);
 
     let selected_full_max = parse_named_hex_frame(
@@ -988,8 +908,8 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "machine_selected_speed_full_max",
     );
     let selected_full_max_msg = MachineSelectedSpeedFull {
-        speed_mps: 1.0e9,
-        distance_m: 1.0e12,
+        speed_mps: 1.0e9.into(),
+        distance_m: 1.0e12.into(),
         direction: MachineDirection::Error,
         source: SpeedSource::Blended,
         limit_status: 6,
@@ -1000,21 +920,23 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     assert_eq!(decoded_selected_full_max.direction, MachineDirection::Error);
     assert_eq!(decoded_selected_full_max.source, SpeedSource::Blended);
     assert_eq!(decoded_selected_full_max.limit_status, 6);
-    assert_eq!(decoded_selected_full_max.exit_code, 0xFE);
+    assert_eq!(decoded_selected_full_max.exit_code, 0x3E);
 
     let selected_status_max = parse_named_hex_frame(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "machine_selected_speed_status_max",
     );
-    let selected_status_max_msg = MachineSelectedSpeedMsg {
-        speed_raw: 0xFFFE,
+    let selected_status_max_msg = MachineSelectedSpeedFull {
+        speed_mps: 64.254.into(),
+        distance_m: Signal::NotAvailable,
         direction: MachineDirection::Error,
         source: SpeedSource::NavigationBased,
-        limit_status: SpeedExitCode::SystemLimited,
+        limit_status: 2,
+        exit_code: 0x3F,
     };
     assert_eq!(selected_status_max_msg.encode(), selected_status_max);
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_status_max).unwrap(),
+        MachineSelectedSpeedFull::decode(&selected_status_max).unwrap(),
         selected_status_max_msg
     );
 
@@ -1037,11 +959,11 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "hitch_status_front_max",
     );
     let hitch_status_max_msg = HitchStatus {
-        position_percent: 250,
+        position_percent: sig(100.0),
         in_work_indication: 3,
         limit_status: LimitStatus::NotAvailable,
         exit_code: ExitReasonCode::NotAvailable,
-        draft_force_n: 1.0e12,
+        draft_force_n: sig(1.0e12),
         is_rear: false,
     };
     assert_eq!(hitch_status_max_msg.encode(), hitch_status_max);
@@ -1053,7 +975,7 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     let pto_status_max =
         parse_named_hex_frame(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, "pto_status_rear_max");
     let pto_status_max_msg = PtoStatus {
-        shaft_speed_rpm: 1.0e9,
+        shaft_speed_rpm: sig(1.0e9),
         engagement: 2,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1116,86 +1038,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         lighting_error
     );
 
-    let curvature_min = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_curvature_cmd_min_raw",
-    );
-    let curvature_min_msg = CurvatureCommand {
-        curvature: -8032.0,
-        curvature_rate: 0.0,
-    };
-    assert_eq!(curvature_min_msg.encode(), curvature_min);
-    assert!(
-        (CurvatureCommand::decode(&curvature_min).unwrap().curvature - -8032.0).abs()
-            < f64::EPSILON
-    );
-
-    let curvature_max = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_curvature_cmd_max_non_na",
-    );
-    let curvature_max_msg = CurvatureCommand {
-        curvature: 8031.75,
-        curvature_rate: 0.0,
-    };
-    assert_eq!(curvature_max_msg.encode(), curvature_max);
-    assert!(
-        (CurvatureCommand::decode(&curvature_max).unwrap().curvature - 8031.75).abs()
-            < f64::EPSILON
-    );
-
-    let guidance_machine_max = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_machine_info_max_error",
-    );
-    let guidance_machine_max_msg = GuidanceMachineInfo {
-        estimated_curvature: 8031.75,
-        lockout: MechanicalLockout::Error,
-        steering_system_readiness_state: GenericSaeBs02SlotValue::ErrorIndication,
-        steering_input_position_status: GenericSaeBs02SlotValue::ErrorIndication,
-        request_reset_status: RequestResetCommandStatus::Error,
-        guidance_limit_status: GuidanceLimitStatus::NotAvailable,
-        guidance_system_command_exit_reason_code: 0x3E,
-        remote_engage_switch_status: GenericSaeBs02SlotValue::ErrorIndication,
-    };
-    assert_eq!(guidance_machine_max_msg.encode(), guidance_machine_max);
-    let decoded_guidance_machine_max = GuidanceMachineInfo::decode(&guidance_machine_max).unwrap();
-    assert!((decoded_guidance_machine_max.estimated_curvature - 8031.75).abs() < f64::EPSILON);
-    assert_eq!(
-        decoded_guidance_machine_max.lockout,
-        MechanicalLockout::Error
-    );
-    assert_eq!(
-        decoded_guidance_machine_max.request_reset_status,
-        RequestResetCommandStatus::Error
-    );
-    assert_eq!(
-        decoded_guidance_machine_max.guidance_limit_status,
-        GuidanceLimitStatus::NotAvailable
-    );
-    assert_eq!(
-        decoded_guidance_machine_max.guidance_system_command_exit_reason_code,
-        0x3E
-    );
-
-    let guidance_status_max = parse_named_hex_frame(
-        ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-        "guidance_system_status_max_error",
-    );
-    let guidance_status_max_msg = GuidanceSystemStatus {
-        estimated_curvature: 8031.75,
-        readiness: SteeringReadiness::Error,
-        integrity_level: 3,
-    };
-    assert_eq!(guidance_status_max_msg.encode(), guidance_status_max);
-    let decoded_guidance_status_max = GuidanceSystemStatus::decode(&guidance_status_max).unwrap();
-    assert!((decoded_guidance_status_max.estimated_curvature - 8031.75).abs() < f64::EPSILON);
-    assert_eq!(
-        decoded_guidance_status_max.readiness,
-        SteeringReadiness::Error
-    );
-    assert_eq!(decoded_guidance_status_max.integrity_level, 3);
-
     let drive_max = parse_named_hex_frame(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "drive_strategy_max_speed_limits",
@@ -1213,12 +1055,12 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         "guidance_system_cmd_max",
     );
     let guidance_cmd_max_msg = GuidanceSystemCmd {
-        commanded_curvature: 8031.75,
+        commanded_curvature: Signal::Value(8031.75),
         status: CurvatureCommandStatus::ErrorIndication,
     };
     assert_eq!(guidance_cmd_max_msg.encode(), guidance_cmd_max);
     let decoded_guidance_cmd_max = GuidanceSystemCmd::decode(&guidance_cmd_max).unwrap();
-    assert!((decoded_guidance_cmd_max.commanded_curvature - 8031.75).abs() < 0.25);
+    assert!((decoded_guidance_cmd_max.commanded_curvature.value().unwrap() - 8031.75).abs() < 0.25);
     assert_eq!(
         decoded_guidance_cmd_max.status,
         CurvatureCommandStatus::ErrorIndication
@@ -1294,7 +1136,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
 
     for name in [
         "malformed_hitch_cmd_short4",
-        "malformed_hitch_cmd_bad_padding",
         "malformed_hitch_cmd_reserved_command",
     ] {
         assert!(
@@ -1308,7 +1149,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_pto_cmd_short4",
-        "malformed_pto_cmd_bad_padding",
         "malformed_pto_cmd_reserved_command",
     ] {
         assert!(
@@ -1322,7 +1162,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_aux_valve_cmd_short3",
-        "malformed_aux_valve_cmd_bad_padding",
         "malformed_aux_valve_cmd_reserved_command",
     ] {
         assert!(
@@ -1336,7 +1175,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     }
     for name in [
         "malformed_tractor_control_short1",
-        "malformed_tractor_control_bad_padding",
         "malformed_tractor_control_reserved_mode",
     ] {
         assert!(
@@ -1348,47 +1186,63 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
-    for name in [
-        "malformed_lighting_short3",
-        "malformed_lighting_bad_padding",
-    ] {
-        assert!(
-            LightingState::decode(&parse_named_hex_bytes(
+    // G3 — §5.4: reserved bytes go out as ones and are ignored on receive.
+    // These four used to be dropped whole, so a peer that zero-padded had its
+    // hitch, PTO, aux-valve or control-mode command discarded with no event at
+    // all — silence rather than a command.
+    assert!(
+        HitchCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        PtoCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_pto_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        AuxValveCommandMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_aux_valve_cmd",
+        ))
+        .is_some()
+    );
+    assert!(
+        TractorControlModeMsg::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_tractor_control",
+        ))
+        .is_some()
+    );
+
+    assert!(
+        LightingState::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_lighting_short3",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_machine_selected_speed_short4",
-        "malformed_machine_selected_speed_bad_padding",
-        "malformed_machine_selected_speed_reserved_bits",
-    ] {
-        assert!(
-            MachineSelectedSpeedMsg::decode(&parse_named_hex_bytes(
+        .is_none(),
+        "malformed_lighting_short3 must be rejected"
+    );
+    assert!(
+        MachineSelectedSpeedFull::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_machine_selected_speed_short4",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_machine_speed_cmd_short2",
-        "malformed_machine_speed_cmd_bad_padding",
-        "malformed_machine_speed_cmd_reserved_bits",
-    ] {
-        assert!(
-            MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
+        .is_none(),
+        "malformed_machine_selected_speed_short4 must be rejected"
+    );
+    assert!(
+        MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
+                "malformed_machine_speed_cmd_short2",
             ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+        .is_none(),
+        "malformed_machine_speed_cmd_short2 must be rejected"
+    );
     let malformed_speed_distance = parse_named_hex_bytes(
         ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
         "malformed_speed_distance_short7",
@@ -1396,19 +1250,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     assert!(WheelBasedSpeedDist::decode(&malformed_speed_distance).is_none());
     assert!(GroundBasedSpeedDist::decode(&malformed_speed_distance).is_none());
     assert!(MachineSelectedSpeedFull::decode(&malformed_speed_distance).is_none());
-    for name in [
-        "malformed_ground_speed_dist_bad_padding",
-        "malformed_ground_speed_dist_reserved_bits",
-    ] {
-        assert!(
-            GroundBasedSpeedDist::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
     assert!(
         MachineSelectedSpeedFull::decode(&parse_named_hex_bytes(
             ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
@@ -1418,7 +1259,6 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
     );
     for name in [
         "malformed_hitch_status_short3",
-        "malformed_hitch_status_bad_padding",
         "malformed_hitch_status_reserved_bit",
     ] {
         assert!(
@@ -1430,30 +1270,105 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
+    assert!(
+        DriveStrategyCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_drive_strategy",
+        ))
+        .is_some(),
+        "undefined_bits_drive_strategy must decode"
+    );
+    assert!(
+        GuidanceSystemCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_guidance_system_cmd",
+        ))
+        .is_some(),
+        "undefined_bits_guidance_system_cmd must decode"
+    );
+
+    // B5 / G3 — ISO 11783-7 §5.4: "All undefined bits should be received as
+    // 'don't care' (either masked out or ignored). This permits them to be
+    // defined and used in the future without causing any incompatibilities."
+    // These vectors were named "malformed_*_bad_padding" / "_reserved_bits" and
+    // asserted to be *rejected*, which is the opposite of the clause: they are
+    // what a transmitter one revision ahead legitimately sends.
+    assert!(
+        LightingState::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_lighting",
+        ))
+        .is_some(),
+        "a future revision using the reserved tail must still decode"
+    );
     for name in [
-        "malformed_pto_status_short2",
-        "malformed_pto_status_bad_padding",
+        "undefined_bits_machine_selected_speed_tail",
+        "undefined_bits_machine_selected_speed_reserved",
     ] {
         assert!(
-            PtoStatus::decode(
-                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
-                true,
-            )
-            .is_none(),
-            "{name} must be rejected"
+            MachineSelectedSpeedFull::decode(&parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                name,
+            ))
+            .is_some(),
+            "{name} must decode"
         );
     }
     for name in [
-        "malformed_aux_valve_flow_bad_padding",
-        "malformed_aux_valve_flow_bad_reserved_bit",
+        "undefined_bits_machine_speed_cmd_tail",
+        "undefined_bits_machine_speed_cmd_reserved",
+    ] {
+        assert!(
+            MachineSpeedCommandMsg::decode(&parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                name,
+            ))
+            .is_some(),
+            "{name} must decode"
+        );
+    }
+    assert!(
+        HitchStatus::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "undefined_bits_hitch_status_tail",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined_bits_hitch_status_tail must decode"
+    );
+    assert!(
+        PtoStatus::decode(
+            &parse_named_hex_bytes(
+                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+                "undefined_bits_pto_status_tail",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined_bits_pto_status_tail must decode"
+    );
+
+    assert!(
+        PtoStatus::decode(
+                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, "malformed_pto_status_short2"),
+                true,
+            )
+        .is_none(),
+        "malformed_pto_status_short2 must be rejected"
+    );
+    for name in [
+        "undefined_bits_aux_valve_flow_tail",
+        "undefined_bits_aux_valve_flow_reserved",
     ] {
         assert!(
             AuxValveFlowMsg::decode(
                 &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
                 3,
             )
-            .is_none(),
-            "{name} must be rejected"
+            .is_some(),
+            "{name} must decode: undefined bits are don't-care on receive"
         );
     }
     assert!(
@@ -1467,42 +1382,15 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         .is_none()
     );
     assert!(
-        CurvatureCommand::decode(&parse_named_hex_bytes(
+        GuidanceMachineInfo::decode(&parse_named_hex_bytes(
             ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-            "malformed_guidance_curvature_bad_padding",
+            "undefined_bits_guidance_machine",
         ))
-        .is_none()
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
     );
     for name in [
-        "malformed_guidance_machine_bad_padding",
-        "malformed_guidance_machine_reserved_control_bits",
-    ] {
-        assert!(
-            GuidanceMachineInfo::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_guidance_system_status_bad_padding",
-        "malformed_guidance_system_status_reserved_readiness",
-        "malformed_guidance_system_status_reserved_control_bits",
-    ] {
-        assert!(
-            GuidanceSystemStatus::decode(&parse_named_hex_bytes(
-                ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
         "malformed_drive_strategy_short2",
-        "malformed_drive_strategy_bad_padding",
         "malformed_drive_strategy_reserved_mode",
     ] {
         assert!(
@@ -1514,46 +1402,62 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
             "{name} must be rejected"
         );
     }
-    for name in [
-        "malformed_guidance_system_cmd_short3",
-        "malformed_guidance_system_cmd_bad_padding",
-    ] {
-        assert!(
-            GuidanceSystemCmd::decode(&parse_named_hex_bytes(
+    assert!(
+        GuidanceSystemCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "malformed_guidance_system_cmd_short3",
+        ))
+        .is_none(),
+        "malformed_guidance_system_cmd_short3 must be rejected"
+    );
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_pto",
+        ))
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
+    );
+    // G3 — byte 5 bits 5-8 are undefined and ignored on receive, exactly as
+    // the decoder already treats bits 3-4 by masking them out of `pto_cmd`.
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "undefined_bits_hitch_pto_control",
+        ))
+        .is_some(),
+        "undefined byte-5 bits must not drop the combined command"
+    );
+    assert!(
+        HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+            ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
+            "malformed_hitch_pto_short4",
+        ))
+        .is_none(),
+        "malformed_hitch_pto_short4 must be rejected"
+    );
+    assert!(
+        HitchRollPitchCmd::decode(
+            &parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_hitch_pto_short4",
-        "malformed_hitch_pto_bad_padding",
-        "malformed_hitch_pto_reserved_control_bits",
-    ] {
-        assert!(
-            HitchPtoCombinedCmd::decode(&parse_named_hex_bytes(
+                "malformed_hitch_roll_pitch_short3",
+            ),
+            false,
+        )
+        .is_none(),
+        "malformed_hitch_roll_pitch_short3 must be rejected"
+    );
+    assert!(
+        HitchRollPitchCmd::decode(
+            &parse_named_hex_bytes(
                 ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
-                name,
-            ))
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
-    for name in [
-        "malformed_hitch_roll_pitch_short3",
-        "malformed_hitch_roll_pitch_bad_padding",
-    ] {
-        assert!(
-            HitchRollPitchCmd::decode(
-                &parse_named_hex_bytes(ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX, name),
-                false,
-            )
-            .is_none(),
-            "{name} must be rejected"
-        );
-    }
+                "undefined_bits_hitch_roll_pitch",
+            ),
+            false,
+        )
+        .is_some(),
+        "undefined trailing bytes are don't-care on receive (§5.4)"
+    );
     assert!(
         TractorFacilities::decode(&parse_named_hex_bytes(
             ISOBUS_IMPLEMENT_CONTROLS_STATUS_HEX,
@@ -1582,10 +1486,8 @@ fn fixture_isobus_implement_min_max_and_error_edges_are_stable() {
         assert!(PtoStatus::decode(malformed, true).is_none());
         assert!(AuxValveFlowMsg::decode(malformed, 3).is_none());
         assert!(LightingState::decode(malformed).is_none());
-        assert!(CurvatureCommand::decode(malformed).is_none());
         assert!(GuidanceMachineInfo::decode(malformed).is_none());
-        assert!(GuidanceSystemStatus::decode(malformed).is_none());
-        assert!(MachineSelectedSpeedMsg::decode(malformed).is_none());
+        assert!(MachineSelectedSpeedFull::decode(malformed).is_none());
         assert!(MachineSpeedCommandMsg::decode(malformed).is_none());
         assert!(DriveStrategyCmd::decode(malformed).is_none());
         assert!(GuidanceSystemCmd::decode(malformed).is_none());
@@ -1709,9 +1611,20 @@ fn fixture_isobus_control_functionalities_codecs_are_stable() {
         }
     );
 
+    // ISO 11783-12 B.9: "Functionality characteristics values reserved for ISO
+    // assignment shall be parsed without generating an error." 0x63 is
+    // unassigned in this build — A.10 keeps the 0-255 list in the online
+    // database — so the block is skipped by its declared option length rather
+    // than taking the whole message down with it.
     assert_eq!(Functionality::from_u8(0x63), None);
+    let unknown = parse_named_hex_bytes(ISOBUS_CONTROL_FUNCTIONALITIES_HEX, "unknown_functionality");
+    assert!(
+        Functionalities::decode(&unknown)
+            .expect("an unassigned functionality is parsed, not refused")
+            .is_empty()
+    );
+
     for name in [
-        "unknown_functionality",
         "truncated_tim_server",
         "trailing_after_min_cf",
         "duplicate_min_cf",

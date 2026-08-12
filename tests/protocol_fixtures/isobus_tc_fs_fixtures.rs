@@ -96,7 +96,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     malformed_client.connect().unwrap();
     malformed_client.handle_tc_message(&Message::new(
         PGN_ECU_TO_TC,
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3").to_vec(),
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle").to_vec(),
         0x33,
     ));
     assert_eq!(
@@ -107,7 +107,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     for invalid_source in [NULL_ADDRESS, BROADCAST_ADDRESS] {
         malformed_client.handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
-            parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3")
+            parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle")
                 .to_vec(),
             invalid_source,
         ));
@@ -119,7 +119,7 @@ fn fixture_isobus_tc_object_pool_transfer_and_activation_are_stable() {
     }
     malformed_client.handle_tc_message(&Message::new(
         PGN_TC_TO_ECU,
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3").to_vec(),
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle").to_vec(),
         0x33,
     ));
     malformed_client.update(1); // Working Set Master.
@@ -368,7 +368,7 @@ fn fixture_isobus_tc_ddi_database_snapshot_is_stable() {
 #[test]
 fn fixture_isobus_tc_process_data_status_and_error_paths_are_stable() {
     let tc_status =
-        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_v4_b1_s8_c3");
+        parse_named_hex_frame(ISOBUS_TC_PROCESS_DATA_HEX, "tc_status_server_idle");
     let tech_request =
         parse_named_hex_bytes(ISOBUS_TC_PROCESS_DATA_HEX, "tech_capabilities_request");
     let tech_caps = parse_named_hex_frame(
@@ -693,11 +693,7 @@ fn fixture_isobus_tc_geo_prescription_edges_are_stable() {
     ));
 
     let mut tc = TCGEOInterface::new();
-    assert_eq!(
-        parse_named_text_value(ISOBUS_TC_GEO_PRESCRIPTION, "no_gnss_fix_position_payload"),
-        "invalid_state"
-    );
-    assert!(tc.position_process_data_payloads().is_err());
+    assert!(tc.current_position().is_none());
     let mut gnss = Vec::with_capacity(8);
     gnss.extend_from_slice(&5_000_000_i32.to_le_bytes());
     gnss.extend_from_slice(&5_000_000_i32.to_le_bytes());
@@ -721,12 +717,12 @@ fn fixture_isobus_tc_geo_prescription_edges_are_stable() {
         position: Wgs::new(0.5, 0.5, 0.0),
         timestamp_us: 0,
     });
-    assert_eq!(
-        tc.position_process_data_payloads().unwrap(),
-        [
-            parse_named_hex_frame(ISOBUS_TC_GEO_PRESCRIPTION, "position_lat_0_5_payload"),
-            parse_named_hex_frame(ISOBUS_TC_GEO_PRESCRIPTION, "position_lon_0_5_payload"),
-        ]
+    // L1 — the lat/lon process-data payloads are gone: DDI 0x0087 and 0x0088
+    // are Device Element Offset Y and Z in millimetres, so a conformant TC
+    // read a latitude of 0.5 degrees as a 5 000 mm offset.
+    assert!(
+        tc.current_position().is_some(),
+        "position is held for zone lookup, not transmitted as process data"
     );
 
     tc.add_prescription_map(PrescriptionMap {
@@ -904,41 +900,37 @@ fn fixture_isobus_rear_hitch_raise_is_stable() {
 #[test]
 fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     let classic = FileServerProperties {
-        version_number: 1,
+        version_number: 4,
         max_simultaneous_files: 16,
-        supports_directories: true,
-        supports_volume_management: true,
-        supports_file_attributes: true,
-        supports_move_file: true,
-        supports_delete_file: true,
+        supports_multiple_volumes: true,
+        supports_removable_volumes: true,
     };
-    let classic_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "classic_properties_all_caps");
-    assert_eq!(classic.encode(), classic_bytes);
-    assert_eq!(FileServerProperties::decode(&classic_bytes), Some(classic));
-    for malformed in [
-        "classic_properties_short2",
-        "classic_properties_overlong9",
-        "classic_properties_bad_padding",
-    ] {
+    let classic_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "properties_response_v4");
+    assert_eq!(classic.encode_response(0x07), classic_bytes);
+    assert_eq!(
+        FileServerProperties::decode_response(&classic_bytes),
+        Some((0x07, classic))
+    );
+    for malformed in ["properties_response_short4", "properties_response_overlong9"] {
         assert!(
-            FileServerProperties::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed))
-                .is_none(),
+            FileServerProperties::decode_response(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                malformed
+            ))
+            .is_none(),
             "{malformed} must be rejected"
         );
     }
 
     let status = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 2,
     };
     let status_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "server_status_busy_two_open");
     assert_eq!(status.encode(), status_bytes);
     assert_eq!(FileServerStatus::decode(&status_bytes), Some(status));
-    for malformed in [
-        "server_status_short1",
-        "server_status_overlong9",
-        "server_status_bad_padding",
-    ] {
+    for malformed in ["server_status_short1", "server_status_overlong9"] {
         assert!(
             FileServerStatus::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed))
                 .is_none(),
@@ -946,20 +938,48 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         );
     }
 
-    let ccm = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "ccm_tan7");
-    assert_eq!(encode_ccm(7), ccm);
-    assert_eq!(
-        CCMMessage::decode(&ccm),
-        Some(CCMMessage {
-            version: 0xFF,
-            tan: 7
-        })
-    );
-    for malformed in ["ccm_short1", "ccm_overlong9", "ccm_bad_padding"] {
+    let ccm = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "ccm_version4");
+    assert_eq!(encode_ccm(4), ccm);
+    assert_eq!(CCMMessage::decode(&ccm), Some(CCMMessage { version: 4 }));
+    for malformed in ["ccm_short1", "ccm_overlong9"] {
         assert!(
             CCMMessage::decode(&parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, malformed)).is_none(),
             "{malformed} must be rejected"
         );
+    }
+
+    // G3 — a zero-padded reserved tail is not a malformed frame. Each of these
+    // used to be discarded whole: the properties response left the client stuck
+    // in `WaitingForStatus` past the 6 s timeout, forever, and the CCM meant our
+    // server never registered that client and purged its open handles six
+    // seconds later, mid-transfer.
+    for (name, accepted) in [
+        (
+            "properties_response_bad_padding",
+            FileServerProperties::decode_response(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "properties_response_bad_padding",
+            ))
+            .is_some(),
+        ),
+        (
+            "server_status_bad_padding",
+            FileServerStatus::decode(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "server_status_bad_padding",
+            ))
+            .is_some(),
+        ),
+        (
+            "ccm_bad_padding",
+            CCMMessage::decode(&parse_named_hex_bytes(
+                ISOBUS_FS_CODECS_HEX,
+                "ccm_bad_padding",
+            ))
+            .is_some(),
+        ),
+    ] {
+        assert!(accepted, "{name} differs only in reserved bytes (G3)");
     }
 
     let props_v2 = FileServerPropertiesV2 {
@@ -1011,23 +1031,22 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
     };
     let nack_bytes = parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "nack_move_not_supported");
     assert_eq!(nack.encode(), nack_bytes);
-    assert_eq!(FSError::from_u8(20), FSError::NotSupported);
-    assert_eq!(
-        FileAttributes::ReadOnly | FileAttributes::Archive,
-        0x21,
-        "attribute bit layout stays stable"
-    );
+    // B.9 puts "function not supported" at 12; 14..=41 and 48..=255 are
+    // reserved. 20 used to be emitted for every unimplemented command.
+    assert_eq!(FSError::from_u8(12), FSError::NotSupported);
+    assert_eq!(FSError::try_from_u8(20), None);
+    // B.15: bit 0 read-only, bit 1 hidden, bit 3 volume, bit 4 directory.
+    assert_eq!(FileAttributes::ReadOnly | FileAttributes::Hidden, 0x03);
+    assert_eq!(FileAttributes::IsVolume.bit(), 0x08);
+    assert_eq!(FileAttributes::Directory.bit(), 0x10);
 
     let mut server = IsoFileServer::new(IsoFileServerConfig::default());
     server.add_file("log.txt", b"abc".to_vec(), 0).unwrap();
     let mut client = FileClient::new(FileClientConfig::default());
     let connect = client.connect_to_server(0x10).unwrap();
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect.data[1],
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect.data[1])
+        .to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,
@@ -1090,7 +1109,9 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         0x10,
     ));
 
-    let seek_req = client.seek_file(1, 0).expect("handle 1 opened");
+    let seek_req = client
+        .seek_file(1, machbus::isobus::fs::SeekMode::Start, 0)
+        .expect("handle 1 opened");
     let expected_seek_request =
         expected_fs_frame_with_tan("seek_request_handle1_zero", seek_req.data[1]);
     assert_eq!(seek_req.data.as_slice(), expected_seek_request.as_slice());
@@ -1210,25 +1231,25 @@ fn fixture_isobus_file_server_codecs_and_operations_are_stable() {
         FSError::MalformedRequest.as_u8()
     );
 
+    // G3 — the CCM's reserved tail is ignored on receive. Dropping this client
+    // registered nothing and sent no error either way, so
+    // `cleanup_disconnected_clients` purged its open handles six seconds later.
     let mut ccm_server = IsoFileServer::new(IsoFileServerConfig::default());
-    let malformed_ccm = parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, "malformed_ccm_bad_tail");
-    let malformed_ccm_resp = ccm_server.handle_client_message(&Message::new(
+    let zero_padded_ccm = parse_named_hex_bytes(ISOBUS_FS_CODECS_HEX, "malformed_ccm_bad_tail");
+    let ccm_resp = ccm_server.handle_client_message(&Message::new(
         PGN_FILE_CLIENT_TO_SERVER,
-        malformed_ccm,
+        zero_padded_ccm,
         0x20,
     ));
-    assert!(malformed_ccm_resp.is_empty());
-    assert!(ccm_server.clients().is_empty());
+    assert!(ccm_resp.is_empty(), "a CCM is not answered with a frame");
+    assert!(ccm_server.clients().contains_key(&0x20));
 
     let mut strict_client = FileClient::new(FileClientConfig::default());
     let connect = strict_client.connect_to_server(0x10).unwrap();
     let connect_tan = connect.data[1];
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect_tan,
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect_tan)
+        .to_vec();
     strict_client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,
@@ -1319,12 +1340,14 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
         .unwrap();
     server.add_file("empty.txt", Vec::new(), 0).unwrap();
 
-    let invalid_path = b"..\\secret.txt";
+    // A.2.3.1 has the server normalize dot segments, so a bad name is one
+    // that cannot be encoded at all.
+    let invalid_path = b"bad|name.txt";
     let mut invalid_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x01,
-        invalid_path.len() as u8,
         OpenFlags::Write | OpenFlags::Create,
+        invalid_path.len() as u8, (invalid_path.len() >> 8) as u8,
     ];
     invalid_open.extend_from_slice(invalid_path);
     let invalid_open_resp =
@@ -1338,8 +1361,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut missing_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x02,
-        missing.len() as u8,
         OpenFlags::Read.bit(),
+        missing.len() as u8, (missing.len() >> 8) as u8,
     ];
     missing_open.extend_from_slice(missing);
     let missing_resp =
@@ -1353,8 +1376,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut read_only_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x21,
-        read_only.len() as u8,
         OpenFlags::Read.bit(),
+        read_only.len() as u8, (read_only.len() >> 8) as u8,
     ];
     read_only_open.extend_from_slice(read_only);
     let read_only_resp = server.handle_client_message(&Message::new(
@@ -1393,8 +1416,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut read_only_rw_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x23,
-        read_only.len() as u8,
         OpenFlags::ReadWrite.bit(),
+        read_only.len() as u8, (read_only.len() >> 8) as u8,
     ];
     read_only_rw_open.extend_from_slice(read_only);
     let read_only_rw_resp = server.handle_client_message(&Message::new(
@@ -1436,8 +1459,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut empty_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x22,
-        empty.len() as u8,
         OpenFlags::Read.bit(),
+        empty.len() as u8, (empty.len() >> 8) as u8,
     ];
     empty_open.extend_from_slice(empty);
     let empty_resp =
@@ -1471,11 +1494,11 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
         parse_named_hex_frame(ISOBUS_FS_CODECS_HEX, "move_error_malformed_request").as_slice()
     );
 
-    let invalid_dir = b"safe\\..";
+    let invalid_dir = b"bad|dir";
     let mut change_dir = vec![
         FSFunction::ChangeDirectory.as_u8(),
         0x07,
-        invalid_dir.len() as u8,
+        invalid_dir.len() as u8, (invalid_dir.len() >> 8) as u8,
     ];
     change_dir.extend_from_slice(invalid_dir);
     let change_dir_resp =
@@ -1491,8 +1514,8 @@ fn fixture_isobus_file_server_error_responses_are_stable() {
     let mut removed_open = vec![
         FSFunction::OpenFile.as_u8(),
         0x08,
-        removed_path.len() as u8,
         OpenFlags::Read.bit(),
+        removed_path.len() as u8, (removed_path.len() >> 8) as u8,
     ];
     removed_open.extend_from_slice(removed_path);
     let removed_resp = removed_server.handle_client_message(&Message::new(
@@ -1515,8 +1538,8 @@ fn fixture_isobus_file_server_volume_status_transitions_are_stable() {
     let mut open = vec![
         FSFunction::OpenFile.as_u8(),
         0x01,
-        path.len() as u8,
         OpenFlags::ReadWrite.bit(),
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     open.extend_from_slice(path);
     let open_resp =
@@ -1545,12 +1568,9 @@ fn fixture_isobus_file_server_directory_workflow_is_stable() {
         .unwrap();
     let mut client = FileClient::new(FileClientConfig::default());
     let connect = client.connect_to_server(0x10).unwrap();
-    let mut props_response = vec![
-        FSFunction::GetFileServerProperties.as_u8(),
-        connect.data[1],
-        FSError::Success.as_u8(),
-    ];
-    props_response.extend_from_slice(&FileServerProperties::default().encode());
+    let props_response = FileServerProperties::default()
+        .encode_response(connect.data[1])
+        .to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         props_response,

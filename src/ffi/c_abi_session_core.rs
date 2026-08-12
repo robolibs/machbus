@@ -18,8 +18,8 @@ use crate::net::{
 use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
 use crate::session::Session;
 use crate::session::plugins::{
-    Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
-    GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
+    AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
+    GroupFunction, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
 };
@@ -33,8 +33,44 @@ use crate::time::Instant;
 ///
 /// Bump this when exported function signatures, `repr(C)` POD layouts, enum
 /// discriminants, or ownership contracts change in a way C callers must audit.
-/// `3` marks the rewrite onto the `session` facade.
-pub const MACHBUS_C_ABI_VERSION: u32 = 3;
+///
+/// - `3` marked the rewrite onto the `session` facade.
+/// - `4` is the round-4 conformance work: `machbus_session_fs_client_seek` grew
+///   a `mode` argument and its `position` became a signed `offset`
+///   (ISO 11783-13 B.17), the File Server error codes were renumbered to Annex
+///   B.9, `MachbusEvent`'s seek payload became a position rather than a unit,
+///   and several `repr(C)` PODs widened. A caller built against a v3 header
+///   that skipped this guard would call the five-argument seek with four,
+///   reading `out_tan` from an uninitialised slot and writing through it.
+/// - `5` makes the two `clear_stop` entry points report their refusal, and adds
+///   `MachbusEventKind::TcServerClientDisconnected` (100).
+///   `machbus_session_autodrive_clear_stop` and
+///   `machbus_session_guidance_clear_stop` returned `true` unconditionally and
+///   cleared the last error even when the plugin had refused to release the
+///   latch. They now return `false` and set a last-error string when the stop
+///   condition is still live. No signature or layout changed, but a caller
+///   that treated the return as "always succeeded" was reading a lie: the
+///   error contract did, which is a bump under the rules in
+///   book/src/bindings/abi-stability.md.
+pub const MACHBUS_C_ABI_VERSION: u32 = 5;
+
+// The POD layouts this version promises. A `repr(C)` struct that grows a field
+// breaks these at compile time, in the same file as the version constant, so
+// the bump cannot be forgotten — the failure mode this guards against is a
+// widened POD shipping under an unchanged version, which lets a caller built
+// against the old header past the runtime `abi_version()` check in
+// examples/c_abi/demo.c and then read a field that moved.
+//
+// If one of these fails: bump MACHBUS_C_ABI_VERSION, update the two `!= 5`
+// checks in the C examples, record the delta in
+// book/src/bindings/abi-stability.md, and mirror the new sizes in
+// examples/c_abi/layout.c.
+const _: () = {
+    assert!(core::mem::size_of::<MachbusConfig>() == 48);
+    assert!(core::mem::size_of::<MachbusEvent>() == 40);
+    assert!(core::mem::size_of::<MachbusGnssPosition>() == 40);
+    assert!(core::mem::size_of::<MachbusCanBusValidation>() == 5);
+};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -62,6 +98,16 @@ fn bool_result<T, E: std::fmt::Display>(r: Result<T, E>) -> bool {
         Err(e) => {
             set_last_error(e.to_string());
             false
+        }
+    }
+}
+
+fn catch_unwind_ffi<T>(default: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(res) => res,
+        Err(_) => {
+            set_last_error("panic occurred during FFI execution");
+            default
         }
     }
 }
@@ -129,8 +175,10 @@ pub struct MachbusConfig {
     pub enable_vt_server: bool,
     /// Plug a [`Tim`] subsystem (tractor-implement management, no options).
     pub enable_tim: bool,
-    /// Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
-    pub enable_guidance: bool,
+    /// Plug an [`AutoDrive`] subsystem: ISO 11783-7 curvature steering and
+    /// speed behind one engage lifecycle, one stop latch and one set of
+    /// preconditions.
+    pub enable_autodrive: bool,
 }
 
 impl Default for MachbusConfig {
@@ -164,7 +212,7 @@ impl Default for MachbusConfig {
             enable_tc_server: false,
             enable_vt_server: false,
             enable_tim: false,
-            enable_guidance: false,
+            enable_autodrive: false,
         }
     }
 }
@@ -200,6 +248,65 @@ fn can_bus_config_from_abi(
         phase_seg2,
         silent_mode,
         loopback,
+    }
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<MachbusConfig>() > 0);
+    assert!(core::mem::size_of::<MachbusCanBusValidation>() > 0);
+};
+
+/// Why an autonomous controller latched a safe stop, mirroring
+/// `SafeStopTrigger::as_code`.
+///
+/// The two stop-reason entry points returned a bare `uint32_t` and their doc
+/// comments named this type, which did not exist: a C HMI telling the operator
+/// why autonomy dropped had to hardcode 1, 4, 5, … read out of `src/safety.rs`.
+/// That became dangerous when codes 2 and 3 were retired — the retirement was
+/// recorded only in a Rust comment and enforced only by a Rust test, so a C
+/// integrator had no way to learn they are permanently reserved and would reuse
+/// them. Python was never exposed to this because it reads the string form.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachbusSafeStopTrigger {
+    /// No stop is latched.
+    None = 0,
+    GuidanceLinkTimeout = 1,
+    // 2 and 3 are permanently retired: they were TimStatusTimeout and
+    // FunctionRequestTimeout, which had no producer. Never reuse them — the
+    // values below would shift for every caller built against an older header.
+    HeartbeatError = 4,
+    IsbStop = 5,
+    BusOff = 6,
+    AddressClaimLost = 7,
+    OperatorOverride = 8,
+    CommandStale = 9,
+    ClockWentBackwards = 10,
+    /// A queued safety command was refused by the network layer.
+    SendFailed = 11,
+    PositionStale = 12,
+    FixDegraded = 13,
+    KeySwitchOff = 14,
+}
+
+impl MachbusSafeStopTrigger {
+    fn from_trigger(trigger: Option<crate::session::SafeStopTrigger>) -> Self {
+        use crate::session::SafeStopTrigger as T;
+        match trigger {
+            None => Self::None,
+            Some(T::GuidanceLinkTimeout) => Self::GuidanceLinkTimeout,
+            Some(T::HeartbeatError) => Self::HeartbeatError,
+            Some(T::IsbStop) => Self::IsbStop,
+            Some(T::BusOff) => Self::BusOff,
+            Some(T::AddressClaimLost) => Self::AddressClaimLost,
+            Some(T::OperatorOverride) => Self::OperatorOverride,
+            Some(T::CommandStale) => Self::CommandStale,
+            Some(T::ClockWentBackwards) => Self::ClockWentBackwards,
+            Some(T::SendFailed(_)) => Self::SendFailed,
+            Some(T::PositionStale) => Self::PositionStale,
+            Some(T::FixDegraded) => Self::FixDegraded,
+            Some(T::KeySwitchOff) => Self::KeySwitchOff,
+        }
     }
 }
 
@@ -294,7 +401,28 @@ pub enum MachbusEventKind {
     Powertrain = 89,
     TcServerPeerControlAssignment = 75,
     GuidanceMachineInfo = 90,
+    /// Steering ECU went silent; the controller was forced to the safe state.
+    GuidanceLinkLost = 91,
+    /// Machine Info resumed after a link loss.
+    GuidanceLinkRestored = 92,
+    /// Operator ISB stop latched; the controller is in the safe state.
+    /// Combined autodrive controller changed automation state.
+    AutodriveStateChanged = 94,
+    /// Combined autodrive controller entered the safe state.
+    AutodriveSafeStop = 95,
+    /// No GNSS position inside the staleness window; `u0` is how long it has
+    /// been silent, in milliseconds.
+    GnssPositionStale = 96,
+    /// The receiver reported a method that cannot be steered on; `fmi_or_sub`
+    /// is the NMEA fix type.
+    GnssFixDegraded = 97,
+    /// A steerable fix returned; `fmi_or_sub` is the NMEA fix type.
+    GnssFixRestored = 98,
     Other = 99,
+    /// ISO 11783-10 §6.6.3 — six seconds without a Client Task, so the TC
+    /// assumed an uncontrolled shutdown and dropped the client's DDOP.
+    /// `source` is the client address.
+    TcServerClientDisconnected = 100,
 }
 
 /// A flattened, C-friendly view of one [`Event`].
@@ -562,8 +690,8 @@ fn build_session_with_content(
     if cfg.enable_tim {
         builder = builder.plug(Tim::new(TimAuthority::new(TimOptionSet::empty())));
     }
-    if cfg.enable_guidance {
-        builder = builder.plug(Guidance::new());
+    if cfg.enable_autodrive {
+        builder = builder.plug(AutoDrive::new());
     }
 
     let session = builder.build()?;
@@ -766,6 +894,28 @@ pub extern "C" fn machbus_session_tick(h: *mut MachbusSession, dt_ms: u32) -> bo
         }
     };
     h.now = h.now.add_millis(u64::from(dt_ms));
+    h.session.tick(h.now);
+    clear_last_error();
+    true
+}
+
+/// Advance the virtual clock by `dt_us` **microseconds** and run
+/// cadences/timers.
+///
+/// [`machbus_session_tick`] takes whole milliseconds, so a control loop running
+/// faster than 1 kHz passes `0` on every call and the clock never moves — every
+/// protocol timer freezes and no watchdog ever expires. Use this entry point
+/// for any loop that can tick more often than once a millisecond.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_tick_us(h: *mut MachbusSession, dt_us: u64) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    h.now = h.now.add_micros(dt_us);
     h.session.tick(h.now);
     clear_last_error();
     true
@@ -1008,6 +1158,13 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.kind = MachbusEventKind::BusError;
                 out.source = port;
             }
+            crate::session::sys::BusEvent::ClockWentBackwards { .. } => {
+                out.kind = MachbusEventKind::BusError;
+            }
+            crate::session::sys::BusEvent::SendFailed { pgn, .. } => {
+                out.kind = MachbusEventKind::BusError;
+                out.spn_or_pgn = pgn;
+            }
         },
         Event::Diag(d) => match d {
             DiagEvent::Raised(dtc) => {
@@ -1067,6 +1224,18 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.d0 = d.hdop;
                 out.d1 = d.vdop;
                 out.u0 = (d.tdop * 1000.0) as u32;
+            }
+            GnssEvent::PositionStale { silent_for_ms } => {
+                out.kind = MachbusEventKind::GnssPositionStale;
+                out.u0 = silent_for_ms;
+            }
+            GnssEvent::FixDegraded { fix_type } => {
+                out.kind = MachbusEventKind::GnssFixDegraded;
+                out.fmi_or_sub = fix_type.as_u8();
+            }
+            GnssEvent::FixRestored { fix_type } => {
+                out.kind = MachbusEventKind::GnssFixRestored;
+                out.fmi_or_sub = fix_type.as_u8();
             }
             GnssEvent::SystemTime(t) => {
                 out.kind = MachbusEventKind::GnssSystemTime;
@@ -1163,7 +1332,7 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
             FsEvent::SeekResponse { tan, result } => {
                 out.kind = MachbusEventKind::FsSeekResponse;
                 out.fmi_or_sub = tan;
-                classify_fs_result(result, out, |()| 0);
+                classify_fs_result(result, out, |position| position);
             }
             FsEvent::CurrentDirectoryResponse { tan, result } => {
                 out.kind = MachbusEventKind::FsCurrentDirectoryResponse;
@@ -1285,6 +1454,10 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
                 out.kind = MachbusEventKind::TcServerStateChanged;
                 out.u0 = state as u32;
             }
+            TcServerEvent::ClientDisconnected { address } => {
+                out.kind = MachbusEventKind::TcServerClientDisconnected;
+                out.source = address;
+            }
             TcServerEvent::ClientVersionReceived { address, version } => {
                 out.kind = MachbusEventKind::TcServerClientVersionReceived;
                 out.source = address;
@@ -1333,11 +1506,37 @@ fn classify_event(ev: Event, out: &mut MachbusEvent) {
             } => {
                 out.kind = MachbusEventKind::GuidanceMachineInfo;
                 out.source = source;
-                // d0 = estimated curvature (1/km); fmi_or_sub = steering-ready
+                // d0 = estimated curvature (1/km), NaN when the steering
+                // system reports it as not-available; fmi_or_sub = steering-ready
                 // flag (1 = ready); u0 = raw guidance limit status byte.
-                out.d0 = estimated_curvature;
+                out.d0 = estimated_curvature.unwrap_or(f64::NAN);
                 out.fmi_or_sub = u8::from(steering_ready);
                 out.u0 = u32::from(limit_status);
+            }
+            GuidanceEvent::LinkLost {
+                silent_for_ms,
+                was_engaged,
+            } => {
+                out.kind = MachbusEventKind::GuidanceLinkLost;
+                out.fmi_or_sub = u8::from(was_engaged);
+                out.u0 = silent_for_ms;
+            }
+            GuidanceEvent::LinkRestored { source } => {
+                out.kind = MachbusEventKind::GuidanceLinkRestored;
+                out.source = source;
+            }
+        },
+        Event::Autodrive(a) => match a {
+            crate::session::sys::AutodriveEvent::StateChanged { status } => {
+                out.kind = MachbusEventKind::AutodriveStateChanged;
+                out.fmi_or_sub = status.as_u8();
+            }
+            crate::session::sys::AutodriveEvent::SafeStop { trigger } => {
+                out.kind = MachbusEventKind::AutodriveSafeStop;
+                out.u0 = trigger.as_code();
+            }
+            _ => {
+                out.kind = MachbusEventKind::AutodriveStateChanged;
             }
         },
         Event::Custom { pgn, source, data } => {
@@ -1409,6 +1608,7 @@ pub extern "C" fn machbus_session_diag_raise(
         spn,
         fmi: Fmi::from_u8(fmi),
         occurrence_count,
+        conversion_method: false,
     });
     clear_last_error();
     true
@@ -1607,14 +1807,50 @@ pub extern "C" fn machbus_session_implement_command_aux_valve(
 
 // ─── Guidance (autosteer) ─────────────────────────────────────────────
 
-/// Command the steering system to follow a path **curvature** in 1/km
-/// (`0.0` = straight; sign follows the ISO 11783-7 wire convention). Broadcast
-/// on the next tick as a Guidance System Command (PGN 0xAD00). Requires the
-/// guidance subsystem.
+
+
+
+
+
+
+/// Move AutoDrive to *ready to enable*: the machine is answering and nothing
+/// is blocking, but no setpoint is being commanded yet. Returns `false` and
+/// sets the last error to the first unmet precondition.
 #[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_curvature(
+pub extern "C" fn machbus_session_autodrive_arm(h: *mut MachbusSession) -> bool {
+    autodrive_action(h, AutoDrive::arm)
+}
+
+/// Begin commanding. The setpoint reaches the bus on the next tick.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_engage(h: *mut MachbusSession) -> bool {
+    autodrive_action(h, AutoDrive::engage)
+}
+
+/// Stop commanding and fall back to the safe state. Never refused.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_disengage(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    d.disengage(crate::safety::SafeStopTrigger::OperatorOverride);
+    clear_last_error();
+    true
+}
+
+/// Replace the setpoint: `curvature_km_inv` (right-positive, AEF D.7.2.1) and
+/// `speed_mps`. Pass a non-finite value for either to leave that axis
+/// uncommanded. Returns `false` with the refusal in the last error.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_command(
     h: *mut MachbusSession,
-    curvature_per_km: f64,
+    curvature_km_inv: f64,
+    speed_mps: f64,
 ) -> bool {
     let h = match handle_mut(h) {
         Ok(h) => h,
@@ -1623,152 +1859,113 @@ pub extern "C" fn machbus_session_guidance_command_curvature(
             return false;
         }
     };
-    let g = plugin_mut!(h, Guidance);
-    g.command_curvature(curvature_per_km);
-    clear_last_error();
-    true
-}
-
-/// Command a turn of the given **radius in metres** (curvature = 1000 / radius;
-/// a zero or non-finite radius commands straight ahead). Requires the guidance
-/// subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_radius(
-    h: *mut MachbusSession,
-    radius_m: f64,
-) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
+    let cmd = crate::session::DriveCommand {
+        curvature_km_inv: curvature_km_inv.is_finite().then_some(curvature_km_inv),
+        speed_mps: speed_mps.is_finite().then_some(speed_mps),
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    match d.command(cmd) {
+        Ok(()) => {
+            clear_last_error();
+            true
         }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_radius(radius_m);
-    clear_last_error();
-    true
-}
-
-/// Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
-/// forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
-/// positive). Sends both the steering curvature (`κ = ω / v`, PGN 0xAD00) and
-/// the target speed (PGN 0xFD43). Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_velocity(
-    h: *mut MachbusSession,
-    linear_mps: f64,
-    angular_rad_s: f64,
-) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
+        Err(refusal) => {
+            set_last_error(alloc::format!(
+                "autodrive command refused: {}",
+                refusal.as_str()
+            ));
+            false
         }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_velocity(linear_mps, angular_rad_s);
-    clear_last_error();
-    true
-}
-
-/// Command straight-ahead (zero curvature). Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_command_straight(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.command_straight();
-    clear_last_error();
-    true
-}
-
-/// Request the steering ECU to engage and steer to the commanded curvature
-/// (sets the Curvature Command Status to *intended to steer* on PGN 0xAD00 and
-/// re-sends the last curvature). The ECU only steers if it reports itself ready.
-/// Requires the guidance subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_engage(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.engage();
-    clear_last_error();
-    true
-}
-
-/// Stop requesting steering: clears the engage request and commands straight
-/// (curvature `0.0`, status *not intended to steer*). Requires the guidance
-/// subsystem.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_disengage(h: *mut MachbusSession) -> bool {
-    let h = match handle_mut(h) {
-        Ok(h) => h,
-        Err(e) => {
-            set_last_error(e);
-            return false;
-        }
-    };
-    let g = plugin_mut!(h, Guidance);
-    g.disengage();
-    clear_last_error();
-    true
-}
-
-/// Whether the controller is currently requesting steering (its own intent, not
-/// the ECU's readiness). Returns `false` if the guidance subsystem is unplugged.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_is_engaged(h: *const MachbusSession) -> bool {
-    handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .map(|g| g.is_engaged())
-        .unwrap_or(false)
-}
-
-/// Write the steering system's last estimated curvature (1/km) into `out`.
-/// Returns `false` (without setting an error) when no machine info has arrived
-/// yet, or when the guidance subsystem is not plugged.
-#[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_estimated_curvature(
-    h: *const MachbusSession,
-    out: *mut f64,
-) -> bool {
-    let Some(curvature) = handle_ref(h)
-        .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .and_then(|g| g.estimated_curvature())
-    else {
-        return false;
-    };
-    if !out.is_null() {
-        // SAFETY: caller-provided writable pointer.
-        unsafe { *out = curvature };
     }
-    true
 }
 
-/// Whether the steering system last reported it is ready/engaged to steer.
-/// Returns `false` if no machine info has arrived or the subsystem is unplugged.
+/// Release a latched safe stop. Refused, with `false` and a last-error string,
+/// while the operator is still holding the Auxiliary Shortcut Button or a GNSS
+/// hazard is live.
 #[unsafe(no_mangle)]
-pub extern "C" fn machbus_session_guidance_is_steering_ready(h: *const MachbusSession) -> bool {
+pub extern "C" fn machbus_session_autodrive_clear_stop(h: *mut MachbusSession) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    match d.clear_stop() {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(format!("autodrive clear_stop refused: {}", refusal.as_str()));
+            false
+        }
+    }
+}
+
+/// Why AutoDrive stopped, or [`MachbusSafeStopTrigger::None`] when no stop is
+/// latched.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_stop_reason(
+    h: *const MachbusSession,
+) -> MachbusSafeStopTrigger {
+    MachbusSafeStopTrigger::from_trigger(
+        handle_ref(h)
+            .ok()
+            .and_then(|h| h.session.get::<AutoDrive>())
+            .and_then(AutoDrive::stop_reason),
+    )
+}
+
+/// Whether AutoDrive is actively commanding the machine.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_is_engaged(h: *const MachbusSession) -> bool {
     handle_ref(h)
         .ok()
-        .and_then(|h| h.session.get::<Guidance>())
-        .map(|g| g.is_steering_ready())
-        .unwrap_or(false)
+        .and_then(|h| h.session.get::<AutoDrive>())
+        .is_some_and(AutoDrive::is_engaged)
 }
+
+/// The AutoDrive automation status as its raw ISO 11783-7 Table 45 value, or
+/// `0xFF` when the subsystem is not plugged.
+#[unsafe(no_mangle)]
+pub extern "C" fn machbus_session_autodrive_status(h: *const MachbusSession) -> u8 {
+    handle_ref(h)
+        .ok()
+        .and_then(|h| h.session.get::<AutoDrive>())
+        .map_or(0xFF, |d| d.status().as_u8())
+}
+
+fn autodrive_action(
+    h: *mut MachbusSession,
+    action: fn(&mut AutoDrive) -> Result<(), crate::session::AutodriveRefusal>,
+) -> bool {
+    let h = match handle_mut(h) {
+        Ok(h) => h,
+        Err(e) => {
+            set_last_error(e);
+            return false;
+        }
+    };
+    let d = plugin_mut!(h, AutoDrive);
+    match action(d) {
+        Ok(()) => {
+            clear_last_error();
+            true
+        }
+        Err(refusal) => {
+            set_last_error(alloc::format!("autodrive refused: {}", refusal.as_str()));
+            false
+        }
+    }
+}
+
+
+
+
+
+
 
 // ─── VT client ────────────────────────────────────────────────────────
 
@@ -1837,3 +2034,65 @@ pub extern "C" fn machbus_session_vt_show(h: *mut MachbusSession, object_id: u16
     bool_result(vt.show(ObjectID(object_id)))
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::pgn_defs::PGN_SHORTCUT_BUTTON;
+    use crate::net::{BROADCAST_ADDRESS, Identifier, Priority};
+
+    /// B8 — `clear_stop` became a conditional no-op without the bindings that
+    /// report its outcome being touched. Both C functions answered
+    /// unconditional success and additionally cleared the last error, so an HMI
+    /// showed the fault cleared and re-enabled Engage with the latch still set.
+    /// Driven through the C entry points, because that is where the defect was.
+    #[test]
+    fn the_c_abi_reports_a_refused_clear_stop() {
+        fn isb_frame(state: u8) -> (u32, [u8; 8]) {
+            let id =
+                Identifier::encode(Priority::Default, PGN_SHORTCUT_BUTTON, 0x26, BROADCAST_ADDRESS);
+            (
+                id.raw,
+                [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFC | state],
+            )
+        }
+
+        {
+            let cfg = MachbusConfig {
+                enable_autodrive: true,
+                ..MachbusConfig::default()
+            };
+            let h = machbus_session_new(&raw const cfg);
+            assert!(!h.is_null());
+            assert!(machbus_session_start_address_claim(h));
+            for _ in 0..30 {
+                assert!(machbus_session_tick(h, 100));
+            }
+
+            let clear = machbus_session_autodrive_clear_stop;
+
+            // Operator holds the stop.
+            let (id, data) = isb_frame(0);
+            assert!(machbus_session_feed(h, 0, id, data.as_ptr(), data.len()));
+            assert!(machbus_session_tick(h, 100));
+
+            assert!(!clear(h), "a held ISB must refuse the clear");
+            let err = machbus_session_last_error();
+            assert!(!err.is_null(), "the refusal must be readable");
+            // SAFETY: non-null, NUL-terminated, owned by the thread-local slot.
+            let text = unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned();
+            assert!(
+                text.contains("stop_condition_live"),
+                "last error should name the refusal, got {text}"
+            );
+
+            // Operator releases it.
+            let (id, data) = isb_frame(1);
+            assert!(machbus_session_feed(h, 0, id, data.as_ptr(), data.len()));
+            assert!(machbus_session_tick(h, 100));
+            assert!(clear(h), "a released ISB must let the clear through");
+
+            machbus_session_free(h);
+        }
+    }
+}

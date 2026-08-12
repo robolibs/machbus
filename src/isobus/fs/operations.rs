@@ -55,11 +55,6 @@ pub const fn operation_info(function: FSFunction) -> FSOperationInfo {
         F::GetFileAttributes => (C::File, false, false),
         F::SetFileAttributes => (C::File, true, false),
         F::GetFileDateTime => (C::File, false, false),
-        F::MakeDirectory => (C::Directory, true, false),
-        F::RemoveDirectory => (C::Directory, true, false),
-        F::CopyFile => (C::File, true, false),
-        F::GetFileSize => (C::File, false, false),
-        F::GetFreeSpace => (C::Volume, false, false),
         F::InitializeVolume => (C::Volume, true, false),
         F::FileServerStatus => (C::Server, false, false),
         F::GetFileServerProperties => (C::Server, false, false),
@@ -73,8 +68,11 @@ pub const fn operation_info(function: FSFunction) -> FSOperationInfo {
     }
 }
 
-/// Every file-server operation, in function-code order — the full matrix.
-pub const ALL_OPERATIONS: [FSFunction; 21] = [
+/// Every file-server operation, in command-byte order — the full matrix.
+pub const ALL_OPERATIONS: [FSFunction; 16] = [
+    FSFunction::FileServerStatus,
+    FSFunction::GetFileServerProperties,
+    FSFunction::VolumeStatus,
     FSFunction::GetCurrentDirectory,
     FSFunction::ChangeDirectory,
     FSFunction::OpenFile,
@@ -87,15 +85,7 @@ pub const ALL_OPERATIONS: [FSFunction; 21] = [
     FSFunction::GetFileAttributes,
     FSFunction::SetFileAttributes,
     FSFunction::GetFileDateTime,
-    FSFunction::MakeDirectory,
-    FSFunction::RemoveDirectory,
-    FSFunction::CopyFile,
-    FSFunction::GetFileSize,
-    FSFunction::GetFreeSpace,
     FSFunction::InitializeVolume,
-    FSFunction::FileServerStatus,
-    FSFunction::GetFileServerProperties,
-    FSFunction::VolumeStatus,
 ];
 
 /// Convenience: `true` if the operation can change stored data/metadata.
@@ -116,7 +106,7 @@ mod tests {
             // The byte code round-trips through the enum.
             assert_eq!(FSFunction::try_from_u8(f.as_u8()), Some(f));
         }
-        assert_eq!(ALL_OPERATIONS.len(), 21);
+        assert_eq!(ALL_OPERATIONS.len(), 16);
     }
 
     #[test]
@@ -132,9 +122,6 @@ mod tests {
                 FSFunction::MoveFile,
                 FSFunction::DeleteFile,
                 FSFunction::SetFileAttributes,
-                FSFunction::MakeDirectory,
-                FSFunction::RemoveDirectory,
-                FSFunction::CopyFile,
                 FSFunction::InitializeVolume,
             ]
         );

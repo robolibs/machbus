@@ -8,8 +8,13 @@ fn decode_response_error(response: &[u8]) -> Result<FSError, FSError> {
     Ok(FSError::from_u8(raw_error))
 }
 
-fn is_valid_one_byte_file_path(path: &str) -> bool {
-    path.is_ascii() && path.len() <= u8::MAX as usize && is_valid_fs_path(path, true, false)
+/// B.12 Path Name Length is two bytes, so the whole path may run to 65535
+/// bytes; A.2.2.1 caps each individual name component at 255, which
+/// [`is_valid_fs_path`] already enforces.
+pub(crate) const FS_MAX_PATH_LEN: usize = u16::MAX as usize;
+
+fn is_valid_counted_file_path(path: &str) -> bool {
+    path.is_ascii() && path.len() <= FS_MAX_PATH_LEN && is_valid_fs_path(path, true, false)
 }
 
 fn resolve_client_directory_response_path(
@@ -150,10 +155,7 @@ mod tests {
         let mut c = FileClient::new(FileClientConfig::default());
         let req = c.connect_to_server(0x80).unwrap();
         let tan = req.data[1];
-        // Build response: [func, tan, error=0, props bytes]
-        let props = FileServerProperties::default();
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
+        let response = FileServerProperties::default().encode_response(tan).to_vec();
         c.handle_server_response(&server_msg(response, 0x80));
         assert!(c.is_connected());
         assert!(c.server_properties().is_some());
@@ -172,9 +174,7 @@ mod tests {
             version_number: 3,
             ..FileServerProperties::default()
         };
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
-        c.handle_server_response(&server_msg(response, 0x80));
+        c.handle_server_response(&server_msg(props.encode_response(tan).to_vec(), 0x80));
 
         assert_eq!(c.server_version(), Some(3));
         assert!(c.server_supports_version(2));
@@ -185,9 +185,7 @@ mod tests {
     fn force_connected(c: &mut FileClient) {
         let req = c.connect_to_server(0x80).unwrap();
         let tan = req.data[1];
-        let props = FileServerProperties::default();
-        let mut response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0];
-        response.extend_from_slice(&props.encode());
+        let response = FileServerProperties::default().encode_response(tan).to_vec();
         c.handle_server_response(&server_msg(response, 0x80));
         assert!(c.is_connected());
     }
@@ -421,7 +419,11 @@ mod tests {
         // Crosses cadence threshold.
         let out = c.update(60);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].data[0], CCM_FUNCTION_CODE);
+        // C.1.3: command byte 0, version number, six reserved bytes. No TAN.
+        assert_eq!(
+            out[0].data.as_slice(),
+            &[0x00, FS_VERSION_NUMBER, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        );
     }
 
     #[test]
@@ -509,7 +511,7 @@ mod tests {
         assert!(read_err.message.contains("unknown FS file handle 99"));
         let close_err = c.try_close_file(99).unwrap_err();
         assert_eq!(close_err.code, ErrorCode::InvalidData);
-        let seek_err = c.try_seek_file(99, 0).unwrap_err();
+        let seek_err = c.try_seek_file(99, super::SeekMode::Start, 0).unwrap_err();
         assert_eq!(seek_err.code, ErrorCode::InvalidData);
         let write_unknown = c.try_write_file(99, b"abc").unwrap_err();
         assert_eq!(write_unknown.code, ErrorCode::InvalidData);
@@ -580,11 +582,89 @@ mod tests {
         force_connected(&mut c);
 
         let status = FileServerStatus {
-            busy: true,
+            busy_reading: false,
+            busy_writing: true,
             number_of_open_files: 2,
         };
         c.handle_server_response(&server_msg(status.encode().to_vec(), 0x80));
 
         assert_eq!(c.server_status(), Some(status));
+    }
+
+    /// 4.3.3: "If a request response takes longer than 200 ms ... the FS shall
+    /// send the status message to indicate busy state to the client. This
+    /// provides a request timeout of 600 ms if the FS status message does not
+    /// show a busy status."
+    ///
+    /// The client used to drop a busy-writing status outright (bit 1 fell
+    /// outside its mask), so a slow flush timed out mid-write.
+    #[test]
+    fn a_busy_status_holds_pending_requests_open() {
+        let mut c = FileClient::new(FileClientConfig::default().with_request_timeout(600));
+        force_connected(&mut c);
+        let request = c.open_file("slow.bin", OpenFlags::Write.bit()).unwrap();
+        let tan = request.data[1];
+        assert!(c.pending_requests().contains_key(&tan));
+
+        let busy = FileServerStatus {
+            busy_reading: false,
+            busy_writing: true,
+            number_of_open_files: 1,
+        };
+        for _ in 0..5 {
+            c.update(400);
+            c.handle_server_response(&server_msg(busy.encode().to_vec(), 0x80));
+        }
+        assert!(
+            c.pending_requests().contains_key(&tan),
+            "a busy server must not have its client give up on the request"
+        );
+
+        // Once it stops reporting busy, the 600 ms timeout applies again.
+        c.update(700);
+        assert!(!c.pending_requests().contains_key(&tan));
+    }
+
+    /// E2 — the C.1.2 status broadcast carries no TAN: its byte 2 is the B.3
+    /// bitfield. Demultiplexing on byte 2 as a TAN made busy-reading (1),
+    /// busy-writing (2) and both (3) alias the first three TANs a client
+    /// issues, and a busy server rebroadcasts every 200 ms with the same
+    /// colliding byte — so every broadcast was dropped for the whole busy
+    /// period and the request died at 600 ms. The test above escapes it only
+    /// because busy-writing (2) does not collide with its pending TAN.
+    #[test]
+    fn a_busy_reading_broadcast_does_not_collide_with_the_matching_tan() {
+        let mut c = FileClient::new(FileClientConfig::default().with_request_timeout(600));
+        force_connected(&mut c);
+
+        // Drive the TAN allocator to 1, the value busy-reading takes on the
+        // wire. TANs start at 0 and the connect handshake burns one, so this is
+        // the ordinary state of a client a moment after connecting.
+        let tan = loop {
+            let request = c.open_file("slow.bin", OpenFlags::Read.bit()).unwrap();
+            if request.data[1] == 1 {
+                break request.data[1];
+            }
+        };
+        assert!(c.pending_requests().contains_key(&tan));
+
+        let busy_reading = FileServerStatus {
+            busy_reading: true,
+            busy_writing: false,
+            number_of_open_files: 1,
+        };
+        for _ in 0..5 {
+            c.update(400);
+            c.handle_server_response(&server_msg(busy_reading.encode().to_vec(), 0x80));
+        }
+        assert_eq!(
+            c.server_status().map(|s| s.busy_reading),
+            Some(true),
+            "the broadcast must reach the status cache, not the TAN table"
+        );
+        assert!(
+            c.pending_requests().contains_key(&tan),
+            "a busy server must not have its client give up on the request"
+        );
     }
 }

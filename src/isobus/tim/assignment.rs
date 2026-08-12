@@ -1,0 +1,856 @@
+//! AEF 023 TIM function assignment (§5.5, Annexes B.5.1 / B.5.2).
+//!
+//! Assignment is **per TIM function**, exclusively, to one client. The crate's
+//! `TimAuthorityArbiter` held a single `Option<Address>`: one client owned
+//! everything or nothing, so one client holding the rear hitch while another
+//! held a valve was unrepresentable. It was also never wired into the plugin.
+//!
+//! This module adds the request/response pair and a per-function assignment
+//! table with the 1500 ms response timeout the spec requires.
+
+use alloc::vec::Vec;
+
+use super::functions::TimFunctionId;
+use super::messages::HeartbeatCounter;
+
+/// Message code shared by request and response (A.2.3).
+pub const MSG_CODE_ASSIGNMENT: u8 = 0xF5;
+
+/// A response must arrive within this window (B.5.2).
+pub const ASSIGNMENT_TIMEOUT_MS: u32 = 1500;
+
+/// A request may not be repeated more often than this (B.5.1).
+pub const ASSIGNMENT_MIN_INTERVAL_MS: u32 = 100;
+
+/// What a client wants done with a function, byte `2i+2` bits 8-6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum RequestType {
+    /// Release this client's assignment.
+    Release = 0x0,
+    /// Take exclusive assignment.
+    Assign = 0x1,
+    Error = 0x6,
+    /// Query the current assignment without changing it.
+    #[default]
+    DontCare = 0x7,
+}
+
+impl RequestType {
+    #[must_use]
+    pub const fn from_u8(raw: u8) -> Option<Self> {
+        match raw & 0x07 {
+            0x0 => Some(Self::Release),
+            0x1 => Some(Self::Assign),
+            0x6 => Some(Self::Error),
+            0x7 => Some(Self::DontCare),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Outcome for one function, byte `2i+2` bits 8-6 of the response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum AssignmentStatus {
+    NotAssignedToRequester = 0x0,
+    AssignedToRequester = 0x1,
+    NotSuccessful = 0x5,
+    Error = 0x6,
+    #[default]
+    NotAvailable = 0x7,
+}
+
+impl AssignmentStatus {
+    #[must_use]
+    pub const fn from_u8(raw: u8) -> Option<Self> {
+        match raw & 0x07 {
+            0x0 => Some(Self::NotAssignedToRequester),
+            0x1 => Some(Self::AssignedToRequester),
+            0x5 => Some(Self::NotSuccessful),
+            0x6 => Some(Self::Error),
+            0x7 => Some(Self::NotAvailable),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Why an assignment did not succeed, byte `2i+2` bits 5-1 of the response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum AssignmentReason {
+    #[default]
+    AllClear = 0x00,
+    /// The server does not implement this function.
+    FunctionNotSupported = 0x01,
+    /// Implemented, but not available right now.
+    FunctionNotAvailable = 0x02,
+    UnknownRequestType = 0x03,
+    /// e.g. the function count does not match the patterns that follow.
+    ErrorInRequestMessage = 0x04,
+    /// The client's certificate does not cover this function.
+    ClientNotCertified = 0x05,
+    /// The server is already handling another assignment request.
+    ServerBusy = 0x06,
+    /// No facility on either side matches the requested function.
+    NoMatchingFacility = 0x07,
+    AnyOtherError = 0x1E,
+    NotAvailable = 0x1F,
+}
+
+impl AssignmentReason {
+    #[must_use]
+    pub const fn from_u8(raw: u8) -> Option<Self> {
+        match raw & 0x1F {
+            0x00 => Some(Self::AllClear),
+            0x01 => Some(Self::FunctionNotSupported),
+            0x02 => Some(Self::FunctionNotAvailable),
+            0x03 => Some(Self::UnknownRequestType),
+            0x04 => Some(Self::ErrorInRequestMessage),
+            0x05 => Some(Self::ClientNotCertified),
+            0x06 => Some(Self::ServerBusy),
+            0x07 => Some(Self::NoMatchingFacility),
+            0x1E => Some(Self::AnyOtherError),
+            0x1F => Some(Self::NotAvailable),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// `TIM_FunctionsAssignmentRequest` (B.5.1).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AssignmentRequest {
+    pub entries: Vec<(TimFunctionId, RequestType)>,
+}
+
+impl AssignmentRequest {
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(2 + self.entries.len() * 2);
+        data.push(MSG_CODE_ASSIGNMENT);
+        data.push(self.entries.len() as u8);
+        for (id, request) in &self.entries {
+            data.push(id.as_u8());
+            // Bits 5-1 are reserved and travel as ones.
+            data.push((request.as_u8() << 5) | 0x1F);
+        }
+        data
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 2 || data[0] != MSG_CODE_ASSIGNMENT {
+            return None;
+        }
+        let count = data[1] as usize;
+        // "Error in request message (e.g. number of functions does not match
+        // number of patterns that follow)" — B.5.2 reason 0x04.
+        if data.len() < 2 + count * 2 {
+            return None;
+        }
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
+            let id = TimFunctionId::from_u8(data[2 + i * 2])?;
+            let request = RequestType::from_u8(data[3 + i * 2] >> 5)?;
+            entries.push((id, request));
+        }
+        Some(Self { entries })
+    }
+}
+
+/// `TIM_FunctionsAssignmentResponse` (B.5.2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AssignmentResponse {
+    pub entries: Vec<(TimFunctionId, AssignmentStatus, AssignmentReason)>,
+}
+
+impl AssignmentResponse {
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(2 + self.entries.len() * 2);
+        data.push(MSG_CODE_ASSIGNMENT);
+        data.push(self.entries.len() as u8);
+        for (id, status, reason) in &self.entries {
+            data.push(id.as_u8());
+            data.push((status.as_u8() << 5) | (reason.as_u8() & 0x1F));
+        }
+        data
+    }
+
+    #[must_use]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 2 || data[0] != MSG_CODE_ASSIGNMENT {
+            return None;
+        }
+        let count = data[1] as usize;
+        if data.len() < 2 + count * 2 {
+            return None;
+        }
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
+            let id = TimFunctionId::from_u8(data[2 + i * 2])?;
+            let packed = data[3 + i * 2];
+            entries.push((
+                TimFunctionId::from_u8(id.as_u8())?,
+                AssignmentStatus::from_u8(packed >> 5)?,
+                AssignmentReason::from_u8(packed & 0x1F)?,
+            ));
+        }
+        Some(Self { entries })
+    }
+}
+
+/// A `TIM_ClientStatus_Msg` is expected at least this often (Annex C.3).
+pub const CLIENT_STATUS_TIMEOUT_MS: u32 = 300;
+
+/// Server-side per-function exclusive assignment table (§5.5.1).
+#[derive(Debug, Default)]
+pub struct AssignmentTable {
+    /// One owner per function. A `BTreeMap` would do; functions are few enough
+    /// that a sorted vector avoids the dependency and keeps `no_std` simple.
+    owners: Vec<(TimFunctionId, u8)>,
+    /// Functions this server implements at all.
+    supported: Vec<TimFunctionId>,
+    /// A request is being processed; further ones get `ServerBusy` (§5.5.3).
+    busy: bool,
+    /// Per-client time since the last `TIM_ClientStatus_Msg`, in milliseconds.
+    ///
+    /// §5.5.3: "a timeout of OR heartbeat counter error in TIM_ClientStatus_Msg
+    /// ... it shall release all TIM function assignments of that TIM client",
+    /// with a 300 ms timeout (C.3). `release_all` existed and was reachable
+    /// from none of those triggers, so a client that died mid-field kept
+    /// steering and speed assigned to itself forever and no other client could
+    /// take over.
+    liveness: Vec<(u8, u32)>,
+    /// Clients that have completed mutual authentication.
+    ///
+    /// AEF §4.3 makes successful mutual authentication the precondition for TIM
+    /// automation. Without this the table handed out External Guidance and
+    /// Vehicle Speed — steering and throttle — to any address that asked.
+    authenticated: Vec<u8>,
+}
+
+impl AssignmentTable {
+    #[must_use]
+    pub fn new(supported: &[TimFunctionId]) -> Self {
+        Self {
+            owners: Vec::new(),
+            supported: supported.to_vec(),
+            busy: false,
+            liveness: Vec::new(),
+            authenticated: Vec::new(),
+        }
+    }
+
+    /// Record a `TIM_ClientStatus_Msg` from `client`, resetting its watchdog.
+    pub fn note_client_status(&mut self, client: u8) {
+        if let Some(entry) = self.liveness.iter_mut().find(|(a, _)| *a == client) {
+            entry.1 = 0;
+        } else {
+            self.liveness.push((client, 0));
+        }
+    }
+
+    /// A heartbeat-counter error from `client` — §5.5.3 releases immediately,
+    /// without waiting out the timeout.
+    pub fn note_client_heartbeat_error(&mut self, client: u8) {
+        self.release_all(client);
+        self.liveness.retain(|(a, _)| *a != client);
+    }
+
+    /// Route a client's heartbeat counter to the §5.3.3.1.2 outcome it demands.
+    ///
+    /// `follows` alone judges sequence continuity, and the special values are
+    /// not sequence positions — so a peer explicitly reporting "error condition
+    /// on sender" (0xFE), or one announcing a graceful shutdown (0xFF), read as
+    /// a peer in good order and kept its assignments. Both must release.
+    ///
+    /// Returns `true` if the client's assignments were released.
+    pub fn note_client_heartbeat(
+        &mut self,
+        client: u8,
+        counter: HeartbeatCounter,
+        previous: HeartbeatCounter,
+    ) -> bool {
+        if counter.is_severe_comms_error() || !counter.follows(previous) {
+            self.note_client_heartbeat_error(client);
+            return true;
+        }
+        if counter.is_graceful_shutdown_edge(previous) {
+            // A deliberate stop, not a fault: release, but do not escalate.
+            self.release_all(client);
+            self.liveness.retain(|(a, _)| *a != client);
+            return true;
+        }
+        self.note_client_status(client);
+        false
+    }
+
+    /// Advance the per-client status watchdogs. Returns the clients whose
+    /// assignments were released because their status message timed out.
+    pub fn tick(&mut self, elapsed_ms: u32) -> Vec<u8> {
+        let mut released = Vec::new();
+        for (client, age) in &mut self.liveness {
+            *age = age.saturating_add(elapsed_ms);
+            if *age >= CLIENT_STATUS_TIMEOUT_MS {
+                released.push(*client);
+            }
+        }
+        for client in &released {
+            self.owners.retain(|(_, a)| a != client);
+            self.liveness.retain(|(a, _)| a != client);
+        }
+        released
+    }
+
+    /// Record that `client` completed mutual authentication (AEF §4.3).
+    pub fn set_authenticated(&mut self, client: u8, authenticated: bool) {
+        if authenticated {
+            if !self.authenticated.contains(&client) {
+                self.authenticated.push(client);
+            }
+        } else {
+            self.authenticated.retain(|a| *a != client);
+            // Losing authentication also loses everything it authorised.
+            self.release_all(client);
+        }
+    }
+
+    /// `true` when `client` has completed mutual authentication.
+    #[must_use]
+    pub fn is_authenticated(&self, client: u8) -> bool {
+        self.authenticated.contains(&client)
+    }
+
+    /// Who owns `function`, if anyone.
+    #[must_use]
+    pub fn owner(&self, function: TimFunctionId) -> Option<u8> {
+        self.owners
+            .iter()
+            .find(|(f, _)| *f == function)
+            .map(|(_, a)| *a)
+    }
+
+    /// `true` when `client` may command `function`.
+    #[must_use]
+    pub fn is_assigned_to(&self, function: TimFunctionId, client: u8) -> bool {
+        self.owner(function) == Some(client)
+    }
+
+    /// Mark the server as handling a request, so concurrent ones are refused.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+    }
+
+    /// Release everything held by `client` — used on status timeout, heartbeat
+    /// error, or a shutdown without an explicit release (§5.5.3).
+    pub fn release_all(&mut self, client: u8) {
+        self.owners.retain(|(_, a)| *a != client);
+    }
+
+    /// Apply a request from `client` and produce the response.
+    ///
+    /// One request is serialised at a time; a second concurrent one is answered
+    /// `ServerBusy` rather than interleaved.
+    #[must_use]
+    pub fn apply(&mut self, request: &AssignmentRequest, client: u8) -> AssignmentResponse {
+        let mut entries = Vec::with_capacity(request.entries.len());
+
+        for (function, request_type) in &request.entries {
+            let (status, reason) = if self.busy {
+                (
+                    AssignmentStatus::NotSuccessful,
+                    AssignmentReason::ServerBusy,
+                )
+            } else if !self.supported.contains(function) {
+                (
+                    AssignmentStatus::NotSuccessful,
+                    AssignmentReason::FunctionNotSupported,
+                )
+            } else if !self.is_authenticated(client)
+                && !matches!(request_type, RequestType::Release)
+            {
+                // §4.3: authentication gates automation. A *release* is always
+                // honoured — refusing to let go is never the safe answer.
+                (
+                    AssignmentStatus::NotSuccessful,
+                    AssignmentReason::ClientNotCertified,
+                )
+            } else {
+                match request_type {
+                    RequestType::Assign => match self.owner(*function) {
+                        // Already ours: idempotent.
+                        Some(owner) if owner == client => (
+                            AssignmentStatus::AssignedToRequester,
+                            AssignmentReason::AllClear,
+                        ),
+                        // Held by someone else: exclusivity means refusal.
+                        Some(_) => (
+                            AssignmentStatus::NotSuccessful,
+                            AssignmentReason::FunctionNotAvailable,
+                        ),
+                        None => {
+                            self.owners.push((*function, client));
+                            // §5.5.3's release only fires for a client already
+                            // in `liveness`, i.e. one heard from at least once.
+                            // A client that requests External Guidance and
+                            // Vehicle Speed and then dies before its first
+                            // status — power loss during the handshake is the
+                            // ordinary case, since B.5.2 gives the response
+                            // 1500 ms while C.3 wants a status every 100 ms —
+                            // owned both driving functions forever: `apply`
+                            // answers `FunctionNotAvailable` to everyone else
+                            // and nothing in the table could free them. Anything
+                            // that holds an assignment is on the watchdog from
+                            // the moment it holds it.
+                            self.note_client_status(client);
+                            (
+                                AssignmentStatus::AssignedToRequester,
+                                AssignmentReason::AllClear,
+                            )
+                        }
+                    },
+                    RequestType::Release => {
+                        if self.owner(*function) == Some(client) {
+                            self.owners.retain(|(f, _)| f != function);
+                        }
+                        (
+                            AssignmentStatus::NotAssignedToRequester,
+                            AssignmentReason::AllClear,
+                        )
+                    }
+                    RequestType::DontCare => {
+                        // A pure query never changes the assignment.
+                        if self.is_assigned_to(*function, client) {
+                            (
+                                AssignmentStatus::AssignedToRequester,
+                                AssignmentReason::AllClear,
+                            )
+                        } else {
+                            (
+                                AssignmentStatus::NotAssignedToRequester,
+                                AssignmentReason::AllClear,
+                            )
+                        }
+                    }
+                    RequestType::Error => (
+                        AssignmentStatus::NotSuccessful,
+                        AssignmentReason::UnknownRequestType,
+                    ),
+                }
+            };
+            entries.push((*function, status, reason));
+        }
+
+        AssignmentResponse { entries }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CLIENT_A: u8 = 0x80;
+    const CLIENT_B: u8 = 0x81;
+
+    /// A server with both test clients already authenticated, since AEF §4.3
+    /// makes that the precondition for any assignment. The gate itself is
+    /// covered by `an_unauthenticated_client_is_refused_every_function`.
+    fn server() -> AssignmentTable {
+        let mut table = AssignmentTable::new(&[
+            TimFunctionId::ExternalGuidance,
+            TimFunctionId::VehicleSpeed,
+            TimFunctionId::RearHitch,
+            TimFunctionId::AuxValve(1),
+        ]);
+        table.set_authenticated(CLIENT_A, true);
+        table.set_authenticated(CLIENT_B, true);
+        table
+    }
+
+    /// H69 — §4.3 makes successful mutual authentication the precondition for
+    /// TIM automation. The table handed out External Guidance and Vehicle Speed
+    /// — steering and throttle — to any address that asked.
+    /// D6 — the routing side of §5.3.3.1.2: a self-declared sender error and a
+    /// graceful shutdown both release the client's assignments, where before
+    /// only a broken *sequence* did.
+    #[test]
+    fn a_declared_sender_error_releases_assignments() {
+        use super::super::messages::HeartbeatCounter;
+
+        let mut table = AssignmentTable::new(&[TimFunctionId::VehicleSpeed]);
+        table.note_client_status(0x26);
+
+        // A healthy step keeps everything.
+        assert!(!table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::Count(1),
+            HeartbeatCounter::Count(0)
+        ));
+
+        // The peer declares its own fault.
+        assert!(
+            table.note_client_heartbeat(
+                0x26,
+                HeartbeatCounter::SenderError,
+                HeartbeatCounter::Count(1)
+            ),
+            "0xFE is a severe communication error, not a healthy heartbeat"
+        );
+
+        // And a deliberate shutdown also releases, on the transition only.
+        table.note_client_status(0x26);
+        assert!(table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::GracefulShutdown,
+            HeartbeatCounter::Count(2)
+        ));
+        assert!(!table.note_client_heartbeat(
+            0x26,
+            HeartbeatCounter::GracefulShutdown,
+            HeartbeatCounter::GracefulShutdown
+        ));
+    }
+
+    #[test]
+    fn an_unauthenticated_client_is_refused_every_function() {
+        let mut table =
+            AssignmentTable::new(&[TimFunctionId::ExternalGuidance, TimFunctionId::VehicleSpeed]);
+
+        for function in [TimFunctionId::ExternalGuidance, TimFunctionId::VehicleSpeed] {
+            let response = table.apply(
+                &AssignmentRequest {
+                    entries: vec![(function, RequestType::Assign)],
+                },
+                CLIENT_A,
+            );
+            assert_eq!(response.entries[0].1, AssignmentStatus::NotSuccessful);
+            assert_eq!(response.entries[0].2, AssignmentReason::ClientNotCertified);
+            assert!(table.owner(function).is_none());
+        }
+
+        // Authenticate, and the same request succeeds.
+        table.set_authenticated(CLIENT_A, true);
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+
+        // Losing authentication takes the assignment with it.
+        table.set_authenticated(CLIENT_A, false);
+        assert!(
+            table.owner(TimFunctionId::ExternalGuidance).is_none(),
+            "authority cannot outlive the authentication that granted it"
+        );
+    }
+
+    /// H70 — §5.5.3: "a timeout of OR heartbeat counter error in
+    /// TIM_ClientStatus_Msg ... it shall release all TIM function assignments
+    /// of that TIM client". `release_all` was reachable from none of those
+    /// triggers, so a client that died mid-field kept steering and speed
+    /// assigned to itself forever and no other client could take over.
+    #[test]
+    fn a_silent_client_loses_its_assignments() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![
+                    (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                    (TimFunctionId::VehicleSpeed, RequestType::Assign),
+                ],
+            },
+            CLIENT_A,
+        );
+        table.note_client_status(CLIENT_A);
+        assert_eq!(table.owner(TimFunctionId::ExternalGuidance), Some(CLIENT_A));
+
+        // While it keeps talking, it keeps its assignments.
+        for _ in 0..10 {
+            assert!(table.tick(100).is_empty());
+            table.note_client_status(CLIENT_A);
+        }
+        assert_eq!(table.owner(TimFunctionId::VehicleSpeed), Some(CLIENT_A));
+
+        // It goes quiet past the 300 ms window.
+        let mut released = Vec::new();
+        for _ in 0..4 {
+            released.extend(table.tick(100));
+        }
+        assert_eq!(released, vec![CLIENT_A]);
+        assert!(table.owner(TimFunctionId::ExternalGuidance).is_none());
+        assert!(table.owner(TimFunctionId::VehicleSpeed).is_none());
+
+        // And the function is now free for another client to take.
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_B,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+    }
+
+    /// K2 — §5.5.3's release only fired for a client already in `liveness`,
+    /// i.e. one heard from at least once. A client that requests External
+    /// Guidance and Vehicle Speed and then dies before its first status — power
+    /// loss during the handshake is the ordinary case, since B.5.2 gives the
+    /// response 1500 ms while C.3 wants a status every 100 ms — owned both
+    /// driving functions for the life of the process: `apply` answered
+    /// `FunctionNotAvailable` to everyone else and nothing in the table could
+    /// free them, so the operator's replacement guidance system was locked out
+    /// of steering and speed.
+    #[test]
+    fn a_client_that_dies_before_its_first_status_does_not_keep_the_functions() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![
+                    (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                    (TimFunctionId::VehicleSpeed, RequestType::Assign),
+                ],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(table.owner(TimFunctionId::ExternalGuidance), Some(CLIENT_A));
+
+        // It never sends a status at all.
+        let mut released = Vec::new();
+        for _ in 0..4 {
+            released.extend(table.tick(100));
+        }
+        assert_eq!(released, vec![CLIENT_A]);
+        assert!(table.owner(TimFunctionId::ExternalGuidance).is_none());
+        assert!(table.owner(TimFunctionId::VehicleSpeed).is_none());
+
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_B,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+    }
+
+    /// A heartbeat-counter error releases immediately, without waiting out the
+    /// timeout.
+    #[test]
+    fn a_heartbeat_error_releases_without_waiting() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        table.note_client_status(CLIENT_A);
+        assert_eq!(table.owner(TimFunctionId::RearHitch), Some(CLIENT_A));
+
+        table.note_client_heartbeat_error(CLIENT_A);
+        assert!(table.owner(TimFunctionId::RearHitch).is_none());
+    }
+
+    /// A release is always honoured: refusing to let go is never the safe
+    /// answer, even from a client whose authentication has lapsed.
+    #[test]
+    fn a_release_is_honoured_without_authentication() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(table.owner(TimFunctionId::RearHitch), Some(CLIENT_A));
+
+        table.authenticated.retain(|a| *a != CLIENT_A);
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Release)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(
+            response.entries[0].1,
+            AssignmentStatus::NotAssignedToRequester
+        );
+        assert!(table.owner(TimFunctionId::RearHitch).is_none());
+    }
+
+    #[test]
+    fn assignment_is_per_function_not_per_client() {
+        // The defect this replaces: a single Option<Address> meant one client
+        // owned everything or nothing.
+        let mut table = server();
+        let hitch = AssignmentRequest {
+            entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+        };
+        let valve = AssignmentRequest {
+            entries: vec![(TimFunctionId::AuxValve(1), RequestType::Assign)],
+        };
+
+        let _ = table.apply(&hitch, CLIENT_A);
+        let _ = table.apply(&valve, CLIENT_B);
+
+        assert!(table.is_assigned_to(TimFunctionId::RearHitch, CLIENT_A));
+        assert!(table.is_assigned_to(TimFunctionId::AuxValve(1), CLIENT_B));
+        assert!(!table.is_assigned_to(TimFunctionId::RearHitch, CLIENT_B));
+    }
+
+    #[test]
+    fn a_held_function_is_refused_to_a_second_client() {
+        let mut table = server();
+        let request = AssignmentRequest {
+            entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+        };
+        let _ = table.apply(&request, CLIENT_A);
+
+        let response = table.apply(&request, CLIENT_B);
+        assert_eq!(
+            response.entries[0],
+            (
+                TimFunctionId::ExternalGuidance,
+                AssignmentStatus::NotSuccessful,
+                AssignmentReason::FunctionNotAvailable
+            )
+        );
+        // The original owner keeps it.
+        assert!(table.is_assigned_to(TimFunctionId::ExternalGuidance, CLIENT_A));
+    }
+
+    #[test]
+    fn unsupported_functions_say_so_rather_than_failing_silently() {
+        let mut table = server();
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::FrontPto, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::NotSuccessful);
+        assert_eq!(
+            response.entries[0].2,
+            AssignmentReason::FunctionNotSupported
+        );
+    }
+
+    #[test]
+    fn a_query_does_not_change_the_assignment() {
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::VehicleSpeed, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+
+        let query = AssignmentRequest {
+            entries: vec![(TimFunctionId::VehicleSpeed, RequestType::DontCare)],
+        };
+        let as_owner = table.apply(&query, CLIENT_A);
+        assert_eq!(as_owner.entries[0].1, AssignmentStatus::AssignedToRequester);
+
+        let as_other = table.apply(&query, CLIENT_B);
+        assert_eq!(
+            as_other.entries[0].1,
+            AssignmentStatus::NotAssignedToRequester
+        );
+        assert!(table.is_assigned_to(TimFunctionId::VehicleSpeed, CLIENT_A));
+    }
+
+    #[test]
+    fn losing_a_client_releases_everything_it_held() {
+        // Section 5.5.3: status timeout, heartbeat error or a shutdown without
+        // release must free the functions.
+        let mut table = server();
+        let _ = table.apply(
+            &AssignmentRequest {
+                entries: vec![
+                    (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                    (TimFunctionId::VehicleSpeed, RequestType::Assign),
+                ],
+            },
+            CLIENT_A,
+        );
+        assert!(table.is_assigned_to(TimFunctionId::ExternalGuidance, CLIENT_A));
+
+        table.release_all(CLIENT_A);
+        assert_eq!(table.owner(TimFunctionId::ExternalGuidance), None);
+        assert_eq!(table.owner(TimFunctionId::VehicleSpeed), None);
+
+        // And the functions are then available to someone else.
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::ExternalGuidance, RequestType::Assign)],
+            },
+            CLIENT_B,
+        );
+        assert_eq!(response.entries[0].1, AssignmentStatus::AssignedToRequester);
+    }
+
+    #[test]
+    fn concurrent_requests_are_serialised_with_server_busy() {
+        let mut table = server();
+        table.set_busy(true);
+        let response = table.apply(
+            &AssignmentRequest {
+                entries: vec![(TimFunctionId::RearHitch, RequestType::Assign)],
+            },
+            CLIENT_A,
+        );
+        assert_eq!(response.entries[0].2, AssignmentReason::ServerBusy);
+        assert_eq!(table.owner(TimFunctionId::RearHitch), None);
+    }
+
+    #[test]
+    fn request_and_response_round_trip_the_annex_b5_layout() {
+        let request = AssignmentRequest {
+            entries: vec![
+                (TimFunctionId::ExternalGuidance, RequestType::Assign),
+                (TimFunctionId::VehicleSpeed, RequestType::Release),
+            ],
+        };
+        let bytes = request.encode();
+        assert_eq!(bytes[0], MSG_CODE_ASSIGNMENT);
+        assert_eq!(bytes[1], 2, "byte 2 is the function count");
+        assert_eq!(bytes[2], 0x46, "external guidance is function 0x46");
+        assert_eq!(AssignmentRequest::decode(&bytes), Some(request));
+
+        let response = AssignmentResponse {
+            entries: vec![(
+                TimFunctionId::ExternalGuidance,
+                AssignmentStatus::NotSuccessful,
+                AssignmentReason::NoMatchingFacility,
+            )],
+        };
+        let bytes = response.encode();
+        assert_eq!(bytes[3] >> 5, 0x5, "status in bits 8-6");
+        assert_eq!(bytes[3] & 0x1F, 0x7, "reason in bits 5-1");
+        assert_eq!(AssignmentResponse::decode(&bytes), Some(response));
+    }
+
+    #[test]
+    fn a_count_that_does_not_match_the_payload_is_rejected() {
+        // B.5.2 reason 0x04 exists precisely for this.
+        let truncated = [MSG_CODE_ASSIGNMENT, 3, 0x46, 0x3F];
+        assert_eq!(AssignmentRequest::decode(&truncated), None);
+        assert_eq!(AssignmentResponse::decode(&truncated), None);
+    }
+}

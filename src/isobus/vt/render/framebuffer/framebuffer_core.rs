@@ -922,8 +922,8 @@ impl FramebufferGraphicsContextState {
         if rect.w == 0 || rect.h == 0 {
             return;
         }
-        let w_i = i64::from(rect.w);
-        let h_i = i64::from(rect.h);
+        let w_i = i128::from(rect.w);
+        let h_i = i128::from(rect.h);
         let threshold = w_i * w_i * h_i * h_i;
         let cx2 = i64::from(rect.x)
             .saturating_mul(2)
@@ -967,8 +967,8 @@ impl FramebufferGraphicsContextState {
         if rect.w == 0 || rect.h == 0 {
             return;
         }
-        let w_i = i64::from(rect.w);
-        let h_i = i64::from(rect.h);
+        let w_i = i128::from(rect.w);
+        let h_i = i128::from(rect.h);
         let threshold = w_i * w_i * h_i * h_i;
         let cx2 = i64::from(rect.x)
             .saturating_mul(2)
@@ -1004,6 +1004,14 @@ impl FramebufferGraphicsContextState {
             top = top.min(y);
             right = right.max(x);
             bottom = bottom.max(y);
+        }
+        let clip = self.viewport;
+        left = left.max(clip.x);
+        top = top.max(clip.y);
+        right = right.min(clip.right().saturating_sub(1));
+        bottom = bottom.min(clip.bottom().saturating_sub(1));
+        if left > right || top > bottom {
+            return;
         }
         for y in top..=bottom {
             for x in left..=right {

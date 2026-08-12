@@ -9,7 +9,7 @@ use crate::isobus::vt::{
     ObjectID, ObjectPool, ObjectType, OutputListBody, OutputStringBody, VTObject, WindowMaskBody,
     WorkingSetSpecialControlsBody,
 };
-use std::collections::HashMap;
+use alloc::collections::BTreeMap as HashMap;
 
 /// Canvas geometry supplied to the layout engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

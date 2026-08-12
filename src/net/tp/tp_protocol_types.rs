@@ -7,7 +7,7 @@ use crate::fixed::{FixedBytes, FixedMessage};
 
 use super::constants::{
     BROADCAST_ADDRESS, CAN_DATA_LENGTH, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS, TP_BYTES_PER_FRAME,
-    TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS, TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS,
+    TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS, TP_TIMEOUT_T1_MS, TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS,
     TP_TIMEOUT_T4_MS,
 };
 use super::error::{Error, Result};
@@ -299,10 +299,13 @@ impl<const N: usize> TpRxFixed<N> {
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
 
-        if !tp_cm_reserved_bytes_are_canonical(control_byte, &frame.data)
-            || !pgn_is_valid(cm_pgn)
-            || (control_byte != tp_cm::BAM && dst == BROADCAST_ADDRESS)
-        {
+        // G3 — reserved bytes are transmitted as 1 and ignored on receive.
+        // Rejecting a peer's CTS over a zero-filled reserved byte left our
+        // transmit session in `WaitingForCTS` until T3 at 1250 ms, aborting the
+        // whole VT pool or TC DDOP upload with reason 3 and no way for the peer
+        // to see why; a dropped Conn_Abort left our half open forever, which is
+        // the exact failure the round-2 fix three lines below was written for.
+        if !pgn_is_valid(cm_pgn) || (control_byte != tp_cm::BAM && dst == BROADCAST_ADDRESS) {
             return Ok(TpRxFixedOutcome::default());
         }
 

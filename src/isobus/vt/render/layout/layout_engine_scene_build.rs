@@ -476,12 +476,12 @@ impl LayoutEngine {
     ) {
         let id = placement.id;
 
-        // Cycle guard: stop if this id is already on the active path.
-        if state.path.contains(&id) {
+        // Cycle guard & max depth guard: stop if max depth exceeded or id is on the active path.
+        if state.path.len() >= 32 || state.path.contains(&id) {
             state.scene.unsupported.push(UnsupportedRecord {
                 id,
                 object_type: ObjectType::Container,
-                reason: "reference cycle detected while laying out children",
+                reason: "reference cycle or recursion limit exceeded",
             });
             return;
         }
@@ -779,6 +779,7 @@ impl LayoutEngine {
                     NodeKind::OutputString {
                         text: self.resolve_string_value(pool, &body),
                         transparent_bg: body.options & 0x01 != 0,
+                        auto_wrap: body.options & 0x02 != 0,
                         justification: body.justification,
                     },
                 ))

@@ -513,7 +513,14 @@ fn fixture_etp_receive_timeout_emits_golden_abort() {
     assert_eq!(cts.len(), 1);
     assert_eq!(cts[0].data, *ETP_CTS_2000B_PGN_CA00);
 
-    let abort = rx.update(ETP_TIMEOUT_T1_MS + 1);
+    // A receiver that has just sent a CTS waits T2 (1250 ms) for the first data
+    // packet, not T1. The engine applied T1 to every waiting state, aborting a
+    // conformant sender 500 ms early.
+    let early = rx.update(ETP_TIMEOUT_T1_MS + 1);
+    assert!(early.is_empty(), "must not abort at T1 after sending a CTS");
+    assert_eq!(rx.active_sessions().len(), 1);
+
+    let abort = rx.update(ETP_TIMEOUT_T2_MS - ETP_TIMEOUT_T1_MS);
     assert_eq!(abort.len(), 1);
     assert_eq!(abort[0].pgn(), PGN_ETP_CM);
     assert_eq!(abort[0].source(), 0x20);

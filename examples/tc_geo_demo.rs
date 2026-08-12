@@ -76,17 +76,19 @@ fn main() {
     }
     println!("\n[events] rate transitions observed: {:?}", log.borrow());
 
-    // Build the position payload for `PGN_ECU_TO_TC`.
+    // Position reaches the TC over PGN_GNSS_POSITION. It used to be sent as
+    // Process Data under DDI 0x0087/0x0088, which the ISO 11783-11 dictionary
+    // assigns to Device Element Offset Y and Z in millimetres — a latitude of
+    // 52 degrees told the TC the element sat 520 km off the datum.
     let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
     let mut tc2 = TCGEOInterface::new();
     tc2.set_position(GeoPoint {
         position: position_pos,
         timestamp_us: 0,
     });
-    let [lat_pd, lon_pd] = tc2.position_process_data_payloads().unwrap();
     println!(
-        "\n[wire] lat process-data: {:02X?}\n       lon process-data: {:02X?}",
-        lat_pd, lon_pd
+        "\n[state] TC-GEO position: {:?}",
+        tc2.current_position().map(|p| p.position)
     );
 
     // Silence unused import for non-test builds.

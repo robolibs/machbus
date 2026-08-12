@@ -4,7 +4,7 @@
 
 use crate::isobus::sc::{SCClient, SCClientConfig, SCState};
 use crate::net::pgn_defs::{PGN_SC_CLIENT_STATUS, PGN_SC_MASTER_STATUS};
-use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority, Result};
+use crate::net::{Address, BROADCAST_ADDRESS, Message, Pgn, Priority, Result};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{Event, ScEvent};
 use crate::time::Instant;
@@ -19,7 +19,14 @@ pub struct ScClient {
     events: Rc<RefCell<Vec<ScEvent>>>,
     pending: Vec<[u8; 8]>,
     last_tick: Option<Instant>,
+    /// Address of the SCM whose status we accepted, so our own status can be
+    /// sent to it rather than broadcast (B.3 defines SCC → SCM as PDU1).
+    master: Option<Address>,
 }
+
+/// ISO 11783-14 B.1: both SC PGNs default to priority 4, "to ensure that
+/// other, higher priority messages are not disturbed by the SC communication".
+const SC_PRIORITY: Priority = Priority::BelowNormal;
 
 impl ScClient {
     /// Create with the given client config.
@@ -33,6 +40,7 @@ impl ScClient {
             events,
             pending: Vec::new(),
             last_tick: None,
+            master: None,
         }
     }
 
@@ -90,11 +98,14 @@ impl Plugin for ScClient {
             return;
         }
         if let Some(payload) = self.client.handle_master_status(msg) {
+            // Remember which SCM we are answering: B.3 defines SCC → SCM as
+            // PDU1 (PF 141), so the client status is destination-specific.
+            self.master = Some(msg.source);
             ctx.send(
                 PGN_SC_CLIENT_STATUS,
                 payload.to_vec(),
-                BROADCAST_ADDRESS,
-                Priority::Default,
+                msg.source,
+                SC_PRIORITY,
             );
         }
         self.drain_events(ctx);
@@ -102,23 +113,25 @@ impl Plugin for ScClient {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
 
+        // Until an SCM has been seen there is nobody to address, so fall back
+        // to broadcast rather than dropping the status.
+        let destination = self.master.unwrap_or(BROADCAST_ADDRESS);
         for payload in self.pending.drain(..) {
             ctx.send(
                 PGN_SC_CLIENT_STATUS,
                 payload.to_vec(),
-                BROADCAST_ADDRESS,
-                Priority::Default,
+                destination,
+                SC_PRIORITY,
             );
         }
         if let Some(payload) = self.client.update(elapsed) {
             ctx.send(
                 PGN_SC_CLIENT_STATUS,
                 payload.to_vec(),
-                BROADCAST_ADDRESS,
-                Priority::Default,
+                destination,
+                SC_PRIORITY,
             );
         }
         self.drain_events(ctx);

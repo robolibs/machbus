@@ -25,6 +25,48 @@ mod tests {
         )
     }
 
+    /// ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+    /// using the address". Sessions opened before the loss used to keep
+    /// running — and a BAM, which needs no peer cooperation, went on emitting
+    /// DT frames from an address another CF now owns.
+    #[test]
+    fn losing_an_address_tears_down_its_in_flight_sessions() {
+        let mut tp = TransportProtocol::new();
+        tp.send(0xEF00, &payload(20), 0x10, 0x20, 0, Priority::Lowest)
+            .unwrap();
+        tp.send(0xEF01, &payload(20), 0x10, BROADCAST_ADDRESS, 0, Priority::Lowest)
+            .unwrap();
+        tp.send(0xEF02, &payload(20), 0x11, 0x20, 0, Priority::Lowest)
+            .unwrap();
+        assert_eq!(tp.active_sessions_iter().count(), 3);
+
+        let aborts = tp.abort_sessions_for_address(0, 0x10);
+
+        // §4.4.2.4 restricts a CF that cannot claim to Cannot Claim and Request
+        // for Address Claimed; a Conn_Abort is neither, and every frame one
+        // could carry would have SA = the address just surrendered. Sending it
+        // landed on the CF that had legitimately won that address, whose
+        // `check_address_violation` answers with an unsolicited Address Claimed
+        // — spurious duplicate-address noise from the node this teardown exists
+        // to protect. The peer closes its half on T2/T3 within 1250 ms.
+        assert!(
+            aborts.is_empty(),
+            "nothing may be transmitted from a surrendered address"
+        );
+
+        // Only the sessions on the surrendered address are gone.
+        let left: Vec<Pgn> = tp.active_sessions_iter().map(|s| s.pgn).collect();
+        assert_eq!(left, vec![0xEF02]);
+
+        // A different port is untouched.
+        let mut other = TransportProtocol::new();
+        other
+            .send(0xEF00, &payload(20), 0x10, 0x20, 1, Priority::Lowest)
+            .unwrap();
+        assert!(other.abort_sessions_for_address(0, 0x10).is_empty());
+        assert_eq!(other.active_sessions_iter().count(), 1);
+    }
+
     #[test]
     fn rejects_payload_too_small() {
         let mut tp = TransportProtocol::new();
@@ -645,5 +687,30 @@ mod tests {
         assert_eq!(rx.active_sessions().len(), 0);
         assert_eq!(rx.stats().aborts_received, 1);
         assert_eq!(rx.stats().dropped_sessions, 1);
+    }
+
+    /// 6A — J1939-21 Table 8 defines 250 as "any other reason", and a peer may
+    /// abort with a value this build does not know. Either way the connection
+    /// is gone; dropping the frame left our half of the session open forever.
+    #[test]
+    fn an_unrecognised_abort_reason_still_closes_the_session() {
+        for reason_byte in [250u8, 0x7F, 0xFE] {
+            let mut rx = TransportProtocol::new();
+            let rts = tp_cm_frame(0x10, 0x20, [tp_cm::RTS, 20, 0, 3, 16, 0x00, 0xEF, 0x00]);
+            assert_eq!(rx.process_frame(&rts, 0).len(), 1, "CTS sent");
+            assert_eq!(rx.active_sessions().len(), 1);
+
+            let abort = tp_cm_frame(
+                0x10,
+                0x20,
+                [tp_cm::ABORT, reason_byte, 0xFF, 0xFF, 0xFF, 0x00, 0xEF, 0x00],
+            );
+            rx.process_frame(&abort, 0);
+
+            assert!(
+                rx.active_sessions().is_empty(),
+                "abort reason {reason_byte:#04X} must tear the session down"
+            );
+        }
     }
 }

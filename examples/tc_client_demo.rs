@@ -22,7 +22,7 @@ fn main() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer 600")
                 .with_software_version("1.0.0"),
         )

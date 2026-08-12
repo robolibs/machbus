@@ -5,7 +5,7 @@
 
 use crate::isobus::fs::{
     FSClientOutbound, FileClient, FileClientConfig, FileHandle, FileServerProperties,
-    FileServerStatus, TAN,
+    FileServerStatus, SeekMode, TAN,
 };
 use crate::net::pgn_defs::PGN_FILE_SERVER_TO_CLIENT;
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
@@ -113,13 +113,15 @@ impl FsClient {
         Ok(self.issue(out))
     }
 
-    /// Seek to absolute `position`; returns the TAN.
+    /// Move the file pointer by a signed `offset` relative to `mode`
+    /// (ISO 11783-13 C.3.3.2); returns the TAN. The resulting position comes
+    /// back on [`FsEvent::SeekResponse`].
     ///
     /// # Errors
     /// Not connected, or encode error.
-    pub fn seek(&mut self, handle: FileHandle, position: u32) -> Result<TAN> {
+    pub fn seek(&mut self, handle: FileHandle, mode: SeekMode, offset: i32) -> Result<TAN> {
         self.ensure_connected()?;
-        let out = self.client.try_seek_file(handle, position)?;
+        let out = self.client.try_seek_file(handle, mode, offset)?;
         Ok(self.issue(out))
     }
 
@@ -201,8 +203,7 @@ impl Plugin for FsClient {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
 
         let updated: Vec<_> = self.client.update(elapsed).into_iter().collect();
         self.pending.extend(updated);
@@ -257,13 +258,6 @@ fn wire_events(client: &mut FileClient, sink: &Rc<RefCell<Vec<FsEvent>>>) {
                 result: *result,
             });
         });
-    let s = sink.clone();
-    client.on_status_response.subscribe(move |(tan, result)| {
-        s.borrow_mut().push(FsEvent::StatusResponse {
-            tan: *tan,
-            result: *result,
-        });
-    });
     let s = sink.clone();
     client.on_close_response.subscribe(move |(tan, result)| {
         s.borrow_mut().push(FsEvent::CloseResponse {

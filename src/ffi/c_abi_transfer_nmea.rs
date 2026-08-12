@@ -566,18 +566,24 @@ pub extern "C" fn machbus_session_fs_client_write(
     }
 }
 
-/// Seek an open file handle to `position`. Writes the request TAN into
+/// Move an open file handle's pointer by a signed `offset` relative to `mode`
+/// (0 start, 1 current, 2 end; ISO 11783-13 B.17). Writes the request TAN into
 /// `out_tan`. Requires FS client.
 #[unsafe(no_mangle)]
 pub extern "C" fn machbus_session_fs_client_seek(
     h: *mut MachbusSession,
     file_handle: u8,
-    position: u32,
+    mode: u8,
+    offset: i32,
     out_tan: *mut u8,
 ) -> bool {
     let h = try_handle_mut!(h);
+    let Some(mode) = crate::isobus::fs::SeekMode::try_from_u8(mode) else {
+        set_last_error("FS seek position mode 3-255 is reserved".to_string());
+        return false;
+    };
     let fs = plugin_mut!(h, FsClient);
-    match fs.seek(file_handle, position) {
+    match fs.seek(file_handle, mode, offset) {
         Ok(tan) => {
             if !out_tan.is_null() {
                 unsafe { *out_tan = tan };
@@ -1279,6 +1285,10 @@ impl From<MachbusTimInterlocks> for TimInterlocks {
             road_transport_mode: i.road_transport_mode,
             external_stop: i.external_stop,
             implement_ready: i.implement_ready,
+            // Not yet exposed across the C ABI; a caller that needs them uses
+            // the Rust API. Defaulting them clear keeps the C surface stable.
+            operator_presence_timeout: false,
+            operator_override: false,
         }
     }
 }

@@ -13,6 +13,19 @@
 
 #if UINTPTR_MAX == UINT64_MAX
 
+/*
+ * Every assertion below describes ABI v5. If one of them fails, the fix is not
+ * to update the number in place: a widened POD shipping under an unchanged
+ * version lets a stale-header caller past the runtime guard in demo.c and
+ * full_demo.c. Bump MACHBUS_C_ABI_VERSION, update the two `!= 5` checks and
+ * the version table in book/src/bindings/abi-stability.md.
+ *
+ * The Rust side carries the same expectations as const assertions next to the
+ * version constant itself (src/ffi/c_abi_session_core.rs), so a layout change
+ * fails the Rust build too — this file is the C-side mirror, not the only
+ * guard.
+ */
+
 /* ─── Enums: cbindgen emits each as a plain C enum (4 bytes). ────────── */
 _Static_assert(sizeof(MachbusClaimState) == 4, "MachbusClaimState size changed");
 _Static_assert(sizeof(MachbusEventKind) == 4, "MachbusEventKind size changed");
@@ -21,6 +34,16 @@ _Static_assert(sizeof(MachbusPto) == 4, "MachbusPto size changed");
 _Static_assert(sizeof(MachbusHitchCommand) == 4, "MachbusHitchCommand size changed");
 _Static_assert(sizeof(MachbusPtoCommand) == 4, "MachbusPtoCommand size changed");
 _Static_assert(sizeof(MachbusValveCommand) == 4, "MachbusValveCommand size changed");
+_Static_assert(sizeof(MachbusSafeStopTrigger) == 4, "MachbusSafeStopTrigger size changed");
+
+/*
+ * Codes 2 and 3 are permanently retired (they were TimStatusTimeout and
+ * FunctionRequestTimeout, which had no producer). Reusing either would shift
+ * nothing on this side but would silently change meaning for a caller built
+ * against an older header, so pin the two values that bracket the gap.
+ */
+_Static_assert(MACHBUS_SAFE_STOP_TRIGGER_GUIDANCE_LINK_TIMEOUT == 1, "retired-code gap moved");
+_Static_assert(MACHBUS_SAFE_STOP_TRIGGER_HEARTBEAT_ERROR == 4, "retired-code gap moved");
 
 /* ─── MachbusConfig ─────────────────────────────────────────────────── */
 _Static_assert(sizeof(MachbusConfig) == 48, "MachbusConfig size changed");

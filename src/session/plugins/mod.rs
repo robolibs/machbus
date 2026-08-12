@@ -3,6 +3,7 @@
 //! Each subsystem is ported here as a self-registering plugin. Phase 2 ships
 //! [`Diagnostics`] as the proof-of-concept; later phases add the rest.
 
+pub mod autodrive;
 pub mod auxiliary;
 pub mod diagnostics;
 pub mod dm_memory;
@@ -11,7 +12,6 @@ pub mod fs_server;
 pub mod functionalities;
 pub mod gnss;
 pub mod group_function;
-pub mod guidance;
 pub mod heartbeat;
 pub mod implement;
 pub mod language_command;
@@ -28,6 +28,7 @@ pub mod tim;
 pub mod vt_client;
 pub mod vt_server;
 
+pub use autodrive::AutoDrive;
 pub use auxiliary::Auxiliary;
 pub use diagnostics::Diagnostics;
 pub use dm_memory::DmMemory;
@@ -36,7 +37,6 @@ pub use fs_server::FsServer;
 pub use functionalities::ControlFunctionalities;
 pub use gnss::Gnss;
 pub use group_function::GroupFunction;
-pub use guidance::Guidance;
 pub use heartbeat::Heartbeat;
 pub use implement::Implement;
 pub use language_command::LanguageCommand;

@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use machbus::isobus::functionalities::{Functionalities, Functionality};
 use machbus::isobus::implement::{
+    Signal,
     CurvatureCommandStatus, GenericSaeBs02SlotValue, GroundBasedSpeedDist, GuidanceLimitStatus,
     GuidanceMachineInfo, GuidanceSystemCmd, MachineDirection, MachineSelectedSpeedFull,
     MechanicalLockout, RequestResetCommandStatus, SpeedSource, WheelBasedSpeedDist,
@@ -11,7 +12,7 @@ use machbus::isobus::tc::{
     DDI, DDOP, DDOPHelpers, DataDictionary, DeviceElement, DeviceElementType, DeviceObject,
     DeviceProcessData, DeviceProperty, DeviceValuePresentation, ObjectID,
     ProcessDataAcknowledgeErrorCodes, TC_STATUS_INTERVAL_MS, TCClientCapabilities,
-    TCClientTaskStatus, TCServerConfig, TaskControllerClient, TaskControllerServer, TriggerMethod,
+    TCServerConfig, TaskControllerClient, TaskControllerServer, TriggerMethod,
     ddi,
 };
 use machbus::isobus::vt::{
@@ -37,6 +38,7 @@ use machbus::net::pgn_defs::{
     PGN_REQUEST, PGN_SHORTCUT_BUTTON, PGN_TC_TO_ECU, PGN_TIME_DATE, PGN_TP_CM, PGN_TP_DT,
     PGN_VT_TO_ECU, PGN_WHEEL_BASED_SPEED_DIST, PGN_WORKING_SET_MASTER,
 };
+use machbus::net::constants::ADDRESS_CLAIM_TIMEOUT_MS;
 use machbus::net::{
     AddressClaimer, BROADCAST_ADDRESS, ClaimState, FastPacketProtocol, Frame, Identifier,
     InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS, Name, NameFilter, NameFilterField,
@@ -169,7 +171,15 @@ fn address_claim_cannot_claim_when_all_addresses_are_observed_occupied() {
         .with_identity_number(1)
         .with_manufacturer_code(1);
     let preferred_address = local_cf.preferred_address();
-    let cannot_claim = claimer.handle_claim(&mut local_cf, preferred_address, preferred_winner);
+    // §4.5.1 a): during the initial listen window a peer claim is only an
+    // address-table entry. The cannot-claim comes out when the window closes
+    // and there is no free address left to pick.
+    assert!(
+        claimer
+            .handle_claim(&mut local_cf, preferred_address, preferred_winner)
+            .is_empty()
+    );
+    let cannot_claim = claimer.update(&mut local_cf, ADDRESS_CLAIM_TIMEOUT_MS);
 
     assert_eq!(local_cf.claim_state(), ClaimState::Failed);
     assert_eq!(local_cf.address(), NULL_ADDRESS);
@@ -755,9 +765,11 @@ fn connect_agisostack_vt_client() -> VTClient {
     let _ = client.update(1);
     let _ = client.update(1);
 
+    // ISO 11783-6 Annex D.3: byte 2 is the VT version, byte 3 the status.
     let mut memory_response = [0xFFu8; 8];
     memory_response[0] = vt_cmd::GET_MEMORY_RESPONSE;
-    memory_response[1] = 0x00;
+    memory_response[1] = 5;
+    memory_response[2] = 0x00;
     client.handle_vt_message(&vt_message(memory_response.to_vec(), 0x26));
     let _ = client.update(1);
     let _ = client.update(1_000);
@@ -866,7 +878,7 @@ fn task_controller_client_message_encoding_matches_agisostack_examples() {
     assert_eq!(version_frame.destination(), 0xF7);
 
     assert_eq!(
-        TaskControllerClient::build_status(TCClientTaskStatus::Idle, 0, 0),
+        TaskControllerClient::build_client_task(false),
         [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00]
     );
 
@@ -1207,17 +1219,17 @@ fn task_controller_server_process_data_commands_match_agisostack_examples() {
 fn language_command_layout_matches_agisostack_transmit_packing() {
     let en_us = LanguageData {
         language_code: *b"en",
-        decimal: DecimalSymbol::Comma,
-        time_format: TimeFormat::TwelveHour,
-        date_format: DateFormat::YyyyMmDd,
-        distance: DistanceUnit::Imperial,
-        area: AreaUnit::Imperial,
-        volume: VolumeUnit::Us,
-        mass: MassUnit::Us,
-        temperature: TemperatureUnit::Imperial,
-        pressure: PressureUnit::Imperial,
-        force: ForceUnit::Imperial,
-        generic: UnitSystem::Us,
+        decimal: Some(DecimalSymbol::Comma),
+        time_format: Some(TimeFormat::TwelveHour),
+        date_format: Some(DateFormat::YyyyMmDd),
+        distance: Some(DistanceUnit::Imperial),
+        area: Some(AreaUnit::Imperial),
+        volume: Some(VolumeUnit::Us),
+        mass: Some(MassUnit::Us),
+        temperature: Some(TemperatureUnit::Imperial),
+        pressure: Some(PressureUnit::Imperial),
+        force: Some(ForceUnit::Imperial),
+        generic: Some(UnitSystem::Us),
         country_code: *b"US",
     };
     let bytes = en_us.encode();
@@ -1233,17 +1245,17 @@ fn language_command_decodes_agisostack_message_content_samples() {
     let sample = [b'e', b'n', 0x0F, 0x04, 0x5A, 0x04, b'U', b'S'];
     let decoded = LanguageData::decode(&Message::new(0xFE0F, sample.to_vec(), 0x80)).unwrap();
     assert_eq!(decoded.language_code, *b"en");
-    assert_eq!(decoded.decimal, DecimalSymbol::Comma);
-    assert_eq!(decoded.time_format, TimeFormat::TwentyFourHour);
-    assert_eq!(decoded.date_format, DateFormat::YyyyMmDd);
-    assert_eq!(decoded.distance, DistanceUnit::Imperial);
-    assert_eq!(decoded.area, AreaUnit::Imperial);
-    assert_eq!(decoded.volume, VolumeUnit::Us);
-    assert_eq!(decoded.mass, MassUnit::Us);
-    assert_eq!(decoded.temperature, TemperatureUnit::Metric);
-    assert_eq!(decoded.pressure, PressureUnit::Metric);
-    assert_eq!(decoded.force, ForceUnit::Imperial);
-    assert_eq!(decoded.generic, UnitSystem::Metric);
+    assert_eq!(decoded.decimal, Some(DecimalSymbol::Comma));
+    assert_eq!(decoded.time_format, Some(TimeFormat::TwentyFourHour));
+    assert_eq!(decoded.date_format, Some(DateFormat::YyyyMmDd));
+    assert_eq!(decoded.distance, Some(DistanceUnit::Imperial));
+    assert_eq!(decoded.area, Some(AreaUnit::Imperial));
+    assert_eq!(decoded.volume, Some(VolumeUnit::Us));
+    assert_eq!(decoded.mass, Some(MassUnit::Us));
+    assert_eq!(decoded.temperature, Some(TemperatureUnit::Metric));
+    assert_eq!(decoded.pressure, Some(PressureUnit::Metric));
+    assert_eq!(decoded.force, Some(ForceUnit::Imperial));
+    assert_eq!(decoded.generic, Some(UnitSystem::Metric));
     assert_eq!(decoded.country_code, *b"US");
 }
 
@@ -1305,12 +1317,19 @@ fn shortcut_button_layout_matches_agisostack_isb_examples() {
 // AgIsoStack `speed_distance_message_tests.cpp` uses raw mm/s and mm
 // values below while checking Machine Selected Speed, Wheel Based Speed,
 // and Ground Based Speed frame layouts.
+//
+// The Machine Selected Speed expectation below previously asserted byte 8 =
+// 0x39, which is machbus's own historic packing (2-bit source, limit status
+// at bit 5), not AgIsoStack's output. With the 3-bit source and the limit
+// status at bit 6 the byte is 0x69, which is what AgIsoStack actually emits.
+// Byte 7 carries the 6-bit exit reason with its top two bits reserved, so a
+// conformant transmitter sends them as ones (0xCF), not zeros.
 
 #[test]
 fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     let machine_selected = MachineSelectedSpeedFull {
-        speed_mps: 1.0,
-        distance_m: 123.456,
+        speed_mps: 1.0.into(),
+        distance_m: 123.456.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::NavigationBased,
         limit_status: 3,
@@ -1322,12 +1341,12 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
     assert_eq!(
         machine_selected.encode(),
-        [0xE8, 0x03, 0x40, 0xE2, 0x01, 0x00, 15, 0x39]
+        [0xE8, 0x03, 0x40, 0xE2, 0x01, 0x00, 0xCF, 0x69]
     );
 
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 9.876,
-        distance_m: 5.0,
+        speed_mps: 9.876.into(),
+        distance_m: 5.0.into(),
         direction: MachineDirection::Reverse,
         max_power_time_min: 3,
         key_switch_state: 1,
@@ -1344,8 +1363,8 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 9.999,
-        distance_m: 80.0,
+        speed_mps: 9.999.into(),
+        distance_m: 80.0.into(),
         direction: MachineDirection::Forward,
     };
     assert_eq!(
@@ -1354,7 +1373,7 @@ fn speed_distance_layout_matches_agisostack_speed_message_examples() {
     );
     assert_eq!(
         ground.encode(),
-        [0x0F, 0x27, 0x80, 0x38, 0x01, 0x00, 0xFF, 0x01]
+        [0x0F, 0x27, 0x80, 0x38, 0x01, 0x00, 0xFF, 0xFD]
     );
 }
 
@@ -1408,7 +1427,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
     );
 
     let machine = GuidanceMachineInfo {
-        estimated_curvature: 10.0,
+        estimated_curvature: Signal::Value(10.0),
         lockout: MechanicalLockout::NotActive,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -1418,12 +1437,16 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
         remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
     };
     let machine_bytes = machine.encode();
+    // G3 — byte 4 bits 1-5 are reserved and transmitted as ones, which is what
+    // this crate's own captured-frame test shows off a real tractor (byte 3 =
+    // 0xFF). Zeroing them produced a frame no real ECU sends.
     assert_eq!(
         machine_bytes,
-        [0xA8, 0x7D, 0x04, 0x60, 0x5B, 0xFF, 0xFF, 0xFF]
+        [0xA8, 0x7D, 0x04, 0x7F, 0x5B, 0xFF, 0xFF, 0xFF]
     );
+    assert_eq!(machine_bytes[3] & 0x1F, 0x1F);
     let decoded_machine = GuidanceMachineInfo::decode(&machine_bytes).unwrap();
-    assert!((decoded_machine.estimated_curvature - 10.0).abs() < 0.25);
+    assert!(decoded_machine.estimated_curvature.value().is_some_and(|k| (k - 10.0).abs() < 0.25));
     assert_eq!(
         decoded_machine.guidance_limit_status,
         GuidanceLimitStatus::LimitedLow
@@ -1447,7 +1470,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
     );
 
     let command = GuidanceSystemCmd {
-        commanded_curvature: -43.4,
+        commanded_curvature: Signal::Value(-43.4),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let command_bytes = command.encode();
@@ -1456,7 +1479,7 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
         [0xD2, 0x7C, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     );
     let decoded_command = GuidanceSystemCmd::decode(&command_bytes).unwrap();
-    assert!((decoded_command.commanded_curvature - -43.5).abs() < 0.25);
+    assert!((decoded_command.commanded_curvature.value().unwrap() - -43.5).abs() < 0.25);
     assert_eq!(
         decoded_command.status,
         CurvatureCommandStatus::IntendedToSteer
@@ -1467,12 +1490,12 @@ fn agricultural_guidance_layout_matches_agisostack_examples() {
 fn agricultural_guidance_listen_only_examples_decode_agisostack_payloads() {
     let command_payload = [0xF9, 0x7E, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     let command = GuidanceSystemCmd::decode(&command_payload).unwrap();
-    assert!((command.commanded_curvature - 94.25).abs() < 0.25);
+    assert!((command.commanded_curvature.value().unwrap() - 94.25).abs() < 0.25);
     assert_eq!(command.status, CurvatureCommandStatus::IntendedToSteer);
 
     let machine_payload = [0xC1, 0x7C, 0x55, 0xE0, 0x64, 0xFF, 0xFF, 0xFF];
     let machine = GuidanceMachineInfo::decode(&machine_payload).unwrap();
-    assert!((machine.estimated_curvature - -47.75).abs() < 0.25);
+    assert!(machine.estimated_curvature.value().is_some_and(|k| (k + 47.75).abs() < 0.25));
     assert_eq!(
         machine.guidance_limit_status,
         GuidanceLimitStatus::NotAvailable
@@ -1563,11 +1586,15 @@ fn tc_ddop_sprayer_subset_matches_agisostack_create_sprayer_expectations() {
             .with_localization_label([b'e', b'n', 0x0F, 0x04, 0x5A, 0x04, b'U']),
     )
     .unwrap();
+    // F7 — ISO 11783-10 B.3.2: "The element number would be 0 to address the
+    // implement sprayer", and A.7 Figure A.1 puts the DeviceObject at ObjectId
+    // 0. AgIsoStack numbers this element 1; machbus follows the standard, so
+    // this vector diverges from the C++ reference here deliberately.
     ddop.add_element(
         DeviceElement::default()
             .with_id(1)
             .with_type(DeviceElementType::Device)
-            .with_number(1)
+            .with_number(0)
             .with_parent(0)
             .with_designator("Sprayer"),
     )
@@ -1651,7 +1678,7 @@ fn tc_ddop_sprayer_subset_matches_agisostack_create_sprayer_expectations() {
         .find(|obj| obj.id == ObjectID(1))
         .expect("DET object 1");
     assert_eq!(sprayer.designator, "Sprayer");
-    assert_eq!(sprayer.number.raw(), 1);
+    assert_eq!(sprayer.number.raw(), 0, "B.3.2: the implement itself is element 0");
     assert_eq!(sprayer.parent_id, ObjectID(0));
     assert!(sprayer.child_objects.is_empty());
 

@@ -5,6 +5,7 @@ impl VTServer {
             state: StateMachine::new(VTServerState::Disconnected),
             clients: Vec::new(),
             status_timer_ms: 0,
+            busy_codes: 0,
             vt_version: config.vt_version,
             screen_width: config.screen_width,
             screen_height: config.screen_height,
@@ -346,6 +347,19 @@ impl VTServer {
         if matches!(self.state(), VTServerState::Disconnected) {
             return None;
         }
+        // §4.6.9: three seconds without a Working Set Maintenance message is an
+        // unexpected shutdown of that Working Set Master.
+        let mut gone: Vec<Address> = Vec::new();
+        for client in &mut self.clients {
+            client.since_maintenance_ms = client.since_maintenance_ms.saturating_add(elapsed_ms);
+            if client.since_maintenance_ms >= WORKING_SET_MAINTENANCE_TIMEOUT_MS {
+                gone.push(client.client_address);
+            }
+        }
+        for addr in gone {
+            self.drop_working_set(addr);
+        }
+
         self.status_timer_ms = self.status_timer_ms.saturating_add(elapsed_ms);
         if self.status_timer_ms >= VT_STATUS_INTERVAL_MS {
             self.status_timer_ms -= VT_STATUS_INTERVAL_MS;
@@ -354,16 +368,39 @@ impl VTServer {
         None
     }
 
+    /// Annex G.2 VT Status: "Bytes 3, 4 — Object ID of the visible Data/Alarm
+    /// Mask of the active Working Set or FFFF16 if no Working Set owns the VT.
+    /// Bytes 5, 6 — Object ID of the visible Soft Key Mask ... or FFFF16 ... if
+    /// there is no Soft Key Mask defined for the active Data/Alarm Mask."
+    ///
+    /// These four bytes used to carry the working set's *source address*, so a
+    /// VT with the active set at SA 0x26 broadcast visible-mask Object ID
+    /// 0x2600 and Soft Key Mask 0x0000 — neither of which is an object in any
+    /// pool. Anything following §4.7.14 to track the visible mask read garbage.
     fn encode_vt_status(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = cmd::VT_STATUS;
         data[1] = self.active_working_set;
-        data[2] = 0x00;
-        data[3] = self.active_working_set;
-        data[4] = 0x00;
-        data[5] = 0x00;
-        data[6] = (self.vt_version & 0xFF) as u8;
-        data[7] = 0x00;
+        let (data_mask, soft_key_mask) = self
+            .find_client(self.active_working_set)
+            .filter(|c| c.pool_activated)
+            .map_or((ObjectID::NULL, ObjectID::NULL), |c| {
+                let mask = c.object_state.active_data_mask;
+                let soft_key = c
+                    .object_state
+                    .soft_key_masks
+                    .get(&mask)
+                    .copied()
+                    .unwrap_or(c.object_state.active_soft_key_mask);
+                (mask, soft_key)
+            });
+        data[2..4].copy_from_slice(&data_mask.0.to_le_bytes());
+        data[4..6].copy_from_slice(&soft_key_mask.0.to_le_bytes());
+        // Annex H.1: byte 7 is the VT busy-codes bitfield and byte 8 the VT
+        // function code of the command being executed (FF16 when idle). Byte 7
+        // is not a version — the VT reports that in the Get Memory response.
+        data[6] = self.busy_codes;
+        data[7] = 0xFF;
         data
     }
 
@@ -395,12 +432,12 @@ impl VTServer {
             cmd::GET_WINDOW_MASK_DATA => self.handle_get_window_mask_data(msg),
             cmd::END_OF_POOL => self.handle_end_of_pool(msg),
             cmd::CHANGE_NUMERIC_VALUE => {
-                self.handle_numeric_value_change(msg);
-                Vec::new()
+                let outcome = self.handle_numeric_value_change(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_STRING_VALUE => {
-                self.handle_string_value_change(msg);
-                Vec::new()
+                let outcome = self.handle_string_value_change(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SELECT_ACTIVE_WORKING_SET => {
                 self.handle_select_active_working_set(msg);
@@ -408,108 +445,109 @@ impl VTServer {
             }
             cmd::ESC_INPUT => self.handle_esc_input(msg),
             cmd::HIDE_SHOW => {
-                self.handle_hide_show(msg);
-                Vec::new()
+                let outcome = self.handle_hide_show(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::ENABLE_DISABLE => {
-                self.handle_enable_disable(msg);
-                Vec::new()
+                let outcome = self.handle_enable_disable(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SELECT_INPUT_OBJECT_COMMAND => self.handle_select_input_object_command(msg),
             cmd::CONTROL_AUDIO_SIGNAL => {
-                self.handle_control_audio_signal(msg);
-                Vec::new()
+                let outcome = self.handle_control_audio_signal(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::SET_AUDIO_VOLUME => {
-                self.handle_set_audio_volume(msg);
-                Vec::new()
+                let outcome = self.handle_set_audio_volume(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_CHILD_LOCATION => {
-                self.handle_change_child_location(msg);
-                Vec::new()
+                let outcome = self.handle_change_child_location(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_SIZE => {
-                self.handle_change_size(msg);
-                Vec::new()
+                let outcome = self.handle_change_size(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_BACKGROUND_COLOUR => {
-                self.handle_change_background_colour(msg);
-                Vec::new()
+                let outcome = self.handle_change_background_colour(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_END_POINT => {
-                self.handle_change_end_point(msg);
-                Vec::new()
+                let outcome = self.handle_change_end_point(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_FONT_ATTRIBUTES => {
-                self.handle_change_font_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_font_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_LINE_ATTRIBUTES => {
-                self.handle_change_line_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_line_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_FILL_ATTRIBUTES => {
-                self.handle_change_fill_attributes(msg);
-                Vec::new()
+                let outcome = self.handle_change_fill_attributes(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_ACTIVE_MASK => {
-                self.handle_change_active_mask(msg);
-                Vec::new()
+                let outcome = self.handle_change_active_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_SOFT_KEY_MASK => {
-                self.handle_change_soft_key_mask(msg);
-                Vec::new()
+                let outcome = self.handle_change_soft_key_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_ATTRIBUTE => {
-                self.handle_change_attribute(msg);
-                Vec::new()
+                let outcome = self.handle_change_attribute(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::GET_ATTRIBUTE_VALUE => self.handle_get_attribute_value(msg),
             cmd::CHANGE_PRIORITY => {
-                self.handle_change_priority(msg);
-                Vec::new()
+                let outcome = self.handle_change_priority(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_LIST_ITEM => {
-                self.handle_change_list_item(msg);
-                Vec::new()
+                let outcome = self.handle_change_list_item(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::DELETE_OBJECT_POOL => {
-                self.handle_delete_object_pool(msg);
-                Vec::new()
+                let outcome = self.handle_delete_object_pool(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_CHILD_POSITION => {
-                self.handle_change_child_position(msg);
-                Vec::new()
+                let outcome = self.handle_change_child_position(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_OBJECT_LABEL => {
-                self.handle_change_object_label(msg);
-                Vec::new()
+                let outcome = self.handle_change_object_label(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_POLYGON_POINT => {
-                self.handle_change_polygon_point(msg);
-                Vec::new()
+                let outcome = self.handle_change_polygon_point(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::CHANGE_POLYGON_SCALE => {
-                self.handle_change_polygon_scale(msg);
-                Vec::new()
+                let outcome = self.handle_change_polygon_scale(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::GRAPHICS_CONTEXT => self.handle_graphics_context(msg),
             cmd::SELECT_COLOUR_MAP => {
-                self.handle_select_colour_map(msg);
-                Vec::new()
+                let outcome = self.handle_select_colour_map(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::LOCK_UNLOCK_MASK => {
-                self.handle_lock_unlock_mask(msg);
-                Vec::new()
+                let outcome = self.handle_lock_unlock_mask(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::EXECUTE_MACRO => {
-                self.handle_execute_macro(msg);
-                Vec::new()
+                let outcome = self.handle_execute_macro(msg);
+                self.annex_f_response(msg, outcome)
             }
             cmd::EXECUTE_EXTENDED_MACRO => {
-                self.handle_execute_extended_macro(msg);
-                Vec::new()
+                let outcome = self.handle_execute_extended_macro(msg);
+                self.annex_f_response(msg, outcome)
             }
+            cmd::WORKING_SET_MAINTENANCE => self.handle_working_set_maintenance(msg),
             cmd::UNSUPPORTED_VT_FUNCTION => Vec::new(),
             _ => vec![OutboundFrame::to(
                 Self::build_unsupported_function(function).to_vec(),
@@ -520,21 +558,108 @@ impl VTServer {
 
     // ─── Per-command handlers ─────────────────────────────────────────
 
-    fn handle_get_memory(&mut self, msg: &Message) -> Vec<OutboundFrame> {
-        if !is_fixed_vt_payload(&msg.data) || !has_ff_tail(&msg.data, 5) {
+    /// Working Set Maintenance (Annex G.3, function 0xFF).
+    ///
+    /// §4.6.9: "Each Working Set Master sends the Working Set Maintenance
+    /// message once per second. The VT uses this message to ensure that each
+    /// Working Set is still present. If the VT does not receive this message
+    /// for a period of 3 s or it receives it a second time with the Initiating
+    /// bit set it is determined to be an unexpected shutdown of the Working Set
+    /// Master."
+    ///
+    /// This was unhandled, so it fell through to the catch-all and the VT
+    /// answered every one with Unsupported VT Function — once per second,
+    /// forever — while never noticing a working set going away.
+    /// Build the Annex F response for a command, if that command defines one.
+    ///
+    /// F.1: "The VT shall respond to these commands even if no object pool of
+    /// the originating Working Set is loaded. The originator shall wait for a
+    /// response before sending another command. Unless stated otherwise,
+    /// another command can be sent if a response is not received within 1,5 s."
+    ///
+    /// Commands with no Annex F response — Object Pool Transfer, answered by
+    /// End of Object Pool — return nothing.
+    fn annex_f_response(&self, msg: &Message, outcome: CommandOutcome) -> Vec<OutboundFrame> {
+        let Some(shape) = VtResponseShape::for_command(msg.data[0]) else {
+            return Vec::new();
+        };
+        vec![OutboundFrame::to(
+            shape
+                .response(&msg.data, shape.error_bits(outcome))
+                .to_vec(),
+            msg.source,
+        )]
+    }
+
+    fn handle_working_set_maintenance(&mut self, msg: &Message) -> Vec<OutboundFrame> {
+        if !is_fixed_vt_payload(&msg.data) {
             return Vec::new();
         }
         self.ensure_client(msg.source);
+        // G.3 byte 2 bit 0 on VT version 3 and later; version 2 and prior send
+        // 0xFF here, which has bit 0 set, so only treat it as Initiating when
+        // the reserved bits are clear as the clause requires.
+        let initiating = msg.data[1] & 0x01 != 0 && msg.data[1] & 0xFE == 0;
+        let version = msg.data[2];
+
+        let mut shutdown = false;
         if let Some(client) = self.find_client_mut(msg.source) {
-            client.pool_upload_allowed = true;
-            client.pool_activation_pending = false;
+            client.since_maintenance_ms = 0;
+            client.declared_version = Some(version);
+            if initiating {
+                // A second Initiating means the master restarted underneath us.
+                shutdown = client.seen_initiating;
+                client.seen_initiating = true;
+            }
         }
+        if shutdown {
+            self.drop_working_set(msg.source);
+        }
+        // G.3 defines no response: the VT consumes it silently.
+        Vec::new()
+    }
+
+    /// Forget a working set whose master has gone away (§4.6.9).
+    fn drop_working_set(&mut self, addr: Address) {
+        self.clients.retain(|c| c.client_address != addr);
+        if self.active_working_set == addr {
+            self.active_working_set = NULL_ADDRESS;
+        }
+        self.on_client_disconnected.emit(&addr);
+    }
+
+    fn handle_get_memory(&mut self, msg: &Message) -> Vec<OutboundFrame> {
+        // Annex D.2: byte 2 reserved, bytes 3-6 Memory Required, bytes 7-8
+        // reserved. The tail check used to start at index 5, which is the top
+        // byte of a conformant request's size field — so any working set
+        // asking for less than 0xFF000000 bytes was dropped with no reply at
+        // all, which Annex F.1 forbids ("The VT shall respond to these commands
+        // even if no object pool of the originating Working Set is loaded").
+        // G3 applies to the reserved bytes themselves: length only.
+        if !is_fixed_vt_payload(&msg.data) {
+            return Vec::new();
+        }
+        let required = u32::from_le_bytes([msg.data[2], msg.data[3], msg.data[4], msg.data[5]]);
+        self.ensure_client(msg.source);
+        // Annex D.3: byte 2 is this VT's version of ISO 11783-6, byte 3 the
+        // status. Reporting 0 claimed the 2001 Agritechnica limited feature
+        // set regardless of what the server is configured to support.
         let mut data = [0xFFu8; 8];
         data[0] = cmd::GET_MEMORY_RESPONSE;
-        data[1] = 0x00;
-        data[2] = 0x00;
-        if matches!(self.state(), VTServerState::WaitForClientStatus) {
-            self.transition(VTServerState::WaitForPoolUpload);
+        data[1] = self.config.vt_version as u8;
+        // D.3 byte 3 status: 0 = enough memory, 1 = not enough, do not transmit.
+        // A request the VT cannot satisfy still gets an answer (F.1); silence
+        // is what left a conformant working set retrying for 1.5 s at a time.
+        let enough = self.config.max_pool_bytes == 0 || required <= self.config.max_pool_bytes;
+        data[2] = u8::from(!enough);
+        if enough {
+            if let Some(client) = self.find_client_mut(msg.source) {
+                client.pool_upload_allowed = true;
+                client.pool_activation_pending = false;
+            }
+            if matches!(self.state(), VTServerState::WaitForClientStatus) {
+                self.transition(VTServerState::WaitForPoolUpload);
+            }
         }
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }
@@ -686,6 +811,8 @@ impl VTServer {
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }
 
+    /// E5 — C.2.2 b)1): a pool may arrive as any number of sessions, and only
+    /// End of Object Pool closes it. Accumulate here; deserialize once there.
     fn handle_object_pool_transfer(&mut self, msg: &Message) {
         if msg.data.len() < 2 {
             return;
@@ -696,18 +823,7 @@ impl VTServer {
         if !client.pool_upload_allowed {
             return;
         }
-        let Ok(pool) = ObjectPool::deserialize(&msg.data[1..]) else {
-            return;
-        };
-        if pool.is_empty() || pool.validate().is_err() {
-            return;
-        }
-        client.pool = pool;
-        client.pool_uploaded = true;
-        client.pool_upload_allowed = false;
-        client.pool_activation_pending = true;
-        client.pool_activated = false;
-        client.object_state = ServerObjectState::default();
+        client.pool_staging.extend_from_slice(&msg.data[1..]);
     }
 
     fn handle_store_version(&mut self, msg: &Message) -> Vec<OutboundFrame> {
@@ -717,15 +833,21 @@ impl VTServer {
         let label = parse_label(&msg.data);
         let mut response = [0xFFu8; 8];
         response[0] = cmd::STORE_VERSION;
-        response[1] = match self.find_client_mut(msg.source) {
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        response[5] = match self.find_client_mut(msg.source) {
             Some(c) if c.pool_uploaded && !c.pool.is_empty() => {
                 if c.store_version(&label, 5) {
                     0x00
                 } else {
-                    0x02
+                    // E.5 bit 2: insufficient memory available.
+                    0x04
                 }
             }
-            _ => 0x01,
+            // No pool to store: "any other error" (bit 3). Bit 0 is Reserved.
+            _ => 0x08,
         };
         vec![OutboundFrame::to(response.to_vec(), msg.source)]
     }
@@ -742,7 +864,12 @@ impl VTServer {
 
         let mut response = [0xFFu8; 8];
         response[0] = cmd::LOAD_VERSION;
-        response[1] = if success { 0x00 } else { 0x01 };
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        // E.7 bit 1: version label is not correct / unknown.
+        response[5] = if success { 0x00 } else { 0x02 };
 
         if success {
             if !matches!(self.state(), VTServerState::Connected) {
@@ -764,7 +891,12 @@ impl VTServer {
             .unwrap_or(false);
         let mut response = [0xFFu8; 8];
         response[0] = cmd::DELETE_VERSION;
-        response[1] = if success { 0x00 } else { 0x01 };
+        // Annex E.5/E.7/E.9: "Bytes 2―5 Reserved, set to FF16; Byte 6 Error
+        // Codes". The code went in byte 2, which the standard reserves — and
+        // the client's own canonicality check then discarded every conformant
+        // VT's response, so a stored pool was never restored.
+        // E.9 bit 1: version label is not correct / unknown.
+        response[5] = if success { 0x00 } else { 0x02 };
         vec![OutboundFrame::to(response.to_vec(), msg.source)]
     }
 
@@ -801,27 +933,44 @@ impl VTServer {
         }
         let mut data = [0xFFu8; 8];
         data[0] = cmd::END_OF_POOL;
-        let accepted = match self.find_client_mut(msg.source) {
-            Some(c)
-                if c.pool_activation_pending
-                    && c.pool_uploaded
-                    && !c.pool.is_empty()
-                    && c.pool.validate().is_ok() =>
-            {
-                c.pool_activated = true;
-                c.pool_upload_allowed = false;
-                c.pool_activation_pending = false;
-                initialise_working_set_special_controls(&c.pool, &mut c.object_state);
-                true
-            }
+        let outcome = match self.find_client_mut(msg.source) {
+            None => EndOfPoolOutcome::NoPool,
             Some(c) => {
+                let staged = core::mem::take(&mut c.pool_staging);
                 c.pool_upload_allowed = false;
                 c.pool_activation_pending = false;
-                false
+                if staged.is_empty() {
+                    // C.2.2 b)3): End of Object Pool with nothing transferred.
+                    EndOfPoolOutcome::NoPool
+                } else {
+                    match ObjectPool::deserialize(&staged) {
+                        Err(_) => EndOfPoolOutcome::Malformed,
+                        Ok(incoming) if incoming.is_empty() => EndOfPoolOutcome::NoPool,
+                        Ok(incoming) => {
+                            // C.2.6: a runtime update replaces the objects it
+                            // carries and leaves the rest of the pool alone.
+                            let mut merged = c.pool.clone();
+                            for object in incoming.objects() {
+                                merged = merged.with_object(object.clone());
+                            }
+                            if merged.validate().is_err() {
+                                EndOfPoolOutcome::Malformed
+                            } else {
+                                c.pool = merged;
+                                c.pool_uploaded = true;
+                                c.pool_activated = true;
+                                initialise_working_set_special_controls(
+                                    &c.pool,
+                                    &mut c.object_state,
+                                );
+                                EndOfPoolOutcome::Accepted
+                            }
+                        }
+                    }
+                }
             }
-            None => false,
         };
-        if accepted {
+        if matches!(outcome, EndOfPoolOutcome::Accepted) {
             data[1] = 0x00;
             data[6] = 0x00;
             if !matches!(self.state(), VTServerState::Connected) {
@@ -832,36 +981,57 @@ impl VTServer {
             }
             self.on_client_connected.emit(&msg.source);
         } else {
+            // E8 — C.2.5: "When the VT replies with an error of any type, the
+            // VT should delete the object pool from volatile memory storage".
+            // Byte 7 bit 3 then truthfully reports that deletion. The old code
+            // always claimed bit 1 (a missing object reference) regardless of
+            // what actually went wrong.
+            if let Some(c) = self.find_client_mut(msg.source) {
+                c.pool = ObjectPool::default();
+                c.pool_uploaded = false;
+                c.pool_activated = false;
+                c.object_state = ServerObjectState::default();
+            }
             data[1] = 0x01;
-            data[6] = 0x02;
+            data[6] = match outcome {
+                // Bit 1: the pool references an object it does not contain.
+                EndOfPoolOutcome::Malformed => 0x02 | 0x08,
+                // Bit 2: any other error — here, nothing was transferred.
+                _ => 0x04 | 0x08,
+            };
         }
         vec![OutboundFrame::to(data.to_vec(), msg.source)]
     }
 
-    fn handle_numeric_value_change(&mut self, msg: &Message) {
+    fn handle_numeric_value_change(&mut self, msg: &Message) -> CommandOutcome {
         if msg.data.len() != 8 || msg.data[3] != 0xFF {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let Some(client) = self
             .find_client(msg.source)
             .filter(|client| client.pool_activated)
         else {
-            return;
+            return CommandOutcome::Other;
         };
         let Some(object) = client.pool.find(id) else {
-            return;
+            return CommandOutcome::Other;
         };
         let object_type = object.r#type;
         let Some(value_width) = numeric_value_width_for_type(object_type) else {
-            return;
+            return CommandOutcome::Other;
         };
         if !numeric_value_payload_width_is_canonical(&msg.data, value_width) {
-            return;
+            return CommandOutcome::Other;
         }
-        let value = u32_le(&msg.data[4..]);
+        let raw_val = u32_le(&msg.data[4..]);
+        let value = match value_width {
+            1 => raw_val & 0xFF,
+            2 => raw_val & 0xFFFF,
+            _ => raw_val,
+        };
         if !numeric_value_is_valid(&client.pool, object, value) {
-            return;
+            return CommandOutcome::Other;
         }
         if let Some(state) = self.activated_client_object_state_mut(msg.source) {
             state.numeric_values.insert(id, value);
@@ -876,23 +1046,24 @@ impl VTServer {
                 .push(ServerRenderEffect::ChangeNumericValue { id, value });
             self.on_numeric_value_change.emit(&(id, value));
         }
+        CommandOutcome::Done
     }
 
-    fn handle_string_value_change(&mut self, msg: &Message) {
+    fn handle_string_value_change(&mut self, msg: &Message) -> CommandOutcome {
         if msg.data.len() < 5 {
-            return;
+            return CommandOutcome::Other;
         }
         let id = ObjectID(u16_le(&msg.data[1..]));
         let len = u16_le(&msg.data[3..]) as usize;
         let end = 5 + len;
         if !vt_string_payload_is_canonical(&msg.data, end) {
-            return;
+            return CommandOutcome::Other;
         }
         let Some(s) = decode_vt_string_value(&msg.data[5..end]) else {
-            return;
+            return CommandOutcome::Other;
         };
         let Some(s) = self.normalized_string_value_change(msg.source, id, s) else {
-            return;
+            return CommandOutcome::Other;
         };
         if let Some(state) = self.activated_client_object_state_mut(msg.source) {
             state.string_values.insert(id, s.clone());
@@ -904,6 +1075,7 @@ impl VTServer {
                 });
             self.on_string_value_change.emit(&(id, s));
         }
+        CommandOutcome::Done
     }
 
     fn normalized_string_value_change(
@@ -927,6 +1099,13 @@ impl VTServer {
                     return None;
                 }
                 body.value.len()
+            }
+            ObjectType::InputString => {
+                let body = obj.get_input_string_body().ok()?;
+                if body.variable_reference != ObjectID::NULL {
+                    return None;
+                }
+                body.max_length as usize
             }
             ObjectType::InputAttributes => obj
                 .get_input_attributes_body()

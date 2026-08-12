@@ -6,14 +6,13 @@ impl Default for FileServer {
 
 // ─── Public CCM helper ────────────────────────────────────────────────
 
-/// Convenience: encode a CCM keepalive payload with the given TAN.
+/// Convenience: encode a Client Connection Maintenance payload (C.1.3).
+///
+/// The CCM carries no TAN — 4.10 has it establish the connection before the
+/// client sends anything TAN-bearing.
 #[must_use]
-pub fn encode_ccm(tan: TAN) -> [u8; 8] {
-    let mut data = [0xFFu8; 8];
-    data[0] = CCM_FUNCTION_CODE;
-    data[1] = tan;
-    let _ = CCMMessage { version: 1, tan }; // touch import
-    data
+pub fn encode_ccm(version: u8) -> [u8; 8] {
+    CCMMessage { version }.encode()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -36,6 +35,11 @@ fn success_response(function: FSFunction, tan: TAN) -> Vec<u8> {
 
 fn fs_file_size_to_wire(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
+}
+
+/// B.11 Space is counted in 512-byte blocks.
+fn fs_space_blocks(bytes: u64) -> u32 {
+    u32::try_from(bytes / 512).unwrap_or(u32::MAX)
 }
 
 fn fs_payload_len_is_canonical(data: &[u8], used: usize) -> bool {
@@ -122,12 +126,43 @@ fn normalize_directory_listing_request(
     Ok((directory, pattern.to_string()))
 }
 
+/// Read a B.12 Path Name Length (2 bytes, little-endian) at `count_index` and
+/// return the raw path bytes that follow it.
+///
+/// Every one of these fields used to be read as a single byte, so a conformant
+/// request had its path truncated and the residual length byte prepended to
+/// the name.
+fn counted_path_bytes(request: &[u8], count_index: usize, path_start: usize) -> Option<&[u8]> {
+    let low = *request.get(count_index)?;
+    let high = *request.get(count_index + 1)?;
+    let path_len = u16::from_le_bytes([low, high]) as usize;
+    let used = path_start.checked_add(path_len)?;
+    if !fs_payload_len_is_canonical(request, used) {
+        return None;
+    }
+    request.get(path_start..used)
+}
+
 fn parse_counted_file_path(
     request: &[u8],
     count_index: usize,
     current_directory: &str,
 ) -> Option<String> {
-    parse_counted_file_path_with_count_at(request, count_index, count_index + 1, current_directory)
+    parse_counted_file_path_with_count_at(request, count_index, count_index + 2, current_directory)
+}
+
+/// Like [`parse_counted_file_path`], but accepts a directory (including the
+/// volume root) as well. C.4.3 Delete File names either kind.
+fn parse_counted_file_or_directory_path(
+    request: &[u8],
+    count_index: usize,
+    current_directory: &str,
+) -> Option<String> {
+    if let Some(path) = parse_counted_file_path(request, count_index, current_directory) {
+        return Some(path);
+    }
+    let requested_path = decode_wire_path(counted_path_bytes(request, count_index, count_index + 2)?)?;
+    normalize_directory_path(&requested_path, current_directory).ok()
 }
 
 fn parse_counted_file_path_with_count_at(
@@ -136,12 +171,7 @@ fn parse_counted_file_path_with_count_at(
     path_start: usize,
     current_directory: &str,
 ) -> Option<String> {
-    let path_len = *request.get(count_index)? as usize;
-    let used = path_start.checked_add(path_len)?;
-    if !fs_payload_len_is_canonical(request, used) {
-        return None;
-    }
-    let requested_path = decode_wire_path(&request[path_start..used])?;
+    let requested_path = decode_wire_path(counted_path_bytes(request, count_index, path_start)?)?;
     normalize_client_path(&requested_path, current_directory, false).ok()
 }
 
@@ -152,10 +182,12 @@ fn parse_initialize_volume_request(request: &[u8]) -> core::result::Result<Optio
     if request.len() < 9 {
         return Err(());
     }
-    let flags = request[6];
-    if flags & INITIALIZE_VOLUME_FLAGS_RESERVED_MASK != 0 {
-        return Err(());
-    }
+    // B.29 bits 7-2 are "Reserved, send as 000000" — a rule for the sender.
+    // The client-side builder still refuses to transmit them set; refusing to
+    // *parse* them is the over-strict half, and it would reject a later FS
+    // revision that defines one (ISO 11783-7 §5.4 "received as 'don't care'").
+    // §4.9 scopes Error Code 47 to a message "shorter than expected".
+    let _ = INITIALIZE_VOLUME_FLAGS_RESERVED_MASK;
     let name_len = u16::from_le_bytes([request[7], request[8]]) as usize;
     let used = 9usize.checked_add(name_len).ok_or(())?;
     if !fs_payload_len_is_canonical(request, used) {
@@ -175,12 +207,12 @@ fn parse_two_counted_file_paths(
     request: &[u8],
     current_directory: &str,
 ) -> Option<(String, String)> {
-    if request.len() < 4 {
+    if request.len() < 6 {
         return None;
     }
-    let source_len = request[2] as usize;
-    let dest_len = request[3] as usize;
-    let source_start = 4usize;
+    let source_len = u16::from_le_bytes([request[2], request[3]]) as usize;
+    let dest_len = u16::from_le_bytes([request[4], request[5]]) as usize;
+    let source_start = 6usize;
     let dest_start = source_start.checked_add(source_len)?;
     let used = dest_start.checked_add(dest_len)?;
     if !fs_payload_len_is_canonical(request, used) {
@@ -222,13 +254,64 @@ fn decode_wire_path(path_bytes: &[u8]) -> Option<String> {
     )
 }
 
+/// Resolve the `.` and `..` components A.2.3.1 requires the file server to
+/// remove: "In case they are used in a path name, the file server shall
+/// normalize the path to remove '.' and '..' before the path is checked or
+/// used by any command." A `..` at the volume list is ignored, per the same
+/// clause.
+///
+/// These used to be rejected outright by [`is_valid_fs_path`], so the
+/// standard's own example — `\Vol1\SomeDirectory\..\.\File.txt` — and the far
+/// commoner `..\TASKDATA\TASKDATA.XML` were answered with an invalid-source-
+/// name error. Refusal is not one of the permitted outcomes.
+///
+/// A relative path is resolved against `current_directory` first, so `..`
+/// walks the client's actual working directory. The result never escapes the
+/// root: `is_valid_fs_path` still rejects any residual dot component as a
+/// post-condition.
+fn resolve_dot_segments(path: &str, current_directory: &str) -> String {
+    if !path.split('\\').any(|c| c == "." || c == "..") {
+        return path.to_string();
+    }
+
+    let absolute = is_absolute_path(path);
+    let mut resolved: Vec<&str> = if absolute {
+        Vec::new()
+    } else {
+        current_directory
+            .split('\\')
+            .filter(|c| !c.is_empty())
+            .collect()
+    };
+    for component in path.split('\\') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            name => resolved.push(name),
+        }
+    }
+
+    let trailing = path.ends_with('\\') || path.ends_with("..") || path.ends_with('.');
+    if resolved.is_empty() {
+        return "\\".to_string();
+    }
+    let body = resolved.join("\\");
+    if trailing {
+        format!("\\{body}\\")
+    } else {
+        format!("\\{body}")
+    }
+}
+
 fn normalize_iso_path(
     path: &str,
     current_directory: &str,
     allow_root: bool,
     allow_wildcards: bool,
 ) -> Result<String> {
-    let path = path.replace('/', "\\");
+    let path = resolve_dot_segments(&path.replace('/', "\\"), current_directory);
     if !is_valid_fs_path(&path, allow_root, allow_wildcards) {
         return Err(invalid_fs_path_error(
             "FileServer: path must be a valid ISO 11783-13 backslash path",
@@ -401,8 +484,8 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"new.txt";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Write | OpenFlags::Create);
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out.len(), 1);
@@ -434,8 +517,8 @@ mod tests {
         // Open.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"data.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         let handle = out[0].data[3];
@@ -452,8 +535,8 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"missing.txt";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
@@ -461,12 +544,10 @@ mod tests {
 
     #[test]
     fn open_file_rejects_invalid_paths_without_creating_entries() {
+        // A.2.3.1 has the server *normalize* '.' and '..' rather than refuse
+        // them, so only genuinely unencodable paths belong here.
         let invalid_paths = [
-            "..\\secret.txt",
-            "dir\\..\\secret.txt",
-            "dir\\.\\secret.txt",
             "dir\\\\secret.txt",
-            "../secret.txt",
             "c:\\secret.txt",
             "bad|name.txt",
         ];
@@ -474,8 +555,8 @@ mod tests {
         for (tan, path) in invalid_paths.into_iter().enumerate() {
             let mut s = FileServer::new(FileServerConfig::default());
             let mut req = vec![FSFunction::OpenFile.as_u8(), tan as u8];
-            req.push(path.len() as u8);
             req.push(OpenFlags::Write | OpenFlags::Create);
+            req.extend_from_slice(&(path.len() as u16).to_le_bytes());
             req.extend_from_slice(path.as_bytes());
 
             let out = s.handle_client_message(&req_msg(req, 0x42));
@@ -509,10 +590,10 @@ mod tests {
         let padded_open = vec![
             FSFunction::OpenFile.as_u8(),
             0x11,
-            1,
             OpenFlags::Write | OpenFlags::Create,
+            1,
+            0,
             b'a',
-            0xFF,
             0xFF,
             0xFF,
         ];
@@ -537,7 +618,7 @@ mod tests {
         let out = s.handle_client_message(&req_msg(bad_read, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
 
-        let bad_change_dir = vec![FSFunction::ChangeDirectory.as_u8(), 0x14, 1, b'\\', 0x00];
+        let bad_change_dir = vec![FSFunction::ChangeDirectory.as_u8(), 0x14, 1, 0, b'\\', 0x00];
         let out = s.handle_client_message(&req_msg(bad_change_dir, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
         assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
@@ -546,152 +627,87 @@ mod tests {
     #[test]
     fn malformed_ccm_does_not_connect_client() {
         let mut s = FileServer::new(FileServerConfig::default());
-        let bad_ccm = vec![CCM_FUNCTION_CODE, 0x22, 0x00];
-        let out = s.handle_client_message(&req_msg(bad_ccm, 0x42));
+        let too_short = vec![CCM_FUNCTION_CODE];
+        let out = s.handle_client_message(&req_msg(too_short, 0x42));
         assert!(out.is_empty());
         assert!(!s.clients().contains_key(&0x42));
+
+        // G3 — bytes 3-8 are reserved and ignored. A zero-padded CCM used to be
+        // dropped with no error frame either way, so the client was never
+        // registered and `cleanup_disconnected_clients` purged its open handles
+        // six seconds later, mid-transfer.
+        let zero_padded = vec![CCM_FUNCTION_CODE, 0x22, 0x00];
+        s.handle_client_message(&req_msg(zero_padded, 0x43));
+        assert!(s.clients().contains_key(&0x43));
     }
 
+    /// C.3.2.2 — a directory is created through Open File with the directory
+    /// access mode and the create flag. ISO 11783-13 has no Make Directory
+    /// command; the crate used to invent one at 0x15.
     #[test]
-    fn make_directory_creates_directory_and_is_idempotent() {
+    fn open_file_with_create_directory_flags_creates_the_directory() {
         let mut s = FileServer::new(FileServerConfig::default());
         let path = b"\\newdir";
-        let make = |tan: u8| {
-            let mut req = vec![FSFunction::MakeDirectory.as_u8(), tan, path.len() as u8];
+        let mkdir = |tan: u8, path: &[u8]| {
+            let mut req = vec![
+                FSFunction::OpenFile.as_u8(),
+                tan,
+                OpenFlags::OpenDir | OpenFlags::Create,
+                path.len() as u8, (path.len() >> 8) as u8,
+            ];
             req.extend_from_slice(path);
             req
         };
         assert!(!s.directory_exists("\\newdir"));
-        let out = s.handle_client_message(&req_msg(make(0x20), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::MakeDirectory.as_u8());
+        let out = s.handle_client_message(&req_msg(mkdir(0x20, path), 0x42));
+        assert_eq!(out[0].data[0], FSFunction::OpenFile.as_u8());
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert!(s.directory_exists("\\newdir"));
 
-        // Making the same directory again is an idempotent success.
-        let out = s.handle_client_message(&req_msg(make(0x21), 0x42));
+        // Opening it again just lists it — the create flag is not exclusive.
+        let out = s.handle_client_message(&req_msg(mkdir(0x21, path), 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
-        // A path where a file already exists is rejected as wrong type.
+        // A file already occupies the path.
         s.add_file("\\afile", b"x".to_vec(), 0).unwrap();
-        let file_path = b"\\afile";
-        let mut req = vec![
-            FSFunction::MakeDirectory.as_u8(),
-            0x22,
-            file_path.len() as u8,
+        let out = s.handle_client_message(&req_msg(mkdir(0x22, b"\\afile"), 0x42));
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
+
+        // Without the create flag a missing directory is still NotFound.
+        let mut plain = vec![
+            FSFunction::OpenFile.as_u8(),
+            0x23,
+            OpenFlags::OpenDir.bit(),
+            7u8,
+            0,
         ];
-        req.extend_from_slice(file_path);
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[2], FSError::WrongType.as_u8());
-    }
-
-    #[test]
-    fn get_free_space_reports_capacity_minus_used() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.set_volume_capacity_bytes(1000);
-        s.add_file("\\a", vec![0u8; 300], 0).unwrap();
-        let req = vec![FSFunction::GetFreeSpace.as_u8(), 0x20];
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[0], FSFunction::GetFreeSpace.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        let total = u32::from_le_bytes([
-            out[0].data[3],
-            out[0].data[4],
-            out[0].data[5],
-            out[0].data[6],
-        ]);
-        let free = u32::from_le_bytes([
-            out[0].data[7],
-            out[0].data[8],
-            out[0].data[9],
-            out[0].data[10],
-        ]);
-        assert_eq!(total, 1000);
-        assert_eq!(free, 700);
-        assert_eq!(s.used_bytes(), 300);
-    }
-
-    #[test]
-    fn get_file_size_returns_byte_length() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("\\f", b"hello".to_vec(), 0).unwrap();
-        s.add_directory("\\d").unwrap();
-        let size_req = |tan: u8, p: &[u8]| {
-            let mut req = vec![FSFunction::GetFileSize.as_u8(), tan, p.len() as u8];
-            req.extend_from_slice(p);
-            req
-        };
-        let out = s.handle_client_message(&req_msg(size_req(0x20, b"\\f"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::GetFileSize.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        let size = u32::from_le_bytes([
-            out[0].data[3],
-            out[0].data[4],
-            out[0].data[5],
-            out[0].data[6],
-        ]);
-        assert_eq!(size, 5);
-
-        // A directory is wrong type; a missing file is NotFound.
-        let out = s.handle_client_message(&req_msg(size_req(0x21, b"\\d"), 0x42));
-        assert_eq!(out[0].data[2], FSError::WrongType.as_u8());
-        let out = s.handle_client_message(&req_msg(size_req(0x22, b"\\nope"), 0x42));
+        plain.extend_from_slice(b"\\absent");
+        let out = s.handle_client_message(&req_msg(plain, 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
     }
 
+    /// C.4.3 — Delete File removes directories as well as files.
     #[test]
-    fn copy_file_duplicates_source_and_keeps_it() {
-        let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("\\src", b"hello".to_vec(), 0).unwrap();
-        let copy = |tan: u8, src: &[u8], dst: &[u8]| {
-            let mut req = vec![
-                FSFunction::CopyFile.as_u8(),
-                tan,
-                src.len() as u8,
-                dst.len() as u8,
-            ];
-            req.extend_from_slice(src);
-            req.extend_from_slice(dst);
-            req
-        };
-        let out = s.handle_client_message(&req_msg(copy(0x20, b"\\src", b"\\dst"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::CopyFile.as_u8());
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        // Both source and destination now hold the data.
-        assert_eq!(s.files.get("\\src").unwrap().as_slice(), b"hello");
-        assert_eq!(s.files.get("\\dst").unwrap().as_slice(), b"hello");
-
-        // Copying onto an existing destination is refused.
-        let out = s.handle_client_message(&req_msg(copy(0x21, b"\\src", b"\\dst"), 0x42));
-        assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
-        // Copying a missing source is NotFound.
-        let out = s.handle_client_message(&req_msg(copy(0x22, b"\\nope", b"\\dst2"), 0x42));
-        assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
-    }
-
-    #[test]
-    fn remove_directory_deletes_empty_and_rejects_non_empty() {
+    fn delete_file_removes_empty_directories_and_rejects_non_empty() {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\empty").unwrap();
         s.add_directory("\\full").unwrap();
         s.add_file("\\full\\f", b"x".to_vec(), 0).unwrap();
         let rmdir = |tan: u8, path: &[u8]| {
-            let mut req = vec![FSFunction::RemoveDirectory.as_u8(), tan, path.len() as u8];
+            let mut req = vec![FSFunction::DeleteFile.as_u8(), tan, path.len() as u8, (path.len() >> 8) as u8];
             req.extend_from_slice(path);
             req
         };
 
-        // Empty directory removes successfully.
         let out = s.handle_client_message(&req_msg(rmdir(0x20, b"\\empty"), 0x42));
-        assert_eq!(out[0].data[0], FSFunction::RemoveDirectory.as_u8());
+        assert_eq!(out[0].data[0], FSFunction::DeleteFile.as_u8());
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert!(!s.directory_exists("\\empty"));
 
-        // Non-empty directory is refused.
         let out = s.handle_client_message(&req_msg(rmdir(0x21, b"\\full"), 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
         assert!(s.directory_exists("\\full"));
 
-        // A non-existent directory is NotFound; the root is refused.
         let out = s.handle_client_message(&req_msg(rmdir(0x22, b"\\nope"), 0x42));
         assert_eq!(out[0].data[2], FSError::NotFound.as_u8());
         let out = s.handle_client_message(&req_msg(rmdir(0x23, b"\\"), 0x42));
@@ -713,57 +729,68 @@ mod tests {
     }
 
     #[test]
-    fn preloaded_paths_reject_traversal_and_file_directories() {
+    fn preloaded_paths_reject_unencodable_names_and_file_directories() {
         let mut s = FileServer::new(FileServerConfig::default());
-        for path in [
-            "..\\secret.txt",
-            "dir\\..\\secret.txt",
-            "bad|name.txt",
-            "\\",
-        ] {
+        for path in ["bad|name.txt", "\\"] {
             assert!(
                 s.add_file(path, Vec::new(), 0).is_err(),
                 "file path {path:?} should be rejected"
             );
         }
-        assert!(s.add_directory("dir\\..").is_err());
         assert!(s.add_directory("bad|dir").is_err());
+
+        // A.2.3.1's own example: the dot segments resolve away and the file
+        // lands where the normalized path points.
+        s.add_file("Vol1\\SomeDirectory\\..\\.\\File.txt", Vec::new(), 0)
+            .unwrap();
+        assert!(s.files.contains_key("\\Vol1\\File.txt"));
+        // '..' at the volume list is ignored rather than escaping it.
+        s.add_file("..\\secret.txt", Vec::new(), 0).unwrap();
+        assert!(s.files.contains_key("\\secret.txt"));
     }
 
     #[test]
-    fn directory_paths_reject_values_that_cannot_encode_in_one_count_byte() {
+    fn directory_paths_reject_values_that_cannot_encode_in_the_count_field() {
+        // B.12 gives Path Name Length two bytes; A.2.2.1 caps each individual
+        // name component at 255, so the whole path may still be long.
         let mut s = FileServer::new(FileServerConfig::default());
-        let max_body = "a".repeat(FS_WIRE_STRING_MAX_LEN - 2);
+        let component = "a".repeat(255);
+        let max_body = core::iter::repeat_n(component.as_str(), 200)
+            .collect::<Vec<_>>()
+            .join("\\");
         s.add_directory(format!("\\{max_body}")).unwrap();
 
-        let too_long_body = "b".repeat(FS_WIRE_STRING_MAX_LEN - 1);
-        assert!(s.add_directory(format!("\\{too_long_body}")).is_err());
+        let too_long_component = "b".repeat(256);
+        assert!(s.add_directory(format!("\\{too_long_component}")).is_err());
 
         let mut cd = vec![
             FSFunction::ChangeDirectory.as_u8(),
             0x01,
-            max_body.len() as u8,
+            max_body.len() as u8, (max_body.len() >> 8) as u8,
         ];
         cd.extend_from_slice(max_body.as_bytes());
         let response = s.handle_client_message(&req_msg(cd, 0x42));
         assert_eq!(response[0].data[2], FSError::Success.as_u8());
-        assert_eq!(
-            s.clients().get(&0x42).unwrap().current_directory.len(),
-            FS_WIRE_STRING_MAX_LEN
-        );
+        let deep_cwd_len = s.clients().get(&0x42).unwrap().current_directory.len();
+        assert_eq!(deep_cwd_len, max_body.len() + 2);
 
         let mut get_cwd = vec![FSFunction::GetCurrentDirectory.as_u8(), 0x02];
         get_cwd.extend_from_slice(&[0xFF; 6]);
         let response = s.handle_client_message(&req_msg(get_cwd, 0x42));
         assert_eq!(response[0].data[2], FSError::Success.as_u8());
-        assert_eq!(response[0].data[3], FS_WIRE_STRING_MAX_LEN as u8);
+        // C.2.2.3 bytes 12,13 — a path this long cannot fit one byte at all.
+        assert_eq!(
+            u16::from_le_bytes([response[0].data[11], response[0].data[12]]) as usize,
+            deep_cwd_len
+        );
 
-        let too_deep = vec![FSFunction::ChangeDirectory.as_u8(), 0x03, 1, b'b'];
-        let response = s.handle_client_message(&req_msg(too_deep, 0x42));
-        assert_eq!(response[0].data[2], FSError::InvalidSourceName.as_u8());
+        // The path is now encodable; what it names still has to exist.
+        let missing = vec![FSFunction::ChangeDirectory.as_u8(), 0x03, 1, 0, b'b'];
+        let response = s.handle_client_message(&req_msg(missing, 0x42));
+        assert_eq!(response[0].data[2], FSError::NotFound.as_u8());
         assert_eq!(
             s.clients().get(&0x42).unwrap().current_directory.len(),
-            FS_WIRE_STRING_MAX_LEN
+            deep_cwd_len
         );
     }
 
@@ -776,14 +803,14 @@ mod tests {
         s.add_file("\\log.txt", b"root".to_vec(), 0).unwrap();
 
         let path = b"\\safe";
-        let mut cd = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
+        let mut cd = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
         cd.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(cd, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x02];
-        open.push(b"log.txt".len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(b"log.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"log.txt");
         let out = s.handle_client_message(&req_msg(open, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
@@ -799,7 +826,7 @@ mod tests {
     #[test]
     fn tan_cache_reuses_response() {
         let mut s = FileServer::new(FileServerConfig::default());
-        let req = vec![FSFunction::FileServerStatus.as_u8(), 0x05];
+        let req = vec![FSFunction::GetFileServerProperties.as_u8(), 0x05];
         let out1 = s.handle_client_message(&req_msg(req.clone(), 0x42));
         let out2 = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out1[0].data, out2[0].data);
@@ -816,8 +843,8 @@ mod tests {
 
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x05];
         let path = b"data.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Read.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
 
         let out1 = s.handle_client_message(&req_msg(req.clone(), 0x42));
@@ -857,8 +884,8 @@ mod tests {
         // Open RW.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"rw.bin";
-        req.push(path.len() as u8);
         req.push(OpenFlags::ReadWrite.bit());
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         let handle = out[0].data[3];
@@ -867,10 +894,12 @@ mod tests {
         let out = s.handle_client_message(&req_msg(wreq, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert_eq!(response_count(&out[0].data), 3);
-        // Seek to 0.
-        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x03, handle];
-        seek.extend_from_slice(&0u32.to_le_bytes());
-        s.handle_client_message(&req_msg(seek, 0x42));
+        // Seek back to the start (C.3.3.2 mode 0, offset 0).
+        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x03, handle, 0];
+        seek.extend_from_slice(&0i32.to_le_bytes());
+        let out = s.handle_client_message(&req_msg(seek, 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &0u32.to_le_bytes());
         // Read 3 bytes.
         let rreq = read_req(0x04, handle, 3);
         let out = s.handle_client_message(&req_msg(rreq, 0x42));
@@ -884,8 +913,8 @@ mod tests {
             .unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"ro.txt".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"ro.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"ro.txt");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
 
@@ -894,27 +923,60 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
     }
 
+    /// C.3.3.1: "If the Seek command tries to set the file pointer beyond the
+    /// end of file ... or before the start of the file, the response shall
+    /// contain an 'Invalid Request Length' error code ... The File pointer
+    /// position shall be changed only if the error code 'Success' is
+    /// contained in the response message."
+    ///
+    /// The old handler range-checked nothing, so a seek to `u32::MAX` on an
+    /// empty file "succeeded" and parked the pointer past the end.
     #[test]
-    fn write_rejects_position_overflow_without_growing_file() {
+    fn seek_out_of_range_is_refused_and_leaves_the_pointer_alone() {
         let mut s = FileServer::new(FileServerConfig::default());
-        s.add_file("rw.bin", Vec::new(), 0).unwrap();
+        s.add_file("rw.bin", b"abcd".to_vec(), 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"rw.bin".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"rw.bin".len() as u16).to_le_bytes());
         open.extend_from_slice(b"rw.bin");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
 
-        let mut seek = vec![FSFunction::SeekFile.as_u8(), 0x02, handle];
-        seek.extend_from_slice(&u32::MAX.to_le_bytes());
-        let out = s.handle_client_message(&req_msg(seek, 0x42));
-        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        let seek = |tan: u8, mode: u8, offset: i32| {
+            let mut req = vec![FSFunction::SeekFile.as_u8(), tan, handle, mode];
+            req.extend_from_slice(&offset.to_le_bytes());
+            req
+        };
 
-        let write = write_req(0x03, handle, &[0xAA]);
-        let out = s.handle_client_message(&req_msg(write, 0x42));
-        assert_eq!(out[0].data[2], FSError::NoSpace.as_u8());
-        assert_eq!(s.files.get("\\rw.bin").unwrap().len(), 0);
-        assert_eq!(s.open_files()[0].position, u32::MAX);
+        for (tan, mode, offset) in [(0x02, 0u8, i32::MAX), (0x03, 0, -1), (0x04, 2, 1)] {
+            let out = s.handle_client_message(&req_msg(seek(tan, mode, offset), 0x42));
+            assert_eq!(out[0].data[2], FSError::InvalidLength.as_u8());
+            assert_eq!(s.open_files()[0].position, 0);
+        }
+
+        // B.17 leaves 3-255 reserved.
+        let out = s.handle_client_message(&req_msg(seek(0x05, 3, 0), 0x42));
+        assert_eq!(out[0].data[2], FSError::InvalidAccess.as_u8());
+        assert_eq!(s.open_files()[0].position, 0);
+
+        // Relative and end-anchored seeks inside the file land where asked and
+        // report the resulting position.
+        let out = s.handle_client_message(&req_msg(seek(0x06, 2, -1), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &3u32.to_le_bytes());
+        assert_eq!(s.open_files()[0].position, 3);
+
+        let out = s.handle_client_message(&req_msg(seek(0x07, 1, -2), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(&out[0].data[4..8], &1u32.to_le_bytes());
+        assert_eq!(s.open_files()[0].position, 1);
+
+        // Once the pointer is already at the end, moving further reports 45.
+        let out = s.handle_client_message(&req_msg(seek(0x08, 2, 0), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        let out = s.handle_client_message(&req_msg(seek(0x09, 1, 1), 0x42));
+        assert_eq!(out[0].data[2], FSError::EndOfFile.as_u8());
+        assert_eq!(s.open_files()[0].position, 4);
     }
 
     #[test]
@@ -923,8 +985,8 @@ mod tests {
         s.add_file("media.txt", b"abc".to_vec(), 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"media.txt".len() as u8);
         open.push(OpenFlags::ReadWrite.bit());
+        open.extend_from_slice(&(b"media.txt".len() as u16).to_le_bytes());
         open.extend_from_slice(b"media.txt");
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
         assert_eq!(s.open_files().len(), 1);
@@ -945,8 +1007,8 @@ mod tests {
         assert_eq!(removed[0].data[2], VolumeState::Removed.as_u8());
 
         let mut open_after_remove = vec![FSFunction::OpenFile.as_u8(), 0x03];
-        open_after_remove.push(b"media.txt".len() as u8);
         open_after_remove.push(OpenFlags::Read.bit());
+        open_after_remove.extend_from_slice(&(b"media.txt".len() as u16).to_le_bytes());
         open_after_remove.extend_from_slice(b"media.txt");
         let out = s.handle_client_message(&req_msg(open_after_remove, 0x42));
         assert_eq!(out[0].data[2], FSError::MediaNotPresent.as_u8());
@@ -971,8 +1033,8 @@ mod tests {
         s.add_file("shared.bin", vec![0; 2], 0).unwrap();
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x01];
-        open.push(b"shared.bin".len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open.extend_from_slice(b"shared.bin");
         let handle_a = s.handle_client_message(&req_msg(open.clone(), 0x42))[0].data[3];
 
@@ -989,8 +1051,8 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open_writer = vec![FSFunction::OpenFile.as_u8(), 0x05];
-        open_writer.push(b"shared.bin".len() as u8);
         open_writer.push(OpenFlags::ReadWrite.bit());
+        open_writer.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open_writer.extend_from_slice(b"shared.bin");
         let handle_writer = s.handle_client_message(&req_msg(open_writer, 0x42))[0].data[3];
 
@@ -1003,8 +1065,8 @@ mod tests {
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
 
         let mut open_reader = vec![FSFunction::OpenFile.as_u8(), 0x08];
-        open_reader.push(b"shared.bin".len() as u8);
         open_reader.push(OpenFlags::Read.bit());
+        open_reader.extend_from_slice(&(b"shared.bin".len() as u16).to_le_bytes());
         open_reader.extend_from_slice(b"shared.bin");
         let handle_reader = s.handle_client_message(&req_msg(open_reader, 0x43))[0].data[3];
 
@@ -1054,15 +1116,34 @@ mod tests {
         assert!(!sub.iter().any(|e| e.name == "deep\\"));
     }
 
+    /// A.2.3.1: nested dot segments are normalized away, not refused. Walking
+    /// into a directory and back out again lands at the root.
     #[test]
-    fn change_directory_rejects_nested_traversal() {
+    fn change_directory_normalizes_nested_traversal() {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\safe").unwrap();
-        let path = b"safe\\..";
-        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
-        req.extend_from_slice(path);
-        let out = s.handle_client_message(&req_msg(req, 0x42));
-        assert_eq!(out[0].data[2], FSError::InvalidSourceName.as_u8());
+        let change = |tan: u8, path: &[u8]| {
+            let mut req = vec![
+                FSFunction::ChangeDirectory.as_u8(),
+                tan,
+                path.len() as u8,
+                (path.len() >> 8) as u8,
+            ];
+            req.extend_from_slice(path);
+            req
+        };
+
+        let out = s.handle_client_message(&req_msg(change(0x01, b"safe\\.."), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
+
+        let out = s.handle_client_message(&req_msg(change(0x02, b"\\safe"), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
+        assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\safe\\");
+
+        // '..' from the root is ignored, not an escape.
+        let out = s.handle_client_message(&req_msg(change(0x03, b"..\\.."), 0x42));
+        assert_eq!(out[0].data[2], FSError::Success.as_u8());
         assert_eq!(s.clients().get(&0x42).unwrap().current_directory, "\\");
     }
 
@@ -1071,7 +1152,7 @@ mod tests {
         let mut s = FileServer::new(FileServerConfig::default());
         s.add_directory("\\safe").unwrap();
         let path = b"\\safe";
-        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8];
+        let mut req = vec![FSFunction::ChangeDirectory.as_u8(), 0x01, path.len() as u8, (path.len() >> 8) as u8];
         req.extend_from_slice(path);
         let out = s.handle_client_message(&req_msg(req, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
@@ -1096,7 +1177,7 @@ mod tests {
         s.add_file(
             "\\logs\\old.txt",
             b"abc".to_vec(),
-            FileAttributes::Archive.bit(),
+            FileAttributes::Hidden.bit(),
         )
         .unwrap();
 
@@ -1105,8 +1186,9 @@ mod tests {
         let mut move_req = vec![
             FSFunction::MoveFile.as_u8(),
             0x10,
-            src.len() as u8,
+            src.len() as u8, (src.len() >> 8) as u8,
             dst.len() as u8,
+            (dst.len() >> 8) as u8,
         ];
         move_req.extend_from_slice(src);
         move_req.extend_from_slice(dst);
@@ -1119,18 +1201,18 @@ mod tests {
         let mut get_attrs = vec![
             FSFunction::GetFileAttributes.as_u8(),
             0x11,
-            attrs_path.len() as u8,
+            attrs_path.len() as u8, (attrs_path.len() >> 8) as u8,
         ];
         get_attrs.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(get_attrs, 0x42));
         assert_eq!(out[0].data[2], FSError::Success.as_u8());
-        assert_eq!(out[0].data[3], FileAttributes::Archive.bit());
+        assert_eq!(out[0].data[3], FileAttributes::Hidden.bit());
 
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
             0x12,
-            attrs_path.len() as u8,
             FileAttributes::ReadOnly.bit() | FileAttributes::Hidden.bit(),
+            attrs_path.len() as u8, (attrs_path.len() >> 8) as u8,
         ];
         set_attrs.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(set_attrs, 0x42));
@@ -1144,13 +1226,13 @@ mod tests {
         );
 
         let mut delete_read_only =
-            vec![FSFunction::DeleteFile.as_u8(), 0x13, attrs_path.len() as u8];
+            vec![FSFunction::DeleteFile.as_u8(), 0x13, attrs_path.len() as u8, (attrs_path.len() >> 8) as u8];
         delete_read_only.extend_from_slice(attrs_path);
         let out = s.handle_client_message(&req_msg(delete_read_only.clone(), 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
 
         s.file_attrs
-            .insert("\\logs\\new.txt".to_string(), FileAttributes::Archive.bit());
+            .insert("\\logs\\new.txt".to_string(), FileAttributes::Hidden.bit());
         let out = s.handle_client_message(&req_msg(delete_read_only, 0x43));
         assert_eq!(out[0].data, success_response(FSFunction::DeleteFile, 0x13));
         assert!(!s.files.contains_key("\\logs\\new.txt"));
@@ -1175,7 +1257,7 @@ mod tests {
         let initial_files = s.files.clone();
         let initial_attrs = s.file_attrs.clone();
 
-        let malformed_move = vec![FSFunction::MoveFile.as_u8(), 0x21, 5, 5, b'a', b'.'];
+        let malformed_move = vec![FSFunction::MoveFile.as_u8(), 0x21, 5, 0, 5, 0, b'a', b'.'];
         let out = s.handle_client_message(&req_msg(malformed_move, 0x42));
         assert_eq!(out[0].data[2], FSError::MalformedRequest.as_u8());
         assert_eq!(s.files, initial_files);
@@ -1185,8 +1267,8 @@ mod tests {
         let mut set_attrs = vec![
             FSFunction::SetFileAttributes.as_u8(),
             0x22,
-            bad_attrs.len() as u8,
-            FileAttributes::Volume.bit(),
+            FileAttributes::IsVolume.bit(),
+            bad_attrs.len() as u8, (bad_attrs.len() >> 8) as u8,
         ];
         set_attrs.extend_from_slice(bad_attrs);
         let out = s.handle_client_message(&req_msg(set_attrs, 0x42));
@@ -1194,11 +1276,11 @@ mod tests {
         assert_eq!(s.file_attrs, initial_attrs);
 
         let mut open = vec![FSFunction::OpenFile.as_u8(), 0x23];
-        open.push(bad_attrs.len() as u8);
         open.push(OpenFlags::Read.bit());
+        open.extend_from_slice(&(bad_attrs.len() as u16).to_le_bytes());
         open.extend_from_slice(bad_attrs);
         let handle = s.handle_client_message(&req_msg(open, 0x42))[0].data[3];
-        let mut delete_open = vec![FSFunction::DeleteFile.as_u8(), 0x24, bad_attrs.len() as u8];
+        let mut delete_open = vec![FSFunction::DeleteFile.as_u8(), 0x24, bad_attrs.len() as u8, (bad_attrs.len() >> 8) as u8];
         delete_open.extend_from_slice(bad_attrs);
         let out = s.handle_client_message(&req_msg(delete_open, 0x42));
         assert_eq!(out[0].data[2], FSError::AccessDenied.as_u8());
@@ -1217,6 +1299,67 @@ mod tests {
         assert!(out.iter().any(|f| f.dest.is_none()));
     }
 
+    /// ISO 11783-13 B.30 makes Volume Mode bits 7-2 "Reserved, send as 000000",
+    /// which binds the *sender*. §4.9 scopes Error Code 47 to a message "shorter
+    /// than expected", so nothing licenses refusing a request over a reserved
+    /// bit — and refusing one means a later FS revision that defines bit 2 gets
+    /// turned away instead of ignored (ISO 11783-7 §5.4 "received as 'don't
+    /// care'").
+    #[test]
+    fn a_volume_mode_request_ignores_its_reserved_bits() {
+        // An empty volume name matches the served volume, so the clean request
+        // genuinely succeeds rather than erroring for an unrelated reason.
+        let request = |mode: u8| {
+            let mut r = vec![FSFunction::VolumeStatus.as_u8(), 0x30, mode];
+            r.extend_from_slice(&0u16.to_le_bytes());
+            r
+        };
+
+        let mut clean = FileServer::new(FileServerConfig::default());
+        let expected = clean.handle_client_message(&req_msg(request(0x01), 0x42))[0]
+            .data
+            .clone();
+        let error = FileServer::new(FileServerConfig::default())
+            .encode_volume_status_error_response(0x30);
+        assert_ne!(expected, error, "the clean request must actually succeed");
+
+        // Same request with every reserved bit set must land in the same place.
+        let mut noisy = FileServer::new(FileServerConfig::default());
+        let out = noisy.handle_client_message(&req_msg(request(0xFD), 0x42));
+        assert_eq!(
+            out[0].data, expected,
+            "reserved bits must be masked, not refused"
+        );
+    }
+
+    /// B.29 gives Volume Flags the same "Reserved, send as 000000" rule, with
+    /// the same asymmetry: the client builder refuses to transmit them set, the
+    /// server must not refuse to parse them.
+    #[test]
+    fn an_initialize_volume_request_ignores_its_reserved_flag_bits() {
+        let name = b"vol";
+        let request = |flags: u8| {
+            let mut r = vec![FSFunction::InitializeVolume.as_u8(), 0x31];
+            r.extend_from_slice(&1024u32.to_le_bytes());
+            r.push(flags);
+            r.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            r.extend_from_slice(name);
+            r
+        };
+
+        let mut clean = FileServer::new(FileServerConfig::default());
+        let expected = clean.handle_client_message(&req_msg(request(0x01), 0x42))[0]
+            .data
+            .clone();
+
+        let mut noisy = FileServer::new(FileServerConfig::default());
+        let out = noisy.handle_client_message(&req_msg(request(0xFD), 0x42));
+        assert_eq!(
+            out[0].data, expected,
+            "reserved flag bits must be masked, not refused"
+        );
+    }
+
     #[test]
     fn volume_state_transitions_with_open_files() {
         let mut s = FileServer::new(FileServerConfig::default());
@@ -1224,8 +1367,8 @@ mod tests {
         // Open a file → Present should advance to InUse on next update.
         let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
         let path = b"f";
-        req.push(path.len() as u8);
         req.push(OpenFlags::Write | OpenFlags::Create);
+        req.extend_from_slice(&(path.len() as u16).to_le_bytes());
         req.extend_from_slice(path);
         s.handle_client_message(&req_msg(req, 0x42));
         let _ = s.update(0);

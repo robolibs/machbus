@@ -1,3 +1,10 @@
+/// Deepest chain of Execute Macro effects the runtime will follow.
+///
+/// Matches the layout engine's container-recursion cap. A pool arrives over the
+/// bus from another node, so its nesting depth is not something this VT gets to
+/// trust.
+const MAX_MACRO_DEPTH: usize = 32;
+
 impl VtRenderRuntime {
     /// Apply one accepted ECU→VT command to the render runtime.
     ///
@@ -837,7 +844,13 @@ impl VtRenderRuntime {
         id: ObjectID,
         executing: &mut Vec<ObjectID>,
     ) -> Result<RenderUpdate> {
-        if executing.contains(&id) {
+        // The cycle guard alone is not enough: a *non-repeating* chain of Execute
+        // Macro effects is bounded only by the 16-bit object ID space, so a
+        // bus-uploaded pool can nest ~65 000 frames deep and overflow the stack.
+        // That aborts the process outright — not a Rust panic, so no unwind, no
+        // `catch_unwind`, and no fail-safe handler runs. The layout engine caps
+        // its own recursion the same way.
+        if executing.len() >= MAX_MACRO_DEPTH || executing.contains(&id) {
             return Ok(RenderUpdate::NotRenderAffecting {
                 reason: "recursive macro execution was ignored",
             });

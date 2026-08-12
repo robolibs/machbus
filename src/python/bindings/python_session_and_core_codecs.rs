@@ -9,8 +9,8 @@ use crate::j1939::diagnostic::Dtc;
 use crate::net::{ClaimState, Frame, Identifier, Name, Pgn, Priority};
 use crate::nmea::{GNSSPosition, NMEAConfig};
 use crate::session::plugins::{
-    Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
-    GroupFunction, Guidance, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
+    AutoDrive, Auxiliary, ControlFunctionalities, Diagnostics, DmMemory, FsClient, FsServer, Gnss,
+    GroupFunction, Heartbeat, Implement, LanguageCommand, MaintainPower, NameManagement,
     Powertrain, Request2, ScClient, ScMaster, ShortcutButton, TcClient, TcServer, Tim, VtClient,
     VtServer,
 };
@@ -273,11 +273,49 @@ fn event_to_dict<'py>(py: Python<'py>, ev: &Event) -> PyResult<Bound<'py, PyDict
                 d.set_item("kind", "guidance")?;
                 d.set_item("sub", "machine_info")?;
                 d.set_item("source", *source)?;
-                d.set_item("estimated_curvature", *estimated_curvature)?;
+                d.set_item("estimated_curvature", estimated_curvature.value())?;
                 d.set_item("steering_ready", *steering_ready)?;
                 d.set_item("limit_status", *limit_status)?;
             }
+            GuidanceEvent::LinkLost {
+                silent_for_ms,
+                was_engaged,
+            } => {
+                d.set_item("kind", "guidance")?;
+                d.set_item("sub", "link_lost")?;
+                d.set_item("silent_for_ms", *silent_for_ms)?;
+                d.set_item("was_engaged", *was_engaged)?;
+            }
+            GuidanceEvent::LinkRestored { source } => {
+                d.set_item("kind", "guidance")?;
+                d.set_item("sub", "link_restored")?;
+                d.set_item("source", *source)?;
+            }
         },
+        Event::Autodrive(ae) => {
+            use crate::session::sys::AutodriveEvent;
+            d.set_item("kind", "autodrive")?;
+            match ae {
+                AutodriveEvent::StateChanged { status } => {
+                    d.set_item("sub", "state_changed")?;
+                    d.set_item("status", status.as_u8())?;
+                }
+                AutodriveEvent::SafeStop { trigger } => {
+                    d.set_item("sub", "safe_stop")?;
+                    d.set_item("trigger", trigger.as_str())?;
+                }
+                AutodriveEvent::Refused { refusal } => {
+                    d.set_item("sub", "refused")?;
+                    d.set_item("refusal", refusal.as_str())?;
+                }
+                AutodriveEvent::Engaged => {
+                    d.set_item("sub", "engaged")?;
+                }
+                AutodriveEvent::Disengaged => {
+                    d.set_item("sub", "disengaged")?;
+                }
+            }
+        }
         other => {
             d.set_item("kind", "other")?;
             d.set_item("debug", format!("{other:?}"))?;
@@ -312,11 +350,11 @@ impl PySession {
             .ok_or_else(|| err_runtime("implement subsystem not enabled"))
     }
 
-    #[allow(dead_code)]
-    fn guidance(&mut self) -> PyResult<&mut Guidance> {
+
+    fn autodrive(&mut self) -> PyResult<&mut AutoDrive> {
         self.session
-            .get_mut::<Guidance>()
-            .ok_or_else(|| err_runtime("guidance subsystem not enabled"))
+            .get_mut::<AutoDrive>()
+            .ok_or_else(|| err_runtime("autodrive subsystem not enabled"))
     }
 
     fn vt(&mut self) -> PyResult<&mut VtClient> {
@@ -438,7 +476,7 @@ impl PySession {
         enable_diagnostics = false,
         diagnostics_interval_ms = 1000,
         enable_gnss = false,
-        enable_guidance = false,
+        enable_autodrive = false,
         enable_implement = false,
         enable_vt_client = false,
         enable_tc_client = false,
@@ -474,7 +512,7 @@ impl PySession {
         enable_diagnostics: bool,
         diagnostics_interval_ms: u32,
         enable_gnss: bool,
-        enable_guidance: bool,
+        enable_autodrive: bool,
         enable_implement: bool,
         enable_vt_client: bool,
         enable_tc_client: bool,
@@ -540,8 +578,11 @@ impl PySession {
         if enable_gnss {
             b = b.plug(Gnss::new(NMEAConfig::default().with_gnss_navigation(true)));
         }
-        if enable_guidance {
-            b = b.plug(Guidance::new());
+        // Mutually exclusive with `enable_guidance`: both author PGN 0xAD00
+        // from this address, and `build()` refuses the pair rather than let one
+        // silently overwrite the other's safe stop.
+        if enable_autodrive {
+            b = b.plug(AutoDrive::new());
         }
         if enable_implement {
             b = b.plug(Implement::new());
@@ -672,6 +713,21 @@ impl PySession {
         self.session.tick(self.now);
     }
 
+    /// Advance the time cursor by `dt_us` **microseconds** and tick the session.
+    ///
+    /// `tick` takes whole milliseconds, so a loop running faster than 1 kHz
+    /// passes `0` every time and the clock never moves — every protocol timer
+    /// freezes and no watchdog expires. Use this for sub-millisecond loops.
+    fn tick_us(&mut self, dt_us: u64) {
+        self.now = self.now.add_micros(dt_us);
+        self.session.tick(self.now);
+    }
+
+    /// Current monotonic time cursor, in microseconds.
+    fn now_us(&self) -> u64 {
+        self.now.as_micros()
+    }
+
     /// Current monotonic time cursor, in milliseconds.
     fn now_ms(&self) -> u64 {
         self.now.as_millis()
@@ -776,6 +832,7 @@ impl PySession {
             spn,
             fmi: Fmi::from_u8(fmi),
             occurrence_count: 1,
+            conversion_method: false,
         });
         Ok(())
     }
@@ -857,65 +914,77 @@ impl PySession {
         Ok(Some(d))
     }
 
-    // ─── Guidance (autosteer) ────────────────────────────────────
 
-    /// Command path curvature in 1/km (0 = straight). Autosteer is
-    /// curvature-based.
-    fn guidance_command_curvature(&mut self, curvature_per_km: f64) -> PyResult<()> {
-        self.guidance()?.command_curvature(curvature_per_km);
+
+
+
+
+
+
+    /// Move AutoDrive to *ready to enable*.
+    fn autodrive_arm(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .arm()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
+    }
+
+    /// Begin commanding; the setpoint reaches the bus on the next tick.
+    fn autodrive_engage(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .engage()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
+    }
+
+    /// Stop commanding and fall back to the safe state. Never refused.
+    fn autodrive_disengage(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .disengage(crate::safety::SafeStopTrigger::OperatorOverride);
         Ok(())
     }
 
-    /// Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
-    /// forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
-    /// positive). Sends both the steering curvature (κ = ω / v, PGN 0xAD00) and
-    /// the target speed (PGN 0xFD43).
-    fn guidance_command_velocity(&mut self, linear_mps: f64, angular_rad_s: f64) -> PyResult<()> {
-        self.guidance()?.command_velocity(linear_mps, angular_rad_s);
-        Ok(())
+    /// Replace the setpoint. `curvature_km_inv` is right-positive per AEF
+    /// D.7.2.1; pass `None` for either axis to leave it uncommanded.
+    #[pyo3(signature = (curvature_km_inv=None, speed_mps=None))]
+    fn autodrive_command(
+        &mut self,
+        curvature_km_inv: Option<f64>,
+        speed_mps: Option<f64>,
+    ) -> PyResult<()> {
+        let cmd = crate::session::DriveCommand {
+            curvature_km_inv,
+            speed_mps,
+        };
+        self.autodrive()?
+            .command(cmd)
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
-    /// Command a turn radius in metres (curvature = 1000 / radius).
-    fn guidance_command_radius(&mut self, radius_m: f64) -> PyResult<()> {
-        self.guidance()?.command_radius(radius_m);
-        Ok(())
+    /// Release a latched safe stop. Raises while the operator is still holding
+    /// the Auxiliary Shortcut Button or a GNSS hazard is live.
+    fn autodrive_clear_stop(&mut self) -> PyResult<()> {
+        self.autodrive()?
+            .clear_stop()
+            .map_err(|refusal| pyo3::exceptions::PyRuntimeError::new_err(refusal.as_str()))
     }
 
-    /// Command straight-ahead steering (zero curvature).
-    fn guidance_command_straight(&mut self) -> PyResult<()> {
-        self.guidance()?.command_straight();
-        Ok(())
+    /// Why AutoDrive stopped (a short stable identifier), or `None`.
+    fn autodrive_stop_reason(&mut self) -> PyResult<Option<String>> {
+        Ok(self
+            .autodrive()?
+            .stop_reason()
+            .map(|trigger| trigger.as_str().to_owned()))
     }
 
-    /// Request the steering ECU to engage (Curvature Command Status = intended to
-    /// steer on PGN 0xAD00); re-sends the last commanded curvature. The ECU only
-    /// steers while it reports itself ready.
-    fn guidance_engage(&mut self) -> PyResult<()> {
-        self.guidance()?.engage();
-        Ok(())
+    /// `True` while AutoDrive is actively commanding the machine.
+    fn autodrive_is_engaged(&mut self) -> PyResult<bool> {
+        Ok(self.autodrive()?.is_engaged())
     }
 
-    /// Stop requesting steering: clears the engage request and commands straight.
-    fn guidance_disengage(&mut self) -> PyResult<()> {
-        self.guidance()?.disengage();
-        Ok(())
-    }
 
-    /// `True` if the controller is currently requesting steering (its own intent,
-    /// not the steering ECU's readiness).
-    fn guidance_is_engaged(&mut self) -> PyResult<bool> {
-        Ok(self.guidance()?.is_engaged())
-    }
 
-    /// The steering system's last reported estimated curvature (1/km), or `None`.
-    fn guidance_estimated_curvature(&mut self) -> PyResult<Option<f64>> {
-        Ok(self.guidance()?.estimated_curvature())
-    }
 
-    /// `True` if the steering system reports it is ready to be steered.
-    fn guidance_is_steering_ready(&mut self) -> PyResult<bool> {
-        Ok(self.guidance()?.is_steering_ready())
-    }
+
+
 
     // ─── Implement messages ──────────────────────────────────────
 
@@ -1242,10 +1311,10 @@ impl PySession {
 
     fn powertrain_broadcast_eec1(&mut self, eec1: &PyEec1) -> PyResult<()> {
         let data = crate::j1939::Eec1 {
-            engine_torque_percent: eec1.engine_torque_percent,
-            driver_demand_percent: eec1.driver_demand_percent,
-            actual_engine_percent: eec1.actual_engine_percent,
-            engine_speed_rpm: eec1.engine_speed_rpm,
+            engine_torque_percent: py_signal(eec1.engine_torque_percent),
+            driver_demand_percent: py_signal(eec1.driver_demand_percent),
+            actual_engine_percent: py_signal(eec1.actual_engine_percent),
+            engine_speed_rpm: py_signal(eec1.engine_speed_rpm),
             starter_mode: eec1.starter_mode,
             source_address: eec1.source_address,
         };
@@ -1391,6 +1460,8 @@ impl PySession {
             road_transport_mode,
             external_stop,
             implement_ready,
+            operator_presence_timeout: false,
+            operator_override: false,
         });
         Ok(())
     }
@@ -1534,9 +1605,11 @@ impl PySession {
     fn fs_client_write(&mut self, handle: u8, data: Vec<u8>) -> PyResult<u8> {
         self.fs_client()?.write(handle, &data).map_err(err_runtime)
     }
-    fn fs_client_seek(&mut self, handle: u8, position: u32) -> PyResult<u8> {
+    fn fs_client_seek(&mut self, handle: u8, mode: u8, offset: i32) -> PyResult<u8> {
+        let mode = crate::isobus::fs::SeekMode::try_from_u8(mode)
+            .ok_or_else(|| err_runtime("FS seek position mode 3-255 is reserved"))?;
         self.fs_client()?
-            .seek(handle, position)
+            .seek(handle, mode, offset)
             .map_err(err_runtime)
     }
     fn fs_client_current_directory(&mut self) -> PyResult<u8> {
@@ -1558,9 +1631,6 @@ impl PySession {
     }
     fn has_gnss(&self) -> bool {
         self.session.get::<Gnss>().is_some()
-    }
-    fn has_guidance(&self) -> bool {
-        self.session.get::<Guidance>().is_some()
     }
     fn has_implement(&self) -> bool {
         self.session.get::<Implement>().is_some()
@@ -1786,14 +1856,25 @@ impl PyIdentifier {
     }
 }
 
+/// Map an optional Python float onto a [`Signal`]: `None` becomes
+/// "not available" rather than a fabricated zero.
+pub(crate) const fn py_signal(v: Option<f64>) -> crate::isobus::implement::Signal<f64> {
+    match v {
+        Some(value) => crate::isobus::implement::Signal::Value(value),
+        None => crate::isobus::implement::Signal::NotAvailable,
+    }
+}
+
 /// EEC1 — engine speed / torque (PGN 61444).
 #[pyclass(name = "Eec1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec1 {
-    pub engine_torque_percent: f64,
-    pub driver_demand_percent: f64,
-    pub actual_engine_percent: f64,
-    pub engine_speed_rpm: f64,
+    /// `None` when the engine reports the parameter as error or not-available.
+    /// A single absent parameter no longer discards the whole PG (G4).
+    pub engine_torque_percent: Option<f64>,
+    pub driver_demand_percent: Option<f64>,
+    pub actual_engine_percent: Option<f64>,
+    pub engine_speed_rpm: Option<f64>,
     pub starter_mode: u8,
     pub source_address: u8,
 }

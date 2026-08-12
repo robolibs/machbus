@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use super::super::constants::ETP_TIMEOUT_T3_MS;
     use super::super::error::ErrorCode;
     use super::*;
     use std::cell::RefCell;
@@ -486,7 +487,17 @@ mod tests {
         let _ = tx
             .send(0xCA00, &big, 0x10, 0x20, 0, Priority::Lowest)
             .unwrap();
-        let frames = tx.update(ETP_TIMEOUT_T1_MS + 1);
+        // A transmitter waiting for a CTS is on T3 (1250 ms), not T1. This
+        // engine applied T1 to every waiting state, so a peer using the full
+        // T3 budget was aborted 500 ms early.
+        let early = tx.update(ETP_TIMEOUT_T1_MS + 1);
+        assert!(
+            early.is_empty(),
+            "must not abort at T1 while waiting for a CTS"
+        );
+        assert_eq!(*aborts.borrow(), 0);
+
+        let frames = tx.update(ETP_TIMEOUT_T3_MS - ETP_TIMEOUT_T1_MS);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].data[0], etp_cm::ABORT);
         assert_eq!(*aborts.borrow(), 1);

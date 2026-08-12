@@ -831,9 +831,11 @@ mod tests {
         c.handle_vt_message(&Message::new(PGN_VT_TO_ECU, data, 0x80));
         let _ = c.update(1);
         let _ = c.update(1);
+        // Annex D.3: byte 2 version, byte 3 status.
         let mut memory_response = [0xFFu8; 8];
         memory_response[0] = cmd::GET_MEMORY_RESPONSE;
-        memory_response[1] = 0x00;
+        memory_response[1] = 5;
+        memory_response[2] = 0x00;
         c.handle_vt_message(&Message::new(PGN_VT_TO_ECU, memory_response.to_vec(), 0x80));
         let _ = c.update(1);
         let _ = c.update(1_000);

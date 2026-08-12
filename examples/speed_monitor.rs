@@ -1,6 +1,8 @@
 //! Wheel-based + ground-based speed monitor. Mirrors `speed_monitor.cpp`.
 
-use machbus::isobus::implement::{GroundBasedSpeedDist, MachineDirection, WheelBasedSpeedDist};
+use machbus::isobus::implement::{
+    GroundBasedSpeedDist, MachineDirection, WheelBasedSpeedDist, wheel_slip_percent,
+};
 use machbus::j1939::SpeedAndDistance;
 
 fn main() {
@@ -21,8 +23,8 @@ fn main() {
 
     // ISO 11783-7 wheel + ground speed (encode + decode round-trip).
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.0,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.0.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 120,
         key_switch_state: 1,
@@ -33,21 +35,31 @@ fn main() {
     let dec = WheelBasedSpeedDist::decode(&bytes).unwrap();
     println!(
         "[WS]   {:.2} m/s, {:.0} m total, dir={:?}",
-        dec.speed_mps, dec.distance_m, dec.direction
+        dec.speed_mps.unwrap_or(0.0),
+        dec.distance_m.unwrap_or(0.0),
+        dec.direction
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 5.4,
-        distance_m: 12_300.0,
+        speed_mps: 5.4.into(),
+        distance_m: 12_300.0.into(),
         direction: MachineDirection::Forward,
     };
     let gbytes = ground.encode();
     let gd = GroundBasedSpeedDist::decode(&gbytes).unwrap();
     println!(
         "[GS]   {:.2} m/s, {:.0} m total, dir={:?}",
-        gd.speed_mps, gd.distance_m, gd.direction
+        gd.speed_mps.unwrap_or(0.0),
+        gd.distance_m.unwrap_or(0.0),
+        gd.direction
     );
 
-    let slip = (dec.speed_mps - gd.speed_mps) / dec.speed_mps * 100.0;
-    println!("\n[derived] estimated wheel slip = {slip:.2}%");
+    // Slip is only meaningful when both sources actually measured something.
+    match (dec.speed_mps.value(), gd.speed_mps.value()) {
+        (Some(wheel_mps), Some(ground_mps)) => match wheel_slip_percent(wheel_mps, ground_mps) {
+            Some(slip) => println!("\n[derived] estimated wheel slip = {slip:.2}%"),
+            None => println!("\n[derived] wheel slip undefined while stationary"),
+        },
+        _ => println!("\n[derived] wheel slip unavailable: a speed source is not reporting"),
+    }
 }

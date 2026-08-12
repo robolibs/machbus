@@ -44,6 +44,25 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// E1 — ISO 11783-6 Annex F.1: "The VT shall respond to these commands even if
+/// no object pool of the originating Working Set is loaded. The originator
+/// shall wait for a response before sending another command."
+///
+/// A command the VT refuses is still answered; the refusal goes in the error
+/// byte. These assertions used to require an *empty* reply, which is exactly
+/// the defect — a Working Set then blocked 1,5 s and retried three times before
+/// declaring the terminal unresponsive.
+#[allow(dead_code)]
+#[track_caller]
+fn assert_annex_f_refusal(out: &[machbus::isobus::vt::OutboundFrame]) {
+    assert_eq!(out.len(), 1, "Annex F.1 requires a response");
+    assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+    assert!(
+        out[0].data[1..].iter().any(|&b| b != 0xFF),
+        "a refused command must carry an error, not an all-FF reply"
+    );
+}
+
 fn fixed_command(command: u8) -> Vec<u8> {
     let mut data = [0xFFu8; 8];
     data[0] = command;
@@ -67,11 +86,13 @@ fn string_value_change(command: u8, id: u16, bytes: &[u8]) -> Vec<u8> {
     data
 }
 
-fn vt_status(active_working_set: u8, version: u8) -> Vec<u8> {
+/// Annex H.1 VT Status. Byte 7 is the VT busy-codes bitfield, not a version —
+/// the VT reports its version in the Get Memory response (D.3 byte 2).
+fn vt_status(active_working_set: u8, busy_codes: u8) -> Vec<u8> {
     let mut data = [0xFFu8; 8];
     data[0] = cmd::VT_STATUS;
     data[1] = active_working_set;
-    data[6] = version;
+    data[6] = busy_codes;
     data.to_vec()
 }
 
@@ -616,13 +637,11 @@ fn activate_standard_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                minimal_object_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, minimal_object_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -646,13 +665,11 @@ fn activate_reference_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                object_reference_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, object_reference_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -676,13 +693,11 @@ fn activate_key_pointer_context_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response — End of Object Pool
+    // answers it — so silence is correct here.
     assert!(
         server
-            .handle_ecu_message(&Message::new(
-                PGN_ECU_TO_VT,
-                key_pointer_context_pool_transfer(),
-                source,
-            ))
+            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, key_pointer_context_pool_transfer(), source))
             .is_empty()
     );
     let response = server.handle_ecu_message(&Message::new(
@@ -706,6 +721,8 @@ fn activate_aux_assignment_pool(server: &mut VTServer, source: u8) {
             .len(),
         1
     );
+    // Object Pool Transfer has no Annex F response (it is answered by End of
+    // Object Pool), so silence is correct here.
     assert!(
         server
             .handle_ecu_message(&Message::new(
@@ -890,6 +907,7 @@ fn vt_server_rejects_invalid_ecu_sources_before_client_or_reply_state() {
 
         let mut get_memory = [0xFFu8; 8];
         get_memory[0] = cmd::GET_MEMORY;
+        // An unusable source address is dropped before dispatch, so no response is owed.
         assert!(
             server
                 .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, get_memory.to_vec(), source))
@@ -910,6 +928,8 @@ fn vt_server_rejects_invalid_ecu_sources_before_client_or_reply_state() {
     server.start().unwrap();
     let mut get_memory = [0xFFu8; 8];
     get_memory[0] = cmd::GET_MEMORY;
+    // A frame addressed to the NULL address is not addressed to this VT, so it
+    // is dropped before dispatch and no Annex F response is owed.
     assert!(
         server
             .handle_ecu_message(&Message::with_addressing(
@@ -1199,6 +1219,8 @@ fn vt_handlers_reject_wrong_pgn_envelopes_before_state_or_events() {
     let mut server = VTServer::new(VTServerConfig::default());
     server.start().unwrap();
 
+    // A frame on the wrong PGN is not a VT command at all: it is dropped
+    // before dispatch, so no Annex F response is owed.
     assert!(
         server
             .handle_ecu_message(&Message::new(
@@ -1301,7 +1323,7 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
     client.connect().unwrap();
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
     assert_eq!(client.vt_address(), 0x80);
-    assert_eq!(client.vt_version_value(), 5);
+    assert_eq!(client.vt_busy_codes(), 5);
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x00, 6), 0x81));
@@ -1310,7 +1332,11 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x80,
         "a different VT source must not steal an established client session"
     );
-    assert_eq!(client.vt_version_value(), 5);
+    assert_eq!(
+        client.vt_busy_codes(),
+        5,
+        "state from an unbound VT source must not overwrite the session's"
+    );
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(
@@ -1359,7 +1385,7 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x81,
         "disconnect must release the old VT source binding so a later session can bind again"
     );
-    assert_eq!(client.vt_version_value(), 4);
+    assert_eq!(client.vt_busy_codes(), 4);
     assert!(client.is_active_ws());
 
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x00, 7), 0x80));
@@ -1368,7 +1394,11 @@ fn vt_client_binds_to_negotiated_vt_source_until_disconnect() {
         0x81,
         "old VT source traffic must not steal a newly rebound session"
     );
-    assert_eq!(client.vt_version_value(), 4);
+    assert_eq!(
+        client.vt_busy_codes(),
+        4,
+        "the unbound VT's status must not overwrite the bound one's"
+    );
     assert!(client.is_active_ws());
 }
 
@@ -1702,6 +1732,7 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
     let mut server = VTServer::new(VTServerConfig::default());
     server.start().unwrap();
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer.clone(), 0x42))
@@ -1712,19 +1743,72 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
         "object-pool transfer before memory negotiation must not create upload state"
     );
 
-    let mut malformed_get_memory = fixed_command(cmd::GET_MEMORY);
-    malformed_get_memory[1..5].copy_from_slice(&16u32.to_le_bytes());
-    malformed_get_memory[5] = 0x00;
-    assert!(
+    // Annex D.2: "Byte 1: VT function code = 192; Byte 2: Reserved, set to
+    // FF16; Bytes 3-6: Memory required (bytes); Bytes 7-8: Reserved, set to
+    // FF16." This case used to assert the opposite — that a request carrying a
+    // real 4-byte size must be *rejected* — because the decoder read the size
+    // one byte early and its tail check landed on the size's top byte. Only a
+    // request declaring at least 0xFF000000 bytes was accepted, so no
+    // conformant working set could ever negotiate memory, and Annex F.1
+    // forbids answering it with nothing at all.
+    let mut conformant_get_memory = fixed_command(cmd::GET_MEMORY);
+    conformant_get_memory[2..6].copy_from_slice(&16u32.to_le_bytes());
+
+    // The limit is chosen so the *offset* is what decides the answer: read at
+    // bytes 3-6 the request is 16 bytes and fits; read one byte early it is
+    // 0x000010FF = 4351 and does not. A status-0 answer therefore proves the
+    // field was read at the Annex D.2 offset, not merely that a reply came out.
+    let mut sized = VTServer::new(VTServerConfig {
+        max_pool_bytes: 100,
+        ..VTServerConfig::default()
+    });
+    sized.start().unwrap();
+    let answered = sized.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        conformant_get_memory.clone(),
+        0x42,
+    ));
+    assert_eq!(
+        answered.len(),
+        1,
+        "a conformant Get Memory must be answered (Annex F.1)"
+    );
+    assert_eq!(answered[0].data[0], cmd::GET_MEMORY_RESPONSE);
+    assert_eq!(
+        answered[0].data[2], 0x00,
+        "D.3 byte 3 status 0 — a 16-byte pool fits in 100 bytes"
+    );
+    assert_eq!(sized.clients().len(), 1);
+
+    // A VT that genuinely cannot fit the pool still answers, with status 1.
+    let mut small = VTServer::new(VTServerConfig {
+        max_pool_bytes: 8,
+        ..VTServerConfig::default()
+    });
+    small.start().unwrap();
+    let refused = small.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        conformant_get_memory.clone(),
+        0x42,
+    ));
+    assert_eq!(refused.len(), 1, "a refusal is still a response (Annex F.1)");
+    assert_eq!(
+        refused[0].data[2], 0x01,
+        "D.3 status 1 — not enough memory, do not transmit the Object Pool"
+    );
+
+    // The unlimited default server accepts it too, and opens the window.
+    assert_eq!(
         server
-            .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, malformed_get_memory, 0x42,))
-            .is_empty(),
-        "Get Memory requests with non-canonical reserved tail bytes must not open the upload window"
+            .handle_ecu_message(&Message::new(
+                PGN_ECU_TO_VT,
+                conformant_get_memory.to_vec(),
+                0x42,
+            ))
+            .len(),
+        1
     );
-    assert!(
-        server.clients().is_empty(),
-        "malformed Get Memory must not allocate client upload state"
-    );
+    assert_eq!(server.clients().len(), 1);
 
     let mut get_memory = [0xFFu8; 8];
     get_memory[0] = cmd::GET_MEMORY;
@@ -1736,11 +1820,69 @@ fn vt_server_requires_memory_negotiation_before_object_pool_upload_state() {
     );
     assert_eq!(server.clients().len(), 1);
 
+    // Object Pool Transfer has no Annex F response — End of Object Pool answers it.
     assert!(
         server
             .handle_ecu_message(&Message::new(PGN_ECU_TO_VT, transfer, 0x42))
             .is_empty()
     );
+    // E5 — the transfer is staged; End of Object Pool is what applies it.
+    assert!(!server.clients()[0].pool_uploaded);
+    let out = server.handle_ecu_message(&Message::new(
+        PGN_ECU_TO_VT,
+        fixed_command(cmd::END_OF_POOL),
+        0x42,
+    ));
+    assert_eq!(out[0].data[1], 0x00);
     assert!(server.clients()[0].pool_uploaded);
     assert_eq!(server.clients()[0].pool.size(), 2);
+}
+
+/// 6D — ISO 11783-6 §4.6.9: the VT sends its Status message once per second,
+/// and 3 s of silence "is determined to be a shutdown of the VT. When this
+/// happens the Working Set shall enter a safe state."
+///
+/// The client's `Connected` arm of the tick was empty and the status age was
+/// never tracked, so a working set stayed connected indefinitely to a terminal
+/// that had gone away.
+#[test]
+fn vt_client_enters_safe_state_after_three_seconds_without_status() {
+    use machbus::isobus::vt::client::VT_STATUS_TIMEOUT_MS;
+
+    let mut client = VTClient::new(VTClientConfig::default());
+    let lost = Rc::new(RefCell::new(0u32));
+    {
+        let sink = lost.clone();
+        client.on_vt_status_lost.subscribe(move |()| {
+            *sink.borrow_mut() += 1;
+        });
+    }
+
+    connect_standard_client(&mut client);
+    assert_eq!(client.state(), VTState::Connected);
+
+    // A VT Status refreshes the window, so a live terminal never trips it.
+    for _ in 0..5 {
+        client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
+        let _ = client.update(VT_STATUS_TIMEOUT_MS - 1);
+    }
+    assert_eq!(client.state(), VTState::Connected);
+    assert_eq!(*lost.borrow(), 0);
+
+    // Re-establish the window before testing the expiry itself.
+    client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, vt_status(0x44, 5), 0x80));
+
+    // Just under the window after the last status: still connected.
+    let _ = client.update(VT_STATUS_TIMEOUT_MS - 1);
+    assert_eq!(client.state(), VTState::Connected);
+    assert_eq!(*lost.borrow(), 0);
+
+    // Past it: safe state.
+    let _ = client.update(2);
+    assert_eq!(
+        client.state(),
+        VTState::Disconnected,
+        "3 s without a VT Status must drop the working set to the safe state"
+    );
+    assert_eq!(*lost.borrow(), 1, "and report it");
 }

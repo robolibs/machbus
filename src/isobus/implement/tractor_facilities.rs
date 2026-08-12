@@ -208,9 +208,43 @@ impl TractorFacilities {
         data
     }
 
+    /// Encode for `PGN_REQUIRED_TRACTOR_FACILITIES` (0xFE0A), where every
+    /// reserved position is `0` rather than `1`.
+    ///
+    /// In this direction a set bit is a *request*, not a description: ISO
+    /// 11783-9:2012 §4.4.2 — "A facility is not required if its corresponding
+    /// bits are set to 0 in the implement CF required tractor facilities
+    /// message." Transmitting reserved bits as `1` therefore asks the TECU to
+    /// keep broadcasting every facility that has not been defined yet, which
+    /// both defeats the bandwidth reduction this message exists for and means
+    /// a future revision silently enrols this node in whatever those bits
+    /// become.
+    ///
+    /// This is the exception ISO 11783-7:2022 §5.4 carves out of its own
+    /// "undefined and reserved bits shall be transmitted with a value of 1"
+    /// rule: "Unique to this document are several messages with single-bit
+    /// parameters such as availability of individual features… The value of
+    /// these reserved parameters may differ from the rules defined above. In
+    /// some cases, the default value is zero ('0') for forward compatibility.
+    /// The value of zero indicates 'not supported' in these messages."
+    #[must_use]
+    pub fn encode_required(&self) -> [u8; 8] {
+        let mut data = self.encode();
+        data[4] &= 0x3F;
+        data[5] = 0;
+        data[6] = 0;
+        data[7] = 0;
+        data
+    }
+
     #[must_use]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() != 8 || data[4] & 0xC0 != 0xC0 || data[5..].iter().any(|&b| b != 0xFF) {
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
+        if data.len() != 8 {
             return None;
         }
         let mut f = Self {
@@ -578,18 +612,24 @@ mod tests {
         assert!(TractorFacilities::decode(&[0u8; 9]).is_none());
     }
 
+    /// B5 — ISO 11783-7:2022 §5.4. This PG is the one the standard is most
+    /// explicit about, since a tractor advertising a facility set the receiver
+    /// has never heard of is exactly the forward-compatibility case §5.4 exists
+    /// for. Rejecting the frame loses every facility bit that *is* understood.
     #[test]
-    fn reserved_bytes_and_bits_are_rejected() {
-        let mut bytes = TractorFacilities::default()
+    fn undefined_bits_and_bytes_are_ignored_on_receive() {
+        let good = TractorFacilities::default()
             .with_class3_v2_all()
-            .with_front_v2_all()
-            .encode();
+            .with_front_v2_all();
 
-        bytes[4] &= 0x3F;
-        assert!(TractorFacilities::decode(&bytes).is_none());
+        let mut reserved_bits_clear = good.encode();
+        reserved_bits_clear[4] &= 0x3F;
+        assert_eq!(TractorFacilities::decode(&reserved_bits_clear), Some(good));
 
-        let mut bytes = TractorFacilities::default().encode();
-        bytes[5] = 0x00;
-        assert!(TractorFacilities::decode(&bytes).is_none());
+        let plain = TractorFacilities::default();
+        let mut future_tail = plain.encode();
+        future_tail[5] = 0x00;
+        future_tail[7] = 0x5A;
+        assert_eq!(TractorFacilities::decode(&future_tail), Some(plain));
     }
 }

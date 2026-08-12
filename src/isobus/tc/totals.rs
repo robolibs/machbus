@@ -75,6 +75,31 @@ impl TaskTotals {
         out
     }
 
+    /// Serialize the active task totals to bytes (10 per entry: u16 DDI LE + i64 value LE).
+    #[must_use]
+    pub fn export_task_totals(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.task.len() * 10);
+        for (&ddi, &value) in &self.task {
+            out.extend_from_slice(&ddi.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out
+    }
+
+    /// Restore active task totals from [`export_task_totals`] output.
+    pub fn import_task_totals(&mut self, data: &[u8]) -> usize {
+        let mut loaded = 0;
+        for chunk in data.chunks_exact(10) {
+            let ddi = u16::from_le_bytes([chunk[0], chunk[1]]);
+            let value = i64::from_le_bytes([
+                chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7], chunk[8], chunk[9],
+            ]);
+            self.task.insert(ddi, value);
+            loaded += 1;
+        }
+        loaded
+    }
+
     /// Restore lifetime totals from [`export_lifetime_totals`] output, replacing
     /// each DDI's stored value. Returns how many entries were loaded; trailing
     /// bytes that don't form a full entry are ignored.

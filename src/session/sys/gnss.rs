@@ -28,6 +28,16 @@ pub enum GnssEvent {
     Dops(GNSSDOPData),
     /// System time / date update.
     SystemTime(SystemTimeData),
+    /// No position update within the configured window. Nothing consumed GNSS
+    /// liveness before this existed, so an autonomy path could keep steering to
+    /// a curvature derived from a position that had stopped arriving.
+    PositionStale { silent_for_ms: u32 },
+    /// The receiver reported a method that cannot be steered on — no fix, dead
+    /// reckoning, error or unavailable.
+    FixDegraded { fix_type: crate::nmea::GNSSFixType },
+    /// A usable fix returned after a degraded one. Informational: recovery does
+    /// not clear a latched stop.
+    FixRestored { fix_type: crate::nmea::GNSSFixType },
 }
 
 // Silence dead-code lint for `Address` import — used in match arms

@@ -215,7 +215,7 @@ impl SerialGNSS {
 
     fn parse_gga(&mut self, sentence: &str) {
         let fields = split_fields(sentence);
-        if fields.len() < 15 {
+        if fields.len() < 13 {
             return;
         }
         let Ok(quality) = fields[6].parse::<u8>() else {
@@ -559,11 +559,15 @@ impl SerialGNSS {
         let Ok(year) = fields[4].parse::<u16>() else {
             return;
         };
-        let Ok(local_zone_hours) = fields[5].parse::<i8>() else {
-            return;
+        let local_zone_hours = if fields.len() > 5 && !fields[5].is_empty() {
+            fields[5].parse::<i8>().unwrap_or(0)
+        } else {
+            0
         };
-        let Ok(local_zone_minutes) = fields[6].parse::<u8>() else {
-            return;
+        let local_zone_minutes = if fields.len() > 6 && !fields[6].is_empty() {
+            fields[6].parse::<u8>().unwrap_or(0)
+        } else {
+            0
         };
         if !(1..=12).contains(&month)
             || day == 0

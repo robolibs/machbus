@@ -29,6 +29,40 @@ control, guidance). machbus models the facility set, the class matrix, and the
 `tractor()` preset plus the `Implement` facilities broadcast that advertises them;
 maintain-power and guidance-readiness sit here too.
 
+### Steering, speed and motion are three separate classes
+
+Base class 1/2/3 says nothing about whether a tractor can be *driven* over the
+bus. That is carried by letter addenda, and §4.4.2 gives them separately:
+
+| Addendum | Clause | Meaning |
+| --- | --- | --- |
+| **G** | §4.4.2.7 | "shall support the external control of the guidance system" — curvature command, estimated curvature, readiness, lockout |
+| **P** | §4.4.2.8 | "capable of accepting speed and/or drive strategy commands from an implement controller" |
+| **M** | §4.4.2.9 | accepts "commands to initiate motion of the vehicle (forward or reverse)" |
+
+A class 2G tractor steers on command and need not accept a speed command at all.
+Even with P, §4.4.2.8 says outright that bringing the tractor to a stop
+(speed `0.0`) is **optional** and "can be determined by an implement via the
+tractor facilities response message".
+
+### The handshake is not optional for the implement either
+
+Two PGNs, and the second one is the part that surprises people:
+
+- **0xFE09 Tractor Facilities Response** — what the TECU has installed.
+- **0xFE0A Required Tractor Facilities** — what the implement needs.
+
+> §4.4.2: "An implement CF can send the required tractor facilities message to
+> the Tractor ECU **to enable the transmission of the messages that provide the
+> required facilities**. A facility is not required if its corresponding bits are
+> set to 0 in the implement CF required tractor facilities message. The Tractor
+> ECU can then **stop the transmission** of this implement message to reduce
+> bandwidth."
+
+So a node that never declares what it needs may simply never receive it. That is
+why [`AutoDrive`](../tutorials/autodrive.md#the-tractor-has-to-advertise-the-facility-first)
+broadcasts the request on a cycle rather than only listening.
+
 ## The TECU's other duties
 
 Beyond the advertisement, a TECU is the source of the part-7 status broadcasts (speed,

@@ -1,33 +1,70 @@
-//! High-level **autosteer**: command a tractor's steering by curvature.
+//! **Automatic guidance**: command a tractor's steering by curvature.
 //!
-//! ISOBUS automatic guidance is curvature-based — you send a desired path
-//! **curvature** (1/km), not waypoints and not a steering angle. The tractor's
-//! steering ECU closes the loop on the wheels. This demo plugs the high-level
-//! [`Guidance`] plugin, claims an address, and commands a turn; the resulting
-//! Guidance System Command (PGN 0xAD00) shows up on `poll_transmit`.
+//! ISOBUS guidance is curvature-based — you send a desired path **curvature**
+//! (1/km), not waypoints and not a steering angle. The tractor's steering ECU
+//! closes the loop on the wheels. This demo plugs [`AutoDrive`], claims an
+//! address, commands a 50 m-radius turn, and reads back what the machine says
+//! it is actually producing.
+//!
+//! The focus here is the **curvature conversation**: converting a radius to the
+//! wire unit, commanding steering without touching speed, and comparing the
+//! command against the feedback. For the full driving lifecycle — arm, engage,
+//! the command heartbeat, the dead-man and a latched stop — see
+//! `autodrive_keyboard`.
 //!
 //! Run with `cargo run --example guidance_autosteer`.
 
 use machbus::Instant;
-use machbus::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
-use machbus::net::{Name, Result};
-use machbus::session::Session;
-use machbus::session::plugins::Guidance;
+use machbus::geo::guidance::curvature_per_km_from_radius;
+use machbus::isobus::implement::guidance::{
+    GenericSaeBs02SlotValue, GuidanceLimitStatus, GuidanceMachineInfo, MechanicalLockout,
+};
+use machbus::isobus::implement::{RequestResetCommandStatus, Signal};
+use machbus::net::pgn_defs::{PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM_CMD};
+use machbus::net::{BROADCAST_ADDRESS, Frame, Identifier, Name, Priority, Result};
+use machbus::session::plugins::AutoDrive;
+use machbus::session::{DriveCommand, Session};
 
-fn make_name(identity: u32) -> Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
+/// What a steering ECU broadcasts (PGN 0xAC00). `AutoDrive` will not engage
+/// until one is answering, and it re-checks the machine's own report — lockout
+/// clear, operator engage switch active — on every one of these.
+///
+/// `estimated` is what the wheels are really producing, which is deliberately
+/// not the same as what we command below.
+fn machine_info_frame(estimated: f64) -> Frame {
+    let info = GuidanceMachineInfo {
+        estimated_curvature: Signal::Value(estimated),
+        lockout: MechanicalLockout::NotActive,
+        steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
+        steering_input_position_status: GenericSaeBs02SlotValue::EnabledOnActive,
+        request_reset_status: RequestResetCommandStatus::ResetNotRequired,
+        guidance_limit_status: GuidanceLimitStatus::NotLimited,
+        guidance_system_command_exit_reason_code: 0,
+        remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
+    };
+    Frame::new(
+        Identifier::encode(
+            Priority::Default,
+            PGN_GUIDANCE_MACHINE_INFO,
+            0x1C,
+            BROADCAST_ADDRESS,
+        ),
+        info.encode(),
+        8,
+    )
 }
 
 fn main() -> Result<()> {
-    println!("=== High-level autosteer (machbus::session::plugins::Guidance) ===\n");
+    println!("=== Automatic guidance by curvature (session::plugins::AutoDrive) ===\n");
 
     // ANCHOR: build
     // A guidance-controller node. The session core is sans-IO; we drive it.
-    let mut session = Session::builder(make_name(0x100), 0x80)
-        .plug(Guidance::new())
+    let name = Name::default()
+        .with_identity_number(0x100)
+        .with_function_code(0x80)
+        .with_self_configurable(true);
+    let mut session = Session::builder(name, 0x80)
+        .plug(AutoDrive::new())
         .build()?;
     session.start()?;
 
@@ -44,17 +81,36 @@ fn main() -> Result<()> {
     // ANCHOR_END: build
 
     // ANCHOR: command
-    // Engage (assert "intend to steer"), then command a 50 m-radius turn
-    // (curvature = 1000/50 = 20/km). Without engaging, the command is sent with
-    // status "not intended to steer" and a conformant steering ECU will not move.
-    // `command_curvature(0.0)` is the same as `command_straight`.
+    // Curvature is the inverse of the turn radius, in 1/km: a 50 m radius is
+    // 1000/50 = 20 1/km. `geo::guidance` does the conversion so the magic
+    // number stays out of application code.
+    let curvature = curvature_per_km_from_radius(50.0);
+    println!("50 m radius  ->  {curvature:.1} 1/km");
+
+    // The steering ECU has to be answering before autonomy may engage.
+    session.feed(0, &machine_info_frame(0.0), now);
+    now = now.add_millis(50);
+    session.tick(now);
+
     {
-        let g = session.get_mut::<Guidance>().expect("guidance plugged");
-        g.engage();
-        g.command_radius(50.0);
+        let d = session.get_mut::<AutoDrive>().expect("autodrive plugged");
+        // Arm, then engage. Both return the first unmet precondition — a dead
+        // link, a mechanical lockout, an inactive operator switch, a latched
+        // stop — rather than being silently ignored.
+        match d.arm().and_then(|()| d.engage()) {
+            Ok(()) => {
+                // `DriveCommand::steer` commands curvature and leaves speed to
+                // whoever already owns it. Use the two-field form when this node
+                // should own both axes.
+                if let Err(refusal) = d.command(DriveCommand::steer(curvature)) {
+                    println!("[autodrive] command refused: {}", refusal.as_str());
+                }
+            }
+            Err(refusal) => println!("[autodrive] engage refused: {}", refusal.as_str()),
+        }
     }
 
-    now = now.add_millis(50);
+    now = now.add_millis(100);
     session.tick(now); // flushes the queued command to the transmit buffer
 
     while let Some((port, frame)) = session.poll_transmit() {
@@ -69,14 +125,29 @@ fn main() -> Result<()> {
     // ANCHOR_END: command
 
     // ANCHOR: feedback
-    // A real steering ECU would broadcast Guidance Machine Info (PGN 0xAC00);
-    // the plugin decodes it and exposes the tractor's view:
-    let g = session.get::<Guidance>().expect("guidance plugged");
+    // You command through 0xAD00 and you verify through 0xAC00. Never assume
+    // the machine reached the curvature you asked for — the wheels lag, and the
+    // ECU may be at a limit. Here it reports 18.5 against our commanded 20.
+    session.feed(0, &machine_info_frame(18.5), now);
+    now = now.add_millis(50);
+    session.tick(now);
+
+    let d = session.get::<AutoDrive>().expect("autodrive plugged");
     println!(
-        "steering ready: {}   estimated curvature: {:?} (1/km)",
-        g.is_steering_ready(),
-        g.estimated_curvature()
+        "status: {:?}   readiness: {:?}",
+        d.status(),
+        d.steering_readiness_state()
     );
+    match d.estimated_curvature() {
+        Signal::Value(estimated) => println!(
+            "commanded {curvature:.1} 1/km   estimated {estimated:.1} 1/km   \
+             tracking error {:+.1}",
+            curvature - estimated
+        ),
+        // A missing signal is not a zero: an error or an absent reading has to
+        // stay distinguishable from "the wheels are straight".
+        other => println!("estimated curvature unavailable: {other:?}"),
+    }
     // ANCHOR_END: feedback
 
     Ok(())

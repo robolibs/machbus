@@ -2,6 +2,7 @@
 //! highlighted tab bar, the active tab body, and a status footer. Shared
 //! styling lives in [`theme`].
 
+pub mod autodrive;
 pub mod filter;
 pub mod help;
 pub mod live;
@@ -46,6 +47,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Pgn => pgn::render(frame, app, chunks[2], crate::tui::decode::FrameKind::J1939),
         Tab::Nmea => nmea::render(frame, app, chunks[2]),
         Tab::Nodes => nodes::render(frame, app, chunks[2]),
+        Tab::Autodrive => autodrive::render(frame, app, chunks[2]),
         Tab::Stats => stats::render(frame, app, chunks[2]),
         Tab::Filter => filter::render(frame, app, chunks[2]),
         Tab::Help => help::render(frame, app, chunks[2]),

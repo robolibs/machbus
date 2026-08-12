@@ -8,7 +8,14 @@ pub struct DDIDefinition {
     pub unit: &'static str,
     pub resolution: f64,
     pub min_value: i32,
-    pub max_value: i32,
+    /// Widened past `i32` because the condensed DDIs (161-176, 290-305,
+    /// 367-382, 517, 518) have a CANBus range of 0..4294967295 — and once
+    /// unused sections are filled with 11 as DDI 161 requires, 0xFFFFFFFF is
+    /// the *normal* value for any implement with fewer than 16 sections. The
+    /// clamp made the ordinary encoding read as out of range through
+    /// `ddi_display_range` and `ddi_data_dictionary_entry`, the two accessors
+    /// an integrator range-checks against before transmitting.
+    pub max_value: i64,
 }
 
 /// Legacy alias.

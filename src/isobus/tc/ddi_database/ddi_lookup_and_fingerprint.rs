@@ -1,6 +1,6 @@
 pub const DDI_DATABASE_SIZE: usize = 760;
-pub const DDI_DATABASE_VERSION: u32 = 2025121001;
-pub const DDI_DATABASE_FINGERPRINT_FNV1A64: u64 = 0x1C4D_EA1E_6B4F_9641;
+pub const DDI_DATABASE_VERSION: u32 = 2025121002;
+pub const DDI_DATABASE_FINGERPRINT_FNV1A64: u64 = 0x90BC_620A_FA2C_A611;
 
 const FNV1A64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV1A64_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -14,7 +14,7 @@ pub fn ddi_database_fingerprint() -> u64 {
         hash = fnv1a64_str(hash, entry.unit);
         hash = fnv1a64_u64(hash, entry.resolution.to_bits());
         hash = fnv1a64_i32(hash, entry.min_value);
-        hash = fnv1a64_i32(hash, entry.max_value);
+        hash = fnv1a64_i64(hash, entry.max_value);
     }
     hash
 }
@@ -43,6 +43,10 @@ fn fnv1a64_u64(hash: u64, value: u64) -> u64 {
 }
 
 fn fnv1a64_i32(hash: u64, value: i32) -> u64 {
+    fnv1a64_bytes(hash, &value.to_le_bytes())
+}
+
+fn fnv1a64_i64(hash: u64, value: i64) -> u64 {
     fnv1a64_bytes(hash, &value.to_le_bytes())
 }
 
@@ -76,7 +80,7 @@ pub fn ddi_resolution(ddi: u16) -> f64 {
 #[must_use]
 pub fn ddi_display_range(ddi: u16) -> (f64, f64) {
     ddi_lookup(ddi).map_or((0.0, 0.0), |e| {
-        (f64::from(e.min_value), f64::from(e.max_value))
+        (f64::from(e.min_value), e.max_value as f64)
     })
 }
 
@@ -89,7 +93,7 @@ pub fn ddi_data_dictionary_entry(ddi: u16) -> DataDictionaryEntry {
             unit_symbol: e.unit,
             unit_description: ddi_unit_description_for(e),
             resolution: e.resolution,
-            display_range: (f64::from(e.min_value), f64::from(e.max_value)),
+            display_range: (f64::from(e.min_value), e.max_value as f64),
         },
         None => DataDictionaryEntry::unknown(),
     }
@@ -170,36 +174,76 @@ pub fn ddi_from_engineering(ddi: u16, eng: f64) -> i32 {
 
 // ─── DDI Category helpers ──────────────────────────────────────────────
 
+/// Whether `ddi` is an application rate, decided from the data dictionary
+/// rather than a number range.
+///
+/// The ranges this replaces classified 45 DDIs that are not rates — Tillage
+/// Depth, Traction Type, Machine Mode, Lifetime Total Distance and 30 tramline
+/// condensed work-state DDIs — as application rates, and missed the four real
+/// Percentage Application Rate DDIs (140, 308, 309, 310) entirely. ISO
+/// 11783-11 names every rate "... Application Rate", so the generated table is
+/// the authority and the classification cannot drift from it.
 #[must_use]
 pub fn ddi_is_rate(ddi: impl Into<u16>) -> bool {
-    let ddi = ddi.into();
-    (1..=55).contains(&ddi)
-        || (432..=451).contains(&ddi)
-        || (574..=577).contains(&ddi)
-        || (588..=637).contains(&ddi)
+    ddi_lookup(ddi.into()).is_some_and(|d| d.name.contains("Application Rate"))
 }
 
+/// Whether `ddi` is a lifetime or per-task total.
+///
+/// Also decided from the dictionary: ISO 11783-11 prefixes these "Total ..." or
+/// "Lifetime Total ...". The former numeric ranges both over- and
+/// under-matched, and §6.8.3 identifies a total by its trigger method and
+/// settable property, not by a number range — see [`ddi_total_trigger`].
 #[must_use]
 pub fn ddi_is_total(ddi: impl Into<u16>) -> bool {
-    let ddi = ddi.into();
-    (116..=123).contains(&ddi) || (130..=131).contains(&ddi) || (351..=353).contains(&ddi)
+    ddi_lookup(ddi.into()).is_some_and(|d| d.name.contains("Total"))
 }
 
+/// Whether `ddi` is a device-element geometry offset.
+///
+/// 9a0a762 converted [`ddi_is_rate`] and [`ddi_is_total`] off numeric ranges
+/// and stopped, leaving these three siblings on the construct that commit
+/// calls wrong. The old `134..=140` swept in 137-139 (deprecated capacities)
+/// and 140 (Setpoint Percentage Application Rate — which `ddi_is_rate` also
+/// claims, so the two classifiers contradicted each other) while missing 264,
+/// the Connector Pivot X-Offset that `ddop_helpers` already treats as geometry.
 #[must_use]
 pub fn ddi_is_geometry(ddi: impl Into<u16>) -> bool {
     let ddi = ddi.into();
-    (134..=140).contains(&ddi)
+    matches!(ddi, 134..=136 | 264..=266)
 }
 
+/// Whether `ddi` carries condensed section state.
+///
+/// The old `153..=161` covered NDVI (153), Physical Object Length/Width/Height
+/// (154-156) and Connector Type (157) — none of them section control — and
+/// stopped at the *first* condensed work state DDI, missing 162-176 and the
+/// whole 290-305 setpoint block.
 #[must_use]
 pub fn ddi_is_section_control(ddi: impl Into<u16>) -> bool {
     let ddi = ddi.into();
-    (153..=161).contains(&ddi)
+    if matches!(ddi, 158..=160) {
+        return true;
+    }
+    ddi_lookup(ddi).is_some_and(|d| {
+        d.name.contains("Condensed Work State") || d.name.contains("Condensed Section Override State")
+    })
 }
 
+/// Whether `ddi` is a speed or distance measurement.
+///
+/// The old range returned true for exactly eight DDIs — five Seeding Depth in
+/// millimetres (56-60) and three Volume Per Mass Application Rate (33-35) — and
+/// false for every real speed and distance DDI. An integrator routing inbound
+/// Process Data Values by it fed seeding depth into a ground-speed handler and
+/// never saw DDI 397 at all.
 #[must_use]
-pub const fn ddi_is_speed_distance(ddi: u16) -> bool {
-    (ddi >= 56 && ddi <= 60) || (ddi >= 33 && ddi <= 35)
+pub fn ddi_is_speed_distance(ddi: impl Into<u16>) -> bool {
+    let ddi = ddi.into();
+    matches!(
+        ddi,
+        117 | 118 | 272 | 273 | 396..=400 | 597..=602
+    )
 }
 
 #[must_use]
@@ -385,7 +429,7 @@ mod tests {
     fn database_has_760_entries() {
         assert_eq!(DDI_DATABASE.len(), DDI_DATABASE_SIZE);
         assert_eq!(DDI_DATABASE_SIZE, 760);
-        assert_eq!(DDI_DATABASE_VERSION, 2025121001);
+        assert_eq!(DDI_DATABASE_VERSION, 2025121002);
     }
 
     #[test]
@@ -534,11 +578,27 @@ mod tests {
         assert_eq!(ddi_from_engineering(ddi, -1.0e20), i32::MIN);
     }
 
+    /// L2 — `ddi_is_rate` used to be four number ranges. They classified 45
+    /// DDIs that are not rates as rates — Tillage Depth (51-55), Traction
+    /// Type, Machine Mode, Lifetime Total Distance and 30 tramline condensed
+    /// work-state DDIs — and missed the four real Percentage Application Rate
+    /// DDIs entirely. The generated dictionary decides now.
     #[test]
     fn category_helpers() {
         assert!(ddi_is_rate(1u16));
-        assert!(ddi_is_rate(55u16));
+        assert!(!ddi_is_rate(55u16), "Maximum Tillage Depth is not a rate");
         assert!(!ddi_is_rate(56u16));
+        for tillage in 51u16..=55 {
+            assert!(!ddi_is_rate(tillage));
+        }
+        assert!(!ddi_is_rate(593u16), "Traction Type is not a rate");
+        assert!(!ddi_is_rate(600u16), "a lifetime total is not a rate");
+        for percentage in [140u16, 308, 309, 310] {
+            assert!(
+                ddi_is_rate(percentage),
+                "Percentage Application Rate DDI {percentage} is a rate"
+            );
+        }
         assert!(ddi_is_rate(ddi::ACTUAL_APPLICATION_RATE_OF_PHOSPHOR));
         assert!(ddi_is_rate(
             ddi::SETPOINT_ELECTRICAL_ENERGY_PER_AREA_APPLICATION_RATE
@@ -549,8 +609,62 @@ mod tests {
         assert!(ddi_is_proprietary(57344));
         assert!(ddi_is_proprietary(65534));
         assert!(!ddi_is_proprietary(65535));
+        // 134-136 are Device Element X/Y/Z Offset; 264-266 the Connector Pivot
+        // offsets, which `ddop_helpers` already reads as geometry.
         assert!(ddi_is_geometry(134u16));
-        assert!(ddi_is_geometry(140u16));
+        assert!(ddi_is_geometry(264u16));
+        // 140 is Setpoint Percentage Application Rate. The old `134..=140`
+        // range claimed it as geometry while `ddi_is_rate` claimed it as a
+        // rate, so the crate's two public classifiers contradicted each other.
+        assert!(!ddi_is_geometry(140u16));
+        assert!(ddi_is_rate(140u16));
+
+        // Speed and distance: the old range matched five Seeding Depth DDIs in
+        // millimetres and three Volume Per Mass Application Rates, and missed
+        // every real one.
+        assert!(ddi_is_speed_distance(397u16), "Actual Ground Speed");
+        assert!(ddi_is_speed_distance(117u16), "Total Distance");
+        assert!(!ddi_is_speed_distance(33u16), "Volume Per Mass rate");
+        assert!(!ddi_is_speed_distance(56u16), "Seeding Depth");
+
+        // Section control: the old `153..=161` swept in NDVI, the Physical
+        // Object dimensions and Connector Type, and stopped at the first of the
+        // sixteen condensed work state DDIs.
+        assert!(ddi_is_section_control(161u16));
+        assert!(ddi_is_section_control(176u16));
+        assert!(ddi_is_section_control(290u16));
+        assert!(!ddi_is_section_control(153u16), "NDVI");
+        assert!(!ddi_is_section_control(157u16), "Connector Type");
+    }
+
+    /// F4 — DDI 161 and 290 declare a CANBus and display range of
+    /// 0..4294967295, and once unused sections are filled with 11 as the
+    /// dictionary requires, 0xFFFFFFFF is the *normal* value for any implement
+    /// with fewer than 16 sections. Clamping `max_value` to `i32::MAX` made the
+    /// ordinary encoding read as out of range through the two public metadata
+    /// accessors an integrator range-checks against before transmitting.
+    #[test]
+    fn condensed_ddis_can_represent_an_all_not_installed_value() {
+        use crate::isobus::tc::section_control::{SectionState, pack_condensed_work_state};
+
+        let all_ones = f64::from(pack_condensed_work_state(&[
+            SectionState::NotInstalled;
+            16
+        ]));
+        assert_eq!(all_ones, 4_294_967_295.0);
+
+        for ddi in [161u16, 176, 290, 305, 367, 382, 517, 518] {
+            let (min, max) = ddi_display_range(ddi);
+            assert_eq!(min, 0.0);
+            assert_eq!(
+                max, 4_294_967_295.0,
+                "DDI {ddi} must be able to say every section is not installed"
+            );
+            assert!(ddi_data_dictionary_entry(ddi).display_range.1 >= all_ones);
+        }
+
+        // A neighbouring non-condensed DDI is untouched.
+        assert_eq!(ddi_display_range(159).1, 2_147_483_647.0);
     }
 
     #[test]

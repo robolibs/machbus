@@ -34,6 +34,9 @@ pub enum TransportAbortReason {
     BadSequence = 7,
     DuplicateSequence = 8,
     UnexpectedDataSize = 9,
+    /// J1939-21 Table 8 value 250 — "any other reason". Mandated, and this
+    /// enum used to stop at 9, so a peer aborting with 250 was unparseable.
+    Other = 250,
 }
 
 impl TransportAbortReason {
@@ -60,6 +63,7 @@ impl TransportAbortReason {
             7 => Some(Self::BadSequence),
             8 => Some(Self::DuplicateSequence),
             9 => Some(Self::UnexpectedDataSize),
+            250 => Some(Self::Other),
             _ => None,
         }
     }

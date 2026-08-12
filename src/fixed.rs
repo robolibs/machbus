@@ -102,6 +102,16 @@ impl<T, const N: usize> FixedQueue<T, N> {
             .flatten()
     }
 
+    /// Keep only the items `keep` returns `true` for, preserving order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        for _ in 0..self.len {
+            let Some(item) = self.pop_front() else { break };
+            if keep(&item) {
+                let _ = self.push_back(item);
+            }
+        }
+    }
+
     /// Remove all queued items.
     pub fn clear(&mut self) {
         while self.pop_front().is_some() {}
@@ -214,6 +224,22 @@ impl<T, const N: usize> FixedSlots<T, N> {
         }
         self.len -= 1;
         removed
+    }
+
+    /// Keep only the items `keep` returns `true` for.
+    ///
+    /// Order is not preserved — removal swaps in the last item, matching
+    /// [`Self::swap_remove`].
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        let mut idx = 0;
+        while idx < self.len {
+            let drop = self.buf[idx].as_ref().is_some_and(|item| !keep(item));
+            if drop {
+                let _ = self.swap_remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
     }
 
     /// Remove all items.
@@ -527,6 +553,49 @@ impl<const N: usize> FixedMessage<N> {
     #[must_use]
     pub const fn size(&self) -> usize {
         self.data.len()
+    }
+}
+
+/// Zero-allocation fixed buffer pool for `#![no_std]` targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedBufferPool<const SLOTS: usize, const BUF_LEN: usize> {
+    buffers: [[u8; BUF_LEN]; SLOTS],
+    used: [bool; SLOTS],
+}
+
+impl<const SLOTS: usize, const BUF_LEN: usize> Default for FixedBufferPool<SLOTS, BUF_LEN> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const SLOTS: usize, const BUF_LEN: usize> FixedBufferPool<SLOTS, BUF_LEN> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            buffers: [[0u8; BUF_LEN]; SLOTS],
+            used: [false; SLOTS],
+        }
+    }
+
+    pub fn acquire(&mut self) -> Option<(usize, &mut [u8; BUF_LEN])> {
+        for (i, used) in self.used.iter_mut().enumerate() {
+            if !*used {
+                *used = true;
+                return Some((i, &mut self.buffers[i]));
+            }
+        }
+        None
+    }
+
+    pub fn release(&mut self, slot: usize) -> bool {
+        if slot < SLOTS && self.used[slot] {
+            self.used[slot] = false;
+            self.buffers[slot].fill(0);
+            true
+        } else {
+            false
+        }
     }
 }
 

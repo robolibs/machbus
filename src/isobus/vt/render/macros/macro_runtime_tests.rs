@@ -1023,6 +1023,11 @@ mod tests {
                 (ObjectID::new(7), 1, 4),
                 (ObjectID::new(40), 1, 2),
                 (ObjectID::new(41), 4, 20),
+                // I2 — Output String AID 5 bit 2 is wrap-on-hyphen (VT4+), the
+                // same option bit Input String AID 6 already accepted. Refusing
+                // it here meant a Change Attribute enabling it at runtime was
+                // dropped on one object type and honoured on the other.
+                (ObjectID::new(41), 5, 4),
                 (ObjectID::new(42), 5, 2),
                 (ObjectID::new(42), 6, 2),
                 (ObjectID::new(43), 10, 1),
@@ -1033,7 +1038,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            report.skipped, 16,
+            report.skipped, 15,
             "unsupported/read-only AIDs, missing targets, invalid Window Mask values/designators, invalid typed references, invalid Key Group designators, invalid scalar flags, reserved numeric formats/decimal counts, list-value Change Attribute attempts, and reserved Alarm Mask acoustic signals must not leak into generic replay"
         );
         let window_mask = pool
@@ -1921,5 +1926,53 @@ mod tests {
         let index = MacroTriggerIndex::build(&pool);
         assert!(index.is_empty());
         assert_eq!(index.binding_count(), 0);
+    }
+
+    /// C32 — the cycle guard only rejected a macro already on the path, so a
+    /// *non-repeating* chain of Execute Macro effects recursed once per link.
+    /// Object IDs are 16-bit, so a bus-uploaded pool can nest ~65 000 frames
+    /// and overflow the stack — an abort, not a panic, so nothing unwinds and
+    /// no fail-safe handler runs. The operator's display dies mid-field.
+    #[test]
+    fn a_deep_macro_chain_is_capped_instead_of_overflowing_the_stack() {
+        use crate::isobus::vt::render::VtRenderRuntime;
+        use crate::isobus::vt::render::layout::LayoutConfig;
+
+        // Macro N executes macro N+1, with no repeats anywhere in the chain.
+        const CHAIN: u16 = 4_000;
+        let mut key = create_key(5, &KeyBody::default());
+        key.add_macro(0x05, 100);
+        let mut mask = create_data_mask(2, &DataMaskBody::default());
+        mask.add_macro(0x01, 100);
+
+        let mut pool = ObjectPool::default()
+            .with_object(create_working_set(1, &WorkingSetBody::default()).with_children([2u16]))
+            .with_object(mask)
+            .with_object(key);
+
+        for n in 0..CHAIN {
+            let id = 100 + n;
+            let body = if n + 1 < CHAIN {
+                MacroBody {
+                    commands: vec![MacroCommand {
+                        command_type: cmd::EXECUTE_MACRO,
+                        parameters: {
+                            let next = (id + 1).to_le_bytes();
+                            vec![next[0], next[1], 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+                        },
+                    }],
+                }
+            } else {
+                MacroBody::default()
+            };
+            pool = pool.with_object(create_macro(id, &body));
+        }
+
+        let mut runtime = VtRenderRuntime::from_pool(pool, LayoutConfig::default()).unwrap();
+        // Must return, not abort. Before the depth cap this overflowed.
+        let updates = runtime
+            .execute_macro_event(ObjectID::new(5), 0x05)
+            .expect("a deep macro chain must be refused, not fatal");
+        assert_eq!(updates.len(), 1);
     }
 }

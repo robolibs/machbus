@@ -33,6 +33,20 @@ pub const MAX_TC_SERVER_SECTIONS: u8 = 254;
 /// machbus preserves all `u8` values here and does not infer additional
 /// section/channel topology constraints without an official-spec citation.
 pub const MAX_TC_SERVER_CHANNELS: u8 = u8::MAX;
+/// Largest element number the process-data messages can carry.
+///
+/// ISO 11783-10 B.3.2: "The element number is a 12-bit field that comprises
+/// Byte 1, bits 5 to 8 and Byte 2", data range 0 to 4095, SPN 5200. Note this
+/// is tighter than the DDOP's own field — Table A.2 sizes DeviceElement Number
+/// as 2 bytes with range 0 to 65534 — so an element numbered above 4095 is
+/// declarable but unaddressable, which is why the DDOP validator rejects it.
+///
+/// 4095 itself is accepted here because B.3.2's range includes it, but it is
+/// worth avoiding: B.8.1 and B.8.2 encode "element number, set to not
+/// available" as exactly this value (byte 1 bits 8-5 = 1111 with byte 2 = FF16),
+/// a meaning their footnote says "is introduced in ISO 11783-10 version 2". An
+/// element genuinely numbered 4095 is therefore indistinguishable from an
+/// absent one on any version-2-or-later network.
 pub const MAX_PROCESS_DATA_ELEMENT_NUMBER: u16 = 0x0FFF;
 
 /// Server-side measurement trigger runtime for one process-data value.
@@ -142,6 +156,8 @@ pub struct TCClientInfo {
     pub tc_booms: u8,
     pub tc_sections: u8,
     pub tc_channels: u8,
+    /// B.8.2 byte 5 bit 1: the client reports its task totals are active.
+    pub task_totals_active: bool,
 }
 
 /// Server config.
@@ -274,6 +290,15 @@ pub struct TaskControllerServer {
     structure_label: [u8; 7],
     localization_label: [u8; 7],
     command_busy: bool,
+    /// B.8.1 byte 5 bit 1: "Task totals active, a task is started or resumed".
+    /// A 0→1 transition tells every connected client to reset its task totals
+    /// and start counting, so this must never be set by anything but a task.
+    task_totals_active: bool,
+    /// B.8.1 byte 5 bit 2 / bit 3: busy saving to / reading from NVM.
+    nvm_write_busy: bool,
+    nvm_read_busy: bool,
+    /// B.8.1 byte 5 bit 8.
+    out_of_memory: bool,
     current_command_source_address: Address,
     current_command_byte: u8,
     measurement_triggers: Vec<MeasurementTriggerRuntime>,
@@ -306,6 +331,10 @@ impl TaskControllerServer {
             structure_label: [0xFF; 7],
             localization_label: [0xFF; 7],
             command_busy: false,
+            task_totals_active: false,
+            nvm_write_busy: false,
+            nvm_read_busy: false,
+            out_of_memory: false,
             current_command_source_address: 0,
             current_command_byte: 0,
             measurement_triggers: Vec::new(),
@@ -558,6 +587,9 @@ impl TaskControllerServer {
             let Some(interval) = trigger.time_interval_ms else {
                 continue;
             };
+            if interval == 0 {
+                continue;
+            }
             trigger.elapsed_ms = trigger.elapsed_ms.saturating_add(elapsed_ms);
             while trigger.elapsed_ms >= interval {
                 trigger.elapsed_ms -= interval;
@@ -585,6 +617,9 @@ impl TaskControllerServer {
             let Some(interval) = trigger.distance_interval_mm else {
                 continue;
             };
+            if interval == 0 {
+                continue;
+            }
             trigger.distance_mm = trigger.distance_mm.saturating_add(distance_mm);
             while trigger.distance_mm >= interval {
                 trigger.distance_mm -= interval;
@@ -742,13 +777,41 @@ impl TaskControllerServer {
         None
     }
 
+    /// B.8.1 Task Controller Status.
+    ///
+    /// Byte 2 and bytes 3-4 are the element number and DDI, both "set to not
+    /// available" — they carried the TC number and version. Byte 5 is the
+    /// TC/DL status bitfield — it carried the *capability options*, so a TC
+    /// configured as TC-BAS (`server_options` bit 0x01) broadcast "task totals
+    /// active" from power-up with no task running, and B.8.1 makes a 0→1
+    /// transition of that bit mean every client resets its task totals.
     fn encode_tc_status(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = 0xF0 | ProcessDataCommands::Status.as_u8();
-        data[1] = self.tc_number;
-        data[2] = 0x00;
-        data[3] = self.tc_version;
-        data[4] = self.server_options | if self.command_busy { 0x08 } else { 0x00 };
+        data[1] = 0xFF;
+        data[2] = 0xFF;
+        data[3] = 0xFF;
+
+        let mut status = 0u8;
+        if self.task_totals_active {
+            status |= 0x01;
+        }
+        if self.nvm_write_busy {
+            status |= 0x02;
+        }
+        if self.nvm_read_busy {
+            status |= 0x04;
+        }
+        if self.command_busy {
+            status |= 0x08;
+        }
+        if self.out_of_memory {
+            status |= 0x80;
+        }
+        data[4] = status;
+
+        // Bytes 6 and 7 are "valid only if Byte 5, Bit 4 is set, or else
+        // transmit value = 0".
         data[5] = if self.command_busy {
             self.current_command_source_address
         } else {
@@ -759,8 +822,35 @@ impl TaskControllerServer {
         } else {
             0x00
         };
-        data[7] = self.num_channels;
+        data[7] = 0xFF;
         data
+    }
+
+    /// Which TC instance this is.
+    ///
+    /// No ISO 11783-10 Annex B message carries this: it used to be transmitted
+    /// in TC Status byte 2, which B.8.1 reserves as "element number, set to not
+    /// available". It remains configuration an integrator can read back — a
+    /// multi-TC bus distinguishes instances by NAME, not by a status byte.
+    #[must_use]
+    pub const fn tc_number(&self) -> u8 {
+        self.tc_number
+    }
+
+    /// Whether a task is running, so task totals may accumulate (B.8.1 bit 1).
+    pub const fn set_task_totals_active(&mut self, active: bool) {
+        self.task_totals_active = active;
+    }
+
+    /// Report the non-volatile-memory busy flags (B.8.1 bits 2 and 3).
+    pub const fn set_nvm_busy(&mut self, writing: bool, reading: bool) {
+        self.nvm_write_busy = writing;
+        self.nvm_read_busy = reading;
+    }
+
+    /// Report that the TC is out of memory (B.8.1 bit 8).
+    pub const fn set_out_of_memory(&mut self, out_of_memory: bool) {
+        self.out_of_memory = out_of_memory;
     }
 
     /// Feed an inbound `PGN_ECU_TO_TC` message; returns the outbound
@@ -876,6 +966,29 @@ impl TaskControllerServer {
                 }
                 self.handle_peer_control(msg)
             }
+            ProcessDataCommands::ClientTask => {
+                // §6.6.3: "All clients that maintain a connection with a TC
+                // shall indicate their presence by transmitting to the TC a
+                // cyclic Client Task message at an interval of 2 s ... If the TC
+                // does not receive this message for at least 6 s, it assumes an
+                // uncontrolled shutdown of the client." This arm did not exist,
+                // so the very message that proves a client is alive was rejected
+                // as unsupported: at t+6 s the server dropped the `TCClientInfo`
+                // — taking `ddop` and `pool_activated` with it, with no periodic
+                // call site to re-add it — and from then on answered every
+                // Activate/Deactivate `ThereAreErrorsInTheDDOP`. B.8.2 defines
+                // no response.
+                if msg.data.len() != 8 {
+                    return Err(Error::invalid_data(
+                        "TC client-task process-data frame must be an 8-byte frame",
+                    ));
+                }
+                self.ensure_client(msg.source);
+                if let Some(client) = self.find_client_mut(msg.source) {
+                    client.task_totals_active = msg.data[4] & 0x01 != 0;
+                }
+                Vec::new()
+            }
             command => {
                 return Err(Error::invalid_state(format!(
                     "unsupported ECU-to-TC process-data command {:?}",
@@ -922,6 +1035,7 @@ impl TaskControllerServer {
                     && client.last_ddop_transfer == payload
             });
             if is_duplicate_accepted_pool {
+                self.ensure_client(msg.source);
                 ObjectPoolErrorCodes::NoErrors
             } else {
                 match DDOP::deserialize(payload).and_then(|pool| {
@@ -1043,6 +1157,8 @@ impl TaskControllerServer {
         if msg.data.len() != 8 {
             return Vec::new();
         }
+        // Any well-formed traffic from a client is liveness (§6.6.3).
+        self.ensure_client(msg.source);
         let elem_raw = ((msg.data[0] >> 4) & 0x0F) as u16 | ((msg.data[1] as u16) << 4);
         let ddi_raw = (msg.data[2] as u16) | ((msg.data[3] as u16) << 8);
         let element = ElementNumber(elem_raw);
@@ -1089,9 +1205,17 @@ impl TaskControllerServer {
             if let Some(maximum) = trigger.maximum_threshold {
                 due |= value >= maximum && previous.is_none_or(|old| old < maximum);
             }
-            if trigger.trigger_methods & super::objects::TriggerMethod::Total.as_u8() != 0 {
-                due |= previous.is_some();
-            }
+            // F6 — the "total" method is *not* a per-value retrigger. §6.8.3
+            // makes a total something the TC stores once per Time XML element
+            // and queries at task pause/complete; there is nothing here to
+            // re-request on receiving a value.
+            //
+            // As written, `previous.is_some()` became permanently true after
+            // the first value, so every inbound Value emitted another
+            // RequestValue, whose reply was another Value: a self-sustaining
+            // storm on PGN 51968 that also blows through §6.8 a)'s limit of
+            // "a maximum of 10 process data messages per process data variable
+            // per second".
             if due && let Some(request) = measurement_request(trigger) {
                 out.push(request);
             }
@@ -1103,6 +1227,8 @@ impl TaskControllerServer {
         if !is_padded_fixed8(&msg.data, 4) {
             return Vec::new();
         }
+        // Any well-formed traffic from a client is liveness (§6.6.3).
+        self.ensure_client(msg.source);
         let elem_raw = ((msg.data[0] >> 4) & 0x0F) as u16 | ((msg.data[1] as u16) << 4);
         let ddi_raw = (msg.data[2] as u16) | ((msg.data[3] as u16) << 8);
         let element = ElementNumber(elem_raw);
@@ -1127,6 +1253,7 @@ impl TaskControllerServer {
         else {
             return Vec::new();
         };
+        self.ensure_client(msg.source);
         self.on_peer_control_assignment_received.emit(&assignment);
 
         let Some(cb) = self.peer_control_cb.as_mut() else {

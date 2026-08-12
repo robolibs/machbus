@@ -3,6 +3,6 @@
 
 dm1_request_global=CAFE00
 dm2_request_global=CBFE00
-dm1_response_two_dtcs=10AA6400010030FCE000
-dm2_response_lamp_only=00AA00000000FFFF
+dm1_response_two_dtcs=04FF6400010030FCE000
+dm2_response_lamp_only=00FF00000000FFFF
 dm11_request_clear_active=FFFFFFFFFFFFFFFF

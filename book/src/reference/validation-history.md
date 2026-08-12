@@ -73,6 +73,26 @@ leak scan — were removed so `.rs` tests cover code, not documentation or repo
 layout. The non-disclosure boundary is now a maintained convention, not an
 automated scan.
 
+## Review against the standards text
+
+A pass over the implementation with licensed copies of ISO 11783-1 … -14,
+AEF 023 RIG 2 and the NMEA 2000 appendices, checking field orders, ranges,
+timings, default priorities and reserved-bit rules against the documents.
+
+- Nine defects found and fixed; each carries a test that fails when the fix is
+  reverted, and the full gate ran green before every commit.
+- Seven of the nine only misbehave against a *conformant peer* — over-strict
+  receive paths and uniform defaults where the standard varies — so no
+  self-consistent test could have surfaced them.
+- Four miscited clauses corrected; three judgement calls documented in place
+  rather than changed.
+- Recorded limitation: no PGN value in the crate is evidenced by the standards,
+  because ISO 11783-1 §7, -7 §4.2 and -11 §4.1 all place the assignments in the
+  electronic database at isobus.net.
+
+Detail, including what each document could and could not evidence:
+[audit against the standards text](audit/standards-text-audit.md).
+
 ## Focused gates retained
 
 | Gate | Why it exists |

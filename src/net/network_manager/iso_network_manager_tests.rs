@@ -570,6 +570,19 @@ mod tests {
         });
         assert!(ticks < 9, "address violation was not reported");
         assert_eq!(&*violations.borrow(), &[0x80]);
+
+        // H33 — a misbehaving node keeps offending. Answering every frame turned
+        // one bus problem into a bus storm: a claim frame and a DTC per
+        // offending frame. One response per source per window is enough.
+        for _ in 0..20 {
+            net_b.send_frame(&frame, 0).unwrap();
+            let _ = pump_until(&mut net_a, &mut net_b, &mut built, 2, 10, |_a, _b| false);
+        }
+        assert_eq!(
+            violations.borrow().len(),
+            1,
+            "a repeat offender inside the response window must not be answered again"
+        );
     }
 
     #[test]
@@ -597,9 +610,10 @@ mod tests {
         assert_eq!(net_a.internal_cf(h_a).unwrap().address(), 0x80);
 
         net_a.start_address_claiming().unwrap();
+        // §4.5.1 a): a restart re-opens the listen window before re-claiming.
         assert_eq!(
             net_a.internal_cf(h_a).unwrap().claim_state(),
-            ClaimState::WaitForContest
+            ClaimState::SendRequest
         );
         pump_until(&mut net_a, &mut net_b, &mut built, 50, 100, |a, _b| {
             a.internal_cf(h_a).unwrap().claim_state() == ClaimState::Claimed
@@ -685,8 +699,21 @@ mod tests {
         });
         assert!(ticks < 49, "later lower-NAME claim did not converge");
 
-        assert_eq!(low.internal_cf(h_low).unwrap().address(), 0x80);
-        assert_eq!(high.internal_cf(h_high).unwrap().address(), 0x81);
+        // §4.5.1 a) has the newcomer listen for 250 ms + RTxD and then claim an
+        // *unused* address. This used to assert the reverse — the lower NAME
+        // taking 0x80 and evicting the incumbent to 0x81 — because the claim
+        // went out before any address table existed, so arbitration had to
+        // clean up a collision the standard's own sequence avoids.
+        assert_eq!(
+            high.internal_cf(h_high).unwrap().address(),
+            0x80,
+            "the incumbent keeps the address it already holds"
+        );
+        assert_eq!(
+            low.internal_cf(h_low).unwrap().address(),
+            0x81,
+            "the newcomer picks a free address instead of contesting"
+        );
     }
 
     #[test]
@@ -1021,5 +1048,54 @@ mod tests {
         assert_eq!(*pgn_a_first.borrow(), 1);
         assert_eq!(*pgn_a_second.borrow(), 1);
         assert_eq!(*pgn_b.borrow(), 1);
+    }
+
+    /// 6A — ISO 11783-3 §5.2.6 / §5.10.4.2: a connection-mode transport frame
+    /// belongs to exactly one control function. This stack fed every TP/ETP
+    /// frame into its own engine regardless of destination, so it answered an
+    /// RTS meant for a third party and corrupted that transfer.
+    #[test]
+    fn transport_frames_for_another_control_function_are_ignored() {
+        use crate::net::pgn_defs::{PGN_ETP_CM, PGN_TP_CM};
+        use crate::net::{Frame, Identifier, Priority, tp::tp_cm};
+
+        let mut net = IsoNet::<wirebit::ShmLink>::new(NetworkConfig::default());
+        let name = Name::default()
+            .with_identity_number(0x777)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let cf = net.create_internal(name, 0, 0x80).unwrap();
+        net.start_address_claiming().unwrap();
+        for _ in 0..40 {
+            net.update(50);
+            while net.take_outbound().is_some() {}
+            if net.internal_cf(cf).unwrap().claim_state() == ClaimState::Claimed {
+                break;
+            }
+        }
+        let our_address = net.internal_cf(cf).unwrap().address();
+        let elsewhere = if our_address == 0x40 { 0x41 } else { 0x40 };
+
+        // An RTS from 0x22 to a CF that is not us.
+        let mut rts = [0xFFu8; 8];
+        rts[0] = tp_cm::RTS;
+        rts[1] = 20;
+        rts[2] = 0;
+        rts[3] = 3;
+        rts[4] = 0xFF;
+        let frame = Frame::new(
+            Identifier::encode(Priority::Default, PGN_TP_CM, 0x22, elsewhere),
+            rts,
+            8,
+        );
+        net.feed(&frame, 0);
+        net.update(1);
+
+        let answered = std::iter::from_fn(|| net.take_outbound())
+            .any(|(_, f)| f.pgn() == PGN_TP_CM || f.pgn() == PGN_ETP_CM);
+        assert!(
+            !answered,
+            "must not answer a transport request addressed to another CF"
+        );
     }
 }

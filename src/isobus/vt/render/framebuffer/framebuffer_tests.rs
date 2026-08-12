@@ -1449,6 +1449,7 @@ mod tests {
             kind: NodeKind::OutputString {
                 text: "VT".into(),
                 transparent_bg: false,
+                auto_wrap: true,
                 justification: 0,
             },
         });

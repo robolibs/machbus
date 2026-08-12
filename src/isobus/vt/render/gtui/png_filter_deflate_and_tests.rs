@@ -652,6 +652,7 @@ mod tests {
             kind: NodeKind::OutputString {
                 text: "HI".into(),
                 transparent_bg: false,
+                auto_wrap: true,
                 justification: 1,
             },
         });
@@ -688,6 +689,7 @@ mod tests {
             kind: NodeKind::OutputString {
                 text: "ABCDE".into(),
                 transparent_bg: true,
+                auto_wrap: true,
                 justification: 2,
             },
         });
@@ -796,6 +798,7 @@ mod tests {
             kind: NodeKind::OutputString {
                 text: "x".into(),
                 transparent_bg: false,
+                auto_wrap: true,
                 justification: 0,
             },
         });

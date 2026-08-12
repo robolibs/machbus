@@ -4,7 +4,7 @@
 //! the position type. Hosted builds with `geo-concord` use the richer `concord`
 //! conversions; embedded/no-concord builds keep lightweight in-crate geodesy.
 
-use super::definitions::{GNSSFixType, GNSSSystem};
+use super::definitions::{GNSSFixType, GNSSIntegrity, GNSSSystem};
 use crate::geo::{
     Ecf, Geo, Wgs, batch_to_ecf, batch_to_enu, batch_to_ned, batch_to_wgs, batch_to_wgs_from_enu,
     batch_to_wgs_from_ned, frame::Enu, frame::Ned, to_ecf,
@@ -34,6 +34,10 @@ pub struct GNSSPosition {
     pub vdop: Option<f64>,
     pub satellites_used: u8,
     pub fix_type: GNSSFixType,
+    /// DD209 integrity from PGN 129029 field 9. Carried separately from
+    /// [`Self::fix_type`]: a receiver can report RTK Fixed *and* Caution, and
+    /// that combination used to be indistinguishable from a healthy fix.
+    pub integrity: GNSSIntegrity,
     pub gnss_system: GNSSSystem,
     pub geoidal_separation_m: Option<f64>,
     pub rate_of_turn_rps: Option<f64>,
@@ -55,6 +59,7 @@ impl Default for GNSSPosition {
             vdop: None,
             satellites_used: 0,
             fix_type: GNSSFixType::NoFix,
+            integrity: GNSSIntegrity::NoChecking,
             gnss_system: GNSSSystem::GPS,
             geoidal_separation_m: None,
             rate_of_turn_rps: None,
@@ -118,7 +123,16 @@ impl GNSSPosition {
     /// Straight-line (ECEF chord) distance in metres to `other`. For the short
     /// baselines typical in field work this is within millimetres of the surface
     /// arc, and it avoids picking an ENU/NED reference origin.
+    ///
+    /// **Not available on the `embedded` profile.** The `no_std` [`to_ecf`] is
+    /// a shape-only placeholder that leaves latitude and longitude in *degrees*
+    /// while `x` is in metres, so this would subtract degrees from degrees and
+    /// call the result a distance — off by orders of magnitude, with no hint
+    /// that anything was wrong. A number a guidance loop would act on is worth
+    /// a compile error rather than a plausible-looking lie; use a real geodesy
+    /// crate on the target until `geo-concord` builds for it.
     #[must_use]
+    #[cfg(any(feature = "default", feature = "cli"))]
     pub fn distance_to(&self, other: &GNSSPosition) -> f64 {
         let a = self.to_ecf();
         let b = other.to_ecf();
@@ -133,8 +147,13 @@ fn sqrt_f64(value: f64) -> f64 {
     value.sqrt()
 }
 
+/// Newton-Raphson square root for `no_std` builds without libm. Currently only
+/// reachable from the hosted `distance_to`, which is why it is allowed to be
+/// unused here — it stays so the embedded profile keeps a working sqrt the day
+/// a real geodesy backend lands.
 #[must_use]
 #[cfg(feature = "embedded")]
+#[allow(dead_code)]
 fn sqrt_f64(value: f64) -> f64 {
     if value <= 0.0 {
         return 0.0;
@@ -184,6 +203,88 @@ impl GNSSBatch {
     #[must_use]
     pub fn wgs_from_ned_batch(ned: &[Ned]) -> Vec<Wgs> {
         batch_to_wgs_from_ned(ned)
+    }
+}
+
+// ─── AIS Position Reports (PGN 129038 & PGN 129039) ────────────────────
+
+/// AIS Class A Position Report (PGN 129038 / 0x01F806).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AisClassAPositionReport {
+    pub mmsi: u32,
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub cog_rad: f64,
+    pub sog_mps: f64,
+    pub heading_rad: f64,
+    pub rot_rad_per_sec: f64,
+    pub nav_status: u8,
+}
+
+impl AisClassAPositionReport {
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 24 {
+            return None;
+        }
+        let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+        let lon_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lat_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        if lon_raw == 0x7FFFFFFF || lat_raw == 0x7FFFFFFF {
+            return None;
+        }
+        let cog_raw = u16::from_le_bytes([data[15], data[16]]);
+        let sog_raw = u16::from_le_bytes([data[17], data[18]]);
+        let heading_raw = u16::from_le_bytes([data[19], data[20]]);
+        let rot_raw = i16::from_le_bytes([data[21], data[22]]);
+        let nav_status = data[23] & 0x0F;
+
+        Some(Self {
+            mmsi,
+            latitude_deg: f64::from(lat_raw) * 1e-7,
+            longitude_deg: f64::from(lon_raw) * 1e-7,
+            cog_rad: f64::from(cog_raw) * 0.0001,
+            sog_mps: f64::from(sog_raw) * 0.01,
+            heading_rad: f64::from(heading_raw) * 0.0001,
+            rot_rad_per_sec: f64::from(rot_raw) * 0.001,
+            nav_status,
+        })
+    }
+}
+
+/// AIS Class B Position Report (PGN 129039 / 0x01F807).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AisClassBPositionReport {
+    pub mmsi: u32,
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub cog_rad: f64,
+    pub sog_mps: f64,
+    pub heading_rad: f64,
+}
+
+impl AisClassBPositionReport {
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 21 {
+            return None;
+        }
+        let mmsi = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+        let lon_raw = i32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+        let lat_raw = i32::from_le_bytes([data[9], data[10], data[11], data[12]]);
+        if lon_raw == 0x7FFFFFFF || lat_raw == 0x7FFFFFFF {
+            return None;
+        }
+        let cog_raw = u16::from_le_bytes([data[15], data[16]]);
+        let sog_raw = u16::from_le_bytes([data[17], data[18]]);
+        let heading_raw = u16::from_le_bytes([data[19], data[20]]);
+
+        Some(Self {
+            mmsi,
+            latitude_deg: f64::from(lat_raw) * 1e-7,
+            longitude_deg: f64::from(lon_raw) * 1e-7,
+            cog_rad: f64::from(cog_raw) * 0.0001,
+            sog_mps: f64::from(sog_raw) * 0.01,
+            heading_rad: f64::from(heading_raw) * 0.0001,
+        })
     }
 }
 
@@ -365,5 +466,18 @@ mod tests {
         assert!(GNSSBatch::wgs_from_enu_batch(&[]).is_empty());
         assert!(GNSSBatch::wgs_from_ned_batch(&[]).is_empty());
         assert!(GNSSBatch::wgs_from_ecf_batch(&[]).is_empty());
+    }
+
+    #[test]
+    fn ais_position_reports_decode() {
+        let mut data_a = [0u8; 30];
+        data_a[1..5].copy_from_slice(&244000111u32.to_le_bytes());
+        let report_a = AisClassAPositionReport::decode(&data_a).unwrap();
+        assert_eq!(report_a.mmsi, 244000111);
+
+        let mut data_b = [0u8; 25];
+        data_b[1..5].copy_from_slice(&244000222u32.to_le_bytes());
+        let report_b = AisClassBPositionReport::decode(&data_b).unwrap();
+        assert_eq!(report_b.mmsi, 244000222);
     }
 }

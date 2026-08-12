@@ -108,6 +108,7 @@ mod tests {
             spn,
             fmi,
             occurrence_count: oc,
+            conversion_method: false,
         }
     }
 

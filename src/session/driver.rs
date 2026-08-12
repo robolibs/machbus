@@ -89,6 +89,10 @@ impl Drop for Subscription {
 /// `None` when no frame is currently available.
 pub use crate::net::CanTransport as Transport;
 
+/// Ports polled for CAN error-confinement state each pump. ISO 11783 machines
+/// have a handful of segments; this bounds the loop without an allocation.
+const MAX_POLLED_PORTS: u8 = 4;
+
 /// Adapts a single CAN endpoint (one `port`) into a [`Transport`].
 pub struct EndpointTransport<L: can_adapter::Link> {
     port: u8,
@@ -118,6 +122,14 @@ impl<L: can_adapter::Link> Transport for EndpointTransport<L> {
         self.endpoint
             .send_can(&frame.to_can_frame())
             .map_err(|e| Error::with_message(crate::net::ErrorCode::DriverError, e.to_string()))
+    }
+
+    /// Report only for the port this transport owns; another port's state is
+    /// not ours to answer for. Without this the crate's only shipped transport
+    /// left bus-off unobservable, so the §9.6 fail-safe reaction could never
+    /// fire on real hardware.
+    fn bus_state(&self, port: u8) -> Option<can_adapter::can::BusState> {
+        (port == self.port).then(|| self.endpoint.bus_state())
     }
 }
 
@@ -185,6 +197,9 @@ pub struct Driver<T: Transport> {
     transport: T,
     callbacks: Rc<RefCell<CallbackRegistry>>,
     origin: Option<std::time::Instant>,
+    /// Per-port CAN error-confinement tracking. Ports are few, so a small
+    /// vector keyed by port number is enough.
+    confinement: Vec<(u8, crate::net::fault_confinement::FaultConfinementMonitor)>,
 }
 
 impl<T> Driver<T>
@@ -198,6 +213,7 @@ where
             transport,
             callbacks: Rc::new(RefCell::new(CallbackRegistry::default())),
             origin: None,
+            confinement: Vec::new(),
         }
     }
 
@@ -249,12 +265,48 @@ where
     ///
     /// # Errors
     /// Propagates transport send failures.
+    ///
+    /// Poll each port's CAN error-confinement state and queue a
+    /// [`BusEvent::ConfinementChanged`] on every transition.
+    ///
+    /// Bus-off was previously unobservable: the transport exposed no bus state,
+    /// so a controller that had stopped transmitting looked exactly like a
+    /// quiet bus and no fail-safe reaction could fire.
+    fn poll_bus_state(
+        transport: &T,
+        confinement: &mut Vec<(u8, crate::net::fault_confinement::FaultConfinementMonitor)>,
+        session: &mut Session,
+    ) {
+        for port in 0..MAX_POLLED_PORTS {
+            let Some(state) = transport.bus_state(port) else {
+                continue;
+            };
+            if !confinement.iter().any(|(p, _)| *p == port) {
+                confinement.push((
+                    port,
+                    crate::net::fault_confinement::FaultConfinementMonitor::new(),
+                ));
+            }
+            let monitor = confinement
+                .iter_mut()
+                .find(|(p, _)| *p == port)
+                .map(|(_, m)| m)
+                .expect("just inserted");
+            if let Some(action) = monitor.observe(state) {
+                session.push_event(Event::Bus(
+                    crate::session::sys::BusEvent::ConfinementChanged { port, action },
+                ));
+            }
+        }
+    }
+
     pub fn pump_at(&mut self, now: Instant) -> Result<usize> {
         {
             let mut session = self.session.borrow_mut();
             while let Some((port, frame)) = self.transport.recv() {
                 session.feed(port, &frame, now);
             }
+            Self::poll_bus_state(&self.transport, &mut self.confinement, &mut session);
             session.tick(now);
             while let Some((port, frame)) = session.poll_transmit() {
                 self.transport.send(port, &frame).map_err(Into::into)?;
@@ -281,6 +333,7 @@ where
         while let Some((port, frame)) = self.transport.recv() {
             session.feed(port, &frame, now);
         }
+        Self::poll_bus_state(&self.transport, &mut self.confinement, &mut session);
         session.tick(now);
         while let Some((port, frame)) = session.poll_transmit() {
             self.transport.send(port, &frame).map_err(Into::into)?;
@@ -341,6 +394,9 @@ mod tests {
     struct MemTransport {
         rx: Rc<RefCell<VecDeque<(u8, Frame)>>>,
         tx: Rc<RefCell<Vec<(u8, Frame)>>>,
+        /// Controller confinement state reported for port 0, so a test can drive
+        /// the bus to bus-off the way a real controller would.
+        bus: Rc<RefCell<Option<can_adapter::can::BusState>>>,
     }
 
     impl Transport for MemTransport {
@@ -352,6 +408,9 @@ mod tests {
         fn send(&mut self, port: u8, frame: &Frame) -> Result<()> {
             self.tx.borrow_mut().push((port, *frame));
             Ok(())
+        }
+        fn bus_state(&self, port: u8) -> Option<can_adapter::can::BusState> {
+            (port == 0).then(|| *self.bus.borrow()).flatten()
         }
     }
 
@@ -422,6 +481,7 @@ mod tests {
                 spn: 1234,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             });
             d.active().len()
         });
@@ -453,6 +513,7 @@ mod tests {
                 spn: 2000,
                 fmi: Fmi::ConditionExists,
                 occurrence_count: 1,
+                conversion_method: false,
             }],
         };
         let mut payload = [0xFFu8; 8];
@@ -517,6 +578,67 @@ mod tests {
             *claimed.borrow(),
             before,
             "dropped subscription must not fire"
+        );
+    }
+
+    /// The round-1 fail-safe reaction could never fire on real hardware: the
+    /// only shipped transport reported no bus state, and even when the driver
+    /// did observe a transition nothing carried it into the autonomy path.
+    #[test]
+    fn bus_off_reaches_the_autodrive_stop_latch() {
+        use crate::net::fault_confinement::FaultConfinementAction;
+        use crate::session::plugins::AutoDrive;
+        use crate::session::sys::{AutodriveEvent, BusEvent, SafeStopTrigger};
+
+        let mem = MemTransport::default();
+        *mem.bus.borrow_mut() = Some(can_adapter::can::BusState::ErrorActive);
+        let (ctrl, mut driver) = Session::builder(test_name(7), 0x80)
+            .plug(AutoDrive::new())
+            .spawn(mem.clone())
+            .unwrap();
+        ctrl.start().unwrap();
+        pump_until_claimed(&mut driver, &ctrl);
+
+        assert!(
+            ctrl.with_mut(|d: &mut AutoDrive| d.stop_reason())
+                .flatten()
+                .is_none(),
+            "a healthy bus must not latch a stop"
+        );
+
+        // The controller drops off the bus.
+        *mem.bus.borrow_mut() = Some(can_adapter::can::BusState::BusOff);
+        let mut now = Instant::ZERO.add_millis(10_000);
+        let mut saw_confinement = false;
+        let mut saw_safe_stop = false;
+        for _ in 0..5 {
+            now = now.add_millis(100);
+            while let Some(ev) = driver.poll_at(now).unwrap() {
+                match ev {
+                    Event::Bus(BusEvent::ConfinementChanged {
+                        action: FaultConfinementAction::FailSafe,
+                        ..
+                    }) => saw_confinement = true,
+                    Event::Autodrive(AutodriveEvent::SafeStop {
+                        trigger: SafeStopTrigger::BusOff,
+                    }) => saw_safe_stop = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_confinement,
+            "bus-off must surface as a fail-safe action"
+        );
+        assert!(
+            saw_safe_stop,
+            "bus-off must reach the autonomy path as a safe stop, not just an event"
+        );
+        assert_eq!(
+            ctrl.with_mut(|d: &mut AutoDrive| d.stop_reason()).flatten(),
+            Some(SafeStopTrigger::BusOff),
+            "the stop latch must hold the reason the machine was stopped"
         );
     }
 }

@@ -1,4 +1,12 @@
-//! ISO 11783-11 Auxiliary Functions (AUX-O / AUX-N).
+//! ISO 11783-6 Annex J Auxiliary Functions (AUX-O / AUX-N).
+//!
+//! Not ISO 11783-11, which this module used to cite: that part is three pages
+//! that define no messages at all, only the attributes a process-data element
+//! definition carries, and it delegates the dictionary itself to the ISOBUS
+//! Data Dictionary at isobus.net. Auxiliary control is Annex J of the Virtual
+//! Terminal part, whose §J.7 carries the Auxiliary Assignment Type 1/2
+//! command and response, the Auxiliary Input Type 1/2 status, and the
+//! Preferred Assignment messages.
 //!
 //! Mirrors the C++ `machbus::isobus::auxiliary.hpp`. Two related
 //! function styles share the same wire frame layout:
@@ -12,7 +20,13 @@
 //! ```
 //!
 //! - **AUX-O** (old-style): `PGN_AUX_INPUT_STATUS`, setpoint range `0..=10000` (0.0–100.0%).
-//! - **AUX-N** (new-style, ISO 11783-6 Annex G): `PGN_AUX_INPUT_TYPE2`, setpoint range `0..=65535`.
+//! - **AUX-N** (new-style, ISO 11783-6 Annex J): `PGN_AUX_INPUT_TYPE2`, setpoint range `0..=65535`.
+//!
+//! Annex **G** of ISO 11783-6:2018 is "Status Messages"; the auxiliary annex is
+//! **J**. The PGN values themselves are not printed in the part 6 text — like
+//! the rest of the ISO 11783 PGN assignments they live in the electronic
+//! database — so the constants below are not evidenced by the standard
+//! document, only their message definitions are.
 //!
 //! The C++ `AuxOInterface` / `AuxNInterface` (IsoNet-coupled) are
 //! intentionally not ported. `AuxConfig` (auto-send + interval) is

@@ -40,7 +40,15 @@ impl TreatmentZoneGrid {
     /// The `(row, col)` a position falls in, or `None` if outside the grid.
     #[must_use]
     pub fn cell_rc(&self, pos: Wgs) -> Option<(u32, u32)> {
-        if self.cell_lat_deg <= 0.0 || self.cell_lon_deg <= 0.0 {
+        if !self.cell_lat_deg.is_finite()
+            || !self.cell_lon_deg.is_finite()
+            || self.cell_lat_deg <= 0.0
+            || self.cell_lon_deg <= 0.0
+            || !pos.latitude.is_finite()
+            || !pos.longitude.is_finite()
+            || !self.origin.latitude.is_finite()
+            || !self.origin.longitude.is_finite()
+        {
             return None;
         }
         let dlat = pos.latitude - self.origin.latitude;

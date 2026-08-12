@@ -100,8 +100,15 @@ fn decode_padded_version_label(field: &[u8], max_len: usize, name: &str) -> Opti
     Some(label.to_owned())
 }
 
+/// Annex E.5/E.7/E.9 and the E.13/E.15 extended forms share one layout: bytes
+/// 2-5 and 7-8 reserved `FF`, byte 6 the error code.
+///
+/// This used to require `data[3..]` to be all `FF`, which is false for every
+/// conformant VT — a successful response carries 0x00 in byte 6, so the client
+/// dropped the frame and never left its wait state. The reserved bytes are not
+/// checked: reserved fields are ignored on receive, not made load-bearing.
 fn version_operation_response_is_canonical(data: &[u8]) -> bool {
-    data.len() == 8 && data[3..].iter().all(|&byte| byte == 0xFF)
+    data.len() == 8
 }
 
 #[cfg(test)]
@@ -119,10 +126,19 @@ mod tests {
         Message::new(PGN_VT_TO_ECU, data, src)
     }
 
+    /// Annex D.3 Get Memory response: byte 2 is the VT's ISO 11783-6 version,
+    /// byte 3 the status. This helper used to put the status in byte 2, which
+    /// is where the version lives — so the tests only ever exercised a VT
+    /// claiming version 0, and the client's mis-read went unnoticed.
     fn fixed_response(function: u8, status: u8) -> Vec<u8> {
+        get_memory_response(function, 5, status)
+    }
+
+    fn get_memory_response(function: u8, vt_version: u8, status: u8) -> Vec<u8> {
         let mut data = [0xFFu8; 8];
         data[0] = function;
-        data[1] = status;
+        data[1] = vt_version;
+        data[2] = status;
         data.to_vec()
     }
 
@@ -190,13 +206,36 @@ mod tests {
         let mut c = VTClient::new(VTClientConfig::default());
         c.set_object_pool(dummy_pool());
         c.connect().unwrap();
-        // VT_STATUS payload: [func, active_ws, ..., version=4]
-        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 4u8, 0xFF];
+        // Annex H.1: byte 7 is the VT busy-codes bitfield, not a version.
+        // 0x04 = bit 2 = "VT is busy executing a command".
+        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 0x04u8, 0xFF];
         data.resize(8, 0xFF);
         c.handle_vt_message(&vt_msg(data, 0x80));
         assert_eq!(c.state(), VTState::SendWorkingSetMaster);
         assert_eq!(c.vt_address(), 0x80);
-        assert_eq!(c.vt_version_value(), 4);
+        assert_eq!(c.vt_busy_codes(), 0x04);
+        assert!(!c.vt_is_out_of_memory());
+        assert_eq!(
+            c.vt_version_value(),
+            0,
+            "VT Status carries no version; it arrives in the Get Memory response"
+        );
+    }
+
+    /// H38 — byte 7 is a bitfield of busy conditions. Storing it as the version
+    /// meant a VT that happened to be out of memory (bit 7 = 0x80) re-labelled
+    /// itself as "version 128", and the working set advertised that back.
+    #[test]
+    fn vt_status_busy_codes_are_not_a_version() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        let mut data = vec![cmd::VT_STATUS, 0xFF, 0, 0, 0, 0, 0x80u8, 0xFF];
+        data.resize(8, 0xFF);
+        c.handle_vt_message(&vt_msg(data, 0x80));
+
+        assert!(c.vt_is_out_of_memory(), "bit 7 is 'VT is out of memory'");
+        assert_eq!(c.vt_version_value(), 0);
     }
 
     #[test]
@@ -322,6 +361,134 @@ mod tests {
         let _ = c.update(1_000);
         c.handle_vt_message(&vt_msg(end_of_pool_response(0x00, 0x00), 0x80));
         assert_eq!(c.state(), VTState::Connected);
+    }
+
+    /// P4.1 — the client read the Get Memory status out of byte 2, which
+    /// Annex D.3 defines as the Version Number. Every VT reporting version >= 1
+    /// therefore looked like "not enough memory" and the session aborted before
+    /// the pool was uploaded, so the machine's operator interface never
+    /// appeared on the terminal.
+    #[test]
+    fn get_memory_response_reads_status_not_version() {
+        for vt_version in 0u8..=6 {
+            let mut c = VTClient::new(VTClientConfig::default());
+            c.set_object_pool(dummy_pool());
+            c.connect().unwrap();
+            let mut status = vec![cmd::VT_STATUS];
+            status.resize(8, 0xFF);
+            status[6] = 4;
+            c.handle_vt_message(&vt_msg(status, 0x80));
+            let _ = c.update(1);
+            let _ = c.update(1);
+
+            c.handle_vt_message(&vt_msg(
+                get_memory_response(cmd::GET_MEMORY_RESPONSE, vt_version, 0x00),
+                0x80,
+            ));
+            assert_eq!(
+                c.state(),
+                VTState::UploadPool,
+                "a VT reporting version {vt_version} with enough memory must be uploaded to"
+            );
+            assert_eq!(
+                c.vt_version_value(),
+                u16::from(vt_version),
+                "the version byte must be recorded, not consumed as a status"
+            );
+        }
+    }
+
+    /// P4.2 — §4.6.9: "Each Working Set Master sends the Working Set
+    /// Maintenance message once per second." It was never transmitted at all —
+    /// `cmd::WORKING_SET_MAINTENANCE` had zero references crate-wide — so a
+    /// real VT declares an unexpected shutdown after 3 s, deletes the pool and
+    /// drops the operator's auxiliary assignments. The screen goes blank a few
+    /// seconds after it appears.
+    #[test]
+    fn connected_client_sends_working_set_maintenance_every_second() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        force_connected(&mut c);
+
+        let mut sent = Vec::new();
+        // Four seconds in 100 ms steps, well past the VT's 3 s window. The VT
+        // keeps broadcasting its own status, so the session stays up and the
+        // only thing under test is our cadence.
+        for step in 0..40 {
+            if step % 5 == 0 {
+                let mut status = vec![cmd::VT_STATUS];
+                status.resize(8, 0xFF);
+                status[6] = 4;
+                c.handle_vt_message(&vt_msg(status, 0x80));
+            }
+            for out in c.update(100) {
+                if out.data.first() == Some(&cmd::WORKING_SET_MAINTENANCE) {
+                    sent.push(out.data.clone());
+                }
+            }
+        }
+        assert_eq!(
+            c.state(),
+            VTState::Connected,
+            "precondition: the session stayed up for the whole run"
+        );
+
+        assert!(
+            sent.len() >= 3,
+            "at least one message per second must reach the VT, saw {}",
+            sent.len()
+        );
+
+        // G.3: byte 2 bit 0 is the one-shot initiating flag. Seeing it a second
+        // time tells the VT the working set restarted without a shutdown.
+        assert_eq!(sent[0][1] & 0x01, 1, "the first message initiates");
+        for later in &sent[1..] {
+            assert_eq!(
+                later[1] & 0x01,
+                0,
+                "only the first message may indicate the initiating state"
+            );
+        }
+        for msg in &sent {
+            assert_eq!(msg.len(), 8);
+            assert_eq!(msg[0], cmd::WORKING_SET_MAINTENANCE);
+            // E6 — G.3 byte 3: "The ISO11783-6 version that this Working Set
+            // meets ... It shall not be the version of the VT." This asserted
+            // 5, the version the *terminal* reported, which is precisely the
+            // field mix-up: the default working set is built to version 4.
+            assert_eq!(
+                msg[2],
+                VTVersion::Version4.as_u8(),
+                "byte 3 is the working set's own version, not the VT's"
+            );
+            assert!(
+                msg[3..8].iter().all(|&b| b == 0xFF),
+                "bytes 4-8 are reserved and set to FF"
+            );
+        }
+    }
+
+    /// The other half: a genuine out-of-memory refusal must still abort.
+    #[test]
+    fn get_memory_response_honours_a_real_refusal() {
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        let mut status = vec![cmd::VT_STATUS];
+        status.resize(8, 0xFF);
+        status[6] = 4;
+        c.handle_vt_message(&vt_msg(status, 0x80));
+        let _ = c.update(1);
+        let _ = c.update(1);
+
+        c.handle_vt_message(&vt_msg(
+            get_memory_response(cmd::GET_MEMORY_RESPONSE, 5, 0x01),
+            0x80,
+        ));
+        assert_eq!(
+            c.state(),
+            VTState::Disconnected,
+            "'do not transmit object pool' must not be uploaded through"
+        );
     }
 
     #[test]
@@ -631,6 +798,96 @@ mod tests {
                 ActivationCode::Pressed
             )]
         );
+    }
+
+    /// B2 — ISO 11783-6 Annex H.2/H.4 byte 8: reserved `FF` up to VT version 5,
+    /// `[TAN | 0xF]` from version 6. The client tested byte 8 for `0xFF`, so on
+    /// a v6 terminal it dropped every activation whose TAN was not 15 — fifteen
+    /// operator key presses in sixteen.
+    #[test]
+    fn vt6_activations_are_delivered_for_every_tan() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        for tan in 0u8..16 {
+            let mut c = VTClient::new(VTClientConfig::default());
+            let seen: Rc<RefCell<Vec<(ObjectID, ActivationCode)>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let sink = seen.clone();
+            c.on_soft_key.subscribe(move |&v| sink.borrow_mut().push(v));
+
+            let mut data =
+                VTServer::build_soft_key_activation(ActivationCode::Pressed, 0xCAFE, 0xBEEF, 7)
+                    .to_vec();
+            data[7] = (tan << 4) | 0x0F;
+            c.handle_vt_message(&vt_msg(data, 0x80));
+
+            assert_eq!(
+                *seen.borrow(),
+                vec![(ObjectID(0xCAFE), ActivationCode::Pressed)],
+                "TAN {tan} activation was dropped"
+            );
+            // TAN 15 encodes as 0xFF, which is exactly the pre-v6 reserved
+            // value — the wire cannot distinguish the two, so it reports None.
+            let expected = if tan == 0x0F { None } else { Some(tan) };
+            assert_eq!(c.last_activation_tan(), expected);
+        }
+    }
+
+    /// A byte 8 that is neither reserved nor a well-formed TAN is still junk.
+    #[test]
+    fn malformed_activation_tail_is_still_rejected() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(ObjectID, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_soft_key.subscribe(move |&v| sink.borrow_mut().push(v));
+
+        let mut data =
+            VTServer::build_soft_key_activation(ActivationCode::Pressed, 0xCAFE, 0xBEEF, 7).to_vec();
+        data[7] = 0x12;
+        c.handle_vt_message(&vt_msg(data, 0x80));
+        assert!(seen.borrow().is_empty());
+    }
+
+    /// Annex H.6: from VT version 6 byte 6 is `[TAN | touch state]` and bytes
+    /// 7-8 carry the parent mask, so reading byte 6 whole yields a nonsense
+    /// activation code on a v6 terminal.
+    #[test]
+    fn vt6_pointing_event_splits_tan_from_touch_state() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(u16, u16, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_pointing_event
+            .subscribe(move |&v| sink.borrow_mut().push(v));
+
+        // x = 0x0102, y = 0x0304, TAN 5, touch = Pressed(1), parent 0xBEEF.
+        let data = vec![0x02, 0x02, 0x01, 0x04, 0x03, 0x51, 0xEF, 0xBE];
+        c.handle_vt_message(&vt_msg(data, 0x80));
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x0102, 0x0304, ActivationCode::Pressed)]
+        );
+        assert_eq!(c.last_activation_tan(), Some(5));
+
+        // The pre-v6 layout still decodes, and reports no TAN.
+        let mut c = VTClient::new(VTClientConfig::default());
+        let seen: Rc<RefCell<Vec<(u16, u16, ActivationCode)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        c.on_pointing_event
+            .subscribe(move |&v| sink.borrow_mut().push(v));
+        let legacy = vec![0x02, 0x02, 0x01, 0x04, 0x03, 0x01, 0xFF, 0xFF];
+        c.handle_vt_message(&vt_msg(legacy, 0x80));
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x0102, 0x0304, ActivationCode::Pressed)]
+        );
+        assert_eq!(c.last_activation_tan(), None);
     }
 
     #[test]
@@ -1042,20 +1299,23 @@ mod tests {
         store.handle_vt_message(&vt_msg(vec![cmd::EXTENDED_STORE_VERSION, 0x00], 0x80));
         assert!(store_log.borrow().is_empty());
 
+        // E.13: bytes 2-5 reserved FF, byte 6 the error code. This vector used
+        // to put the status in byte 2 and expect success — the layout the
+        // client was reading, not the one a conformant VT sends.
         store.handle_vt_message(&vt_msg(
             vec![
                 cmd::EXTENDED_STORE_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
                 0xFF,
             ],
             0x80,
         ));
-        assert_eq!(*store_log.borrow(), vec![(true, 0xFF)]);
+        assert_eq!(*store_log.borrow(), vec![(true, 0x00)]);
 
         let mut load = VTClient::new(VTClientConfig::default());
         force_connected(&mut load);
@@ -1067,17 +1327,37 @@ mod tests {
         load.handle_vt_message(&vt_msg(
             vec![
                 cmd::EXTENDED_LOAD_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
                 0xFF,
             ],
             0x80,
         ));
         assert_eq!(load.state(), VTState::Connected);
+
+        // E.15 bit 1: an unknown version label is a failure, and it must be
+        // read from byte 6 rather than byte 2.
+        let mut failed = VTClient::new(VTClientConfig::default());
+        force_connected(&mut failed);
+        failed.send_extended_load_version("V1").unwrap();
+        failed.handle_vt_message(&vt_msg(
+            vec![
+                cmd::EXTENDED_LOAD_VERSION,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0x02,
+                0xFF,
+                0xFF,
+            ],
+            0x80,
+        ));
+        assert_eq!(failed.state(), VTState::Disconnected);
     }
 
     #[test]
@@ -1350,5 +1630,46 @@ mod tests {
         data[6] = 4;
         c.handle_vt_message(&vt_msg(data, 0x80));
         assert!(!c.is_active_ws());
+    }
+
+    /// C6 — Annex G.2 byte 2 is the SA of the active Working Set Master and
+    /// ISO 11783-5 gives 254 as NULL. The plugin calls `set_self_address`
+    /// every tick, including before the claim completes, so a plain equality
+    /// made NULL match NULL: a VT broadcasting "no working set owns me" told an
+    /// unclaimed client it was the active working set.
+    #[test]
+    fn a_null_address_is_never_the_active_working_set() {
+        let no_active_ws = |busy: u8| {
+            let mut data = vec![cmd::VT_STATUS, NULL_ADDRESS];
+            data.resize(8, 0xFF);
+            data[6] = busy;
+            data
+        };
+
+        let mut c = VTClient::new(VTClientConfig::default());
+        c.set_object_pool(dummy_pool());
+        c.connect().unwrap();
+        c.set_self_address(NULL_ADDRESS);
+        c.handle_vt_message(&vt_msg(no_active_ws(4), 0x80));
+        assert!(
+            !c.is_active_ws(),
+            "an unclaimed control function owns no working set"
+        );
+
+        // Claimed, and the VT names us: active.
+        c.set_self_address(0x42);
+        let mut ours = vec![cmd::VT_STATUS, 0x42];
+        ours.resize(8, 0xFF);
+        ours[6] = 4;
+        c.handle_vt_message(&vt_msg(ours, 0x80));
+        assert!(c.is_active_ws());
+
+        // The address is surrendered: the flag has to drop, not linger.
+        c.set_self_address(NULL_ADDRESS);
+        c.handle_vt_message(&vt_msg(no_active_ws(4), 0x80));
+        assert!(
+            !c.is_active_ws(),
+            "surrendering the address must clear active-WS status"
+        );
     }
 }

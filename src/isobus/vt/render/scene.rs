@@ -62,14 +62,14 @@ impl Rect {
     #[inline]
     #[must_use]
     pub const fn right(self) -> i32 {
-        self.x + self.w as i32
+        self.x.saturating_add(self.w as i32)
     }
 
     /// Bottom edge (exclusive).
     #[inline]
     #[must_use]
     pub const fn bottom(self) -> i32 {
-        self.y + self.h as i32
+        self.y.saturating_add(self.h as i32)
     }
 
     /// Test whether a point is inside this rectangle.
@@ -188,6 +188,9 @@ pub enum NodeKind {
     OutputString {
         text: String,
         transparent_bg: bool,
+        /// Options bit 1. The renderer used to wrap unconditionally, so an
+        /// Output String that had not asked for auto-wrap wrapped anyway.
+        auto_wrap: bool,
         justification: u8,
     },
     OutputNumber {
@@ -690,6 +693,7 @@ mod tests {
             kind: NodeKind::OutputString {
                 text: "x".into(),
                 transparent_bg: false,
+                auto_wrap: true,
                 justification: 0,
             },
         });
@@ -772,6 +776,7 @@ mod tests {
             !mk(NodeKind::OutputString {
                 text: "x".into(),
                 transparent_bg: false,
+                auto_wrap: true,
                 justification: 0,
             })
             .is_interactive()

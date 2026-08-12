@@ -64,13 +64,16 @@ fn file_server_rejects_initialize_volume_while_files_are_open_without_mutation()
 }
 
 #[test]
-fn file_server_initialize_volume_accepts_counted_volume_request_and_rejects_reserved_flags() {
+fn file_server_initialize_volume_accepts_counted_volume_request_and_ignores_reserved_flags() {
     let mut server = FileServer::new(FileServerConfig::default());
     server.add_file("old.txt", b"old".to_vec(), 0).unwrap();
     server.add_directory("old").unwrap();
 
+    // ISO 11783-13 §4.9 scopes Error Code 47 to a message "shorter than
+    // expected" — that, and not a set reserved bit, is what makes a request
+    // malformed, and a rejected one must leave the volume alone.
     let invalid = server.handle_client_message(&fs_request(
-        initialize_volume_request(0x96, 1024, 0x80, "FIELD"),
+        vec![FSFunction::InitializeVolume.as_u8(), 0x96, 0x00],
         0x42,
     ));
     assert_response(
@@ -114,8 +117,12 @@ fn file_server_initialize_volume_accepts_counted_volume_request_and_rejects_rese
     );
     assert_eq!(server.volume_name(), "ISOBUS");
 
+    // B.29 bits 7-2 are "Reserved, send as 000000" — a rule that binds the
+    // sender. The server must mask them, not refuse the request, so that an FS
+    // revision defining one is not turned away (ISO 11783-7 §5.4, undefined
+    // bits "received as 'don't care'").
     let initialized = server.handle_client_message(&fs_request(
-        initialize_volume_request(0x9A, 4096, 0x01, "FIELD"),
+        initialize_volume_request(0x9A, 4096, 0x01 | 0x80, "FIELD"),
         0x42,
     ));
     assert_response(
@@ -163,7 +170,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &open_directory_as_file[0].data,
         FSFunction::OpenFile,
         0xA0,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let open_file_as_directory = server.handle_client_message(&fs_request(
@@ -174,14 +181,14 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &open_file_as_directory[0].data,
         FSFunction::OpenFile,
         0xA1,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let file_path = b"plain.txt";
     let mut change_to_file = vec![
         FSFunction::ChangeDirectory.as_u8(),
         0xA2,
-        file_path.len() as u8,
+        file_path.len() as u8, (file_path.len() >> 8) as u8,
     ];
     change_to_file.extend_from_slice(file_path);
     let denied_change = server.handle_client_message(&fs_request(change_to_file, 0x42));
@@ -189,7 +196,7 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_change[0].data,
         FSFunction::ChangeDirectory,
         0xA2,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
     assert_eq!(
         server.clients().get(&0x42).unwrap().current_directory,
@@ -198,10 +205,13 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
     );
 
     let directory_path = b"logs";
+    // C.4.3 Delete File removes directories as well as files, so a non-empty
+    // one is refused for being non-empty, not for being the wrong type.
+    server.add_file("logs\\held.txt", b"x".to_vec(), 0).unwrap();
     let mut delete_directory = vec![
         FSFunction::DeleteFile.as_u8(),
         0xA3,
-        directory_path.len() as u8,
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     delete_directory.extend_from_slice(directory_path);
     let denied_delete = server.handle_client_message(&fs_request(delete_directory, 0x42));
@@ -209,14 +219,17 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_delete[0].data,
         FSFunction::DeleteFile,
         0xA3,
-        FSError::WrongType,
+        FSError::AccessDenied,
     );
+    assert!(server.directory_exists("logs"));
 
     let mut move_directory = vec![
         FSFunction::MoveFile.as_u8(),
         0xA4,
         directory_path.len() as u8,
+        (directory_path.len() >> 8) as u8,
         7,
+        0,
     ];
     move_directory.extend_from_slice(directory_path);
     move_directory.extend_from_slice(b"new.txt");
@@ -225,14 +238,14 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_move[0].data,
         FSFunction::MoveFile,
         0xA4,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let mut set_directory_attrs = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xA5,
-        directory_path.len() as u8,
         FileAttributes::Hidden.bit(),
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     set_directory_attrs.extend_from_slice(directory_path);
     let denied_set_attrs = server.handle_client_message(&fs_request(set_directory_attrs, 0x42));
@@ -240,13 +253,13 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
         &denied_set_attrs[0].data,
         FSFunction::SetFileAttributes,
         0xA5,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let mut get_directory_attrs = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xA8,
-        directory_path.len() as u8,
+        directory_path.len() as u8, (directory_path.len() >> 8) as u8,
     ];
     get_directory_attrs.extend_from_slice(directory_path);
     let directory_attrs = server.handle_client_message(&fs_request(get_directory_attrs, 0x42));
@@ -287,22 +300,25 @@ fn file_server_reports_wrong_type_for_file_operations_on_directories_without_mut
 
 #[test]
 fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
-    let mut server = FileServer::new(FileServerConfig::default());
+    // B.7 has no bits for these, so which optional commands a server offers is
+    // local policy answered with error code 12, not an advertised capability.
+    let mut server = FileServer::new(FileServerConfig {
+        supports_volume_management: false,
+        supports_file_attributes: false,
+        supports_move_file: false,
+        supports_delete_file: false,
+        ..FileServerConfig::default()
+    });
     server.add_file("one.txt", b"one".to_vec(), 0).unwrap();
-    let mut properties = server.get_properties();
-    properties.supports_volume_management = false;
-    properties.supports_file_attributes = false;
-    properties.supports_move_file = false;
-    properties.supports_delete_file = false;
-    server.set_properties(properties);
 
     let source = b"one.txt";
     let destination = b"two.txt";
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xB0,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         destination.len() as u8,
+        (destination.len() >> 8) as u8,
     ];
     move_request.extend_from_slice(source);
     move_request.extend_from_slice(destination);
@@ -314,7 +330,7 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
         FSError::NotSupported,
     );
 
-    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xB1, source.len() as u8];
+    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xB1, source.len() as u8, (source.len() >> 8) as u8];
     delete_request.extend_from_slice(source);
     let denied_delete = server.handle_client_message(&fs_request(delete_request, 0x42));
     assert_response(
@@ -327,7 +343,7 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
     let mut get_attrs_request = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xB2,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
     ];
     get_attrs_request.extend_from_slice(source);
     let denied_get_attrs = server.handle_client_message(&fs_request(get_attrs_request, 0x42));
@@ -341,8 +357,8 @@ fn file_server_optional_capabilities_gate_operations_before_file_mutation() {
     let mut set_attrs_request = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xB3,
-        source.len() as u8,
         FileAttributes::Hidden.bit(),
+        source.len() as u8, (source.len() >> 8) as u8,
     ];
     set_attrs_request.extend_from_slice(source);
     let denied_set_attrs = server.handle_client_message(&fs_request(set_attrs_request, 0x42));
@@ -441,14 +457,27 @@ fn file_server_get_file_date_time_uses_counted_paths_and_rejects_invalid_targets
         FSError::NotFound,
     );
 
-    let invalid = server.handle_client_message(&fs_request(
+    // A.2.3.1: the dot segments normalize away, so this names \\secret.txt —
+    // which does not exist. It used to be refused as an invalid source name.
+    let normalized = server.handle_client_message(&fs_request(
         date_time_request(0xC4, "jobs\\..\\secret.txt"),
+        0x42,
+    ));
+    assert_response(
+        &normalized[0].data,
+        FSFunction::GetFileDateTime,
+        0xC4,
+        FSError::NotFound,
+    );
+
+    let invalid = server.handle_client_message(&fs_request(
+        date_time_request(0xC6, "bad|name.txt"),
         0x42,
     ));
     assert_response(
         &invalid[0].data,
         FSFunction::GetFileDateTime,
-        0xC4,
+        0xC6,
         FSError::InvalidSourceName,
     );
 
@@ -540,8 +569,9 @@ fn file_server_preserves_and_cleans_per_path_date_time_metadata() {
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xCA,
-        b"log.txt".len() as u8,
+        b"log.txt".len() as u8, (b"log.txt".len() >> 8) as u8,
         b"moved.txt".len() as u8,
+        (b"moved.txt".len() >> 8) as u8,
     ];
     move_request.extend_from_slice(b"log.txt");
     move_request.extend_from_slice(b"moved.txt");
@@ -568,7 +598,7 @@ fn file_server_preserves_and_cleans_per_path_date_time_metadata() {
     let mut delete_request = vec![
         FSFunction::DeleteFile.as_u8(),
         0xCD,
-        b"moved.txt".len() as u8,
+        b"moved.txt".len() as u8, (b"moved.txt".len() >> 8) as u8,
     ];
     delete_request.extend_from_slice(b"moved.txt");
     let deleted = server.handle_client_message(&fs_request(delete_request, 0x42));
@@ -607,7 +637,7 @@ fn file_server_removed_volume_resets_and_blocks_current_directory_state() {
         vec![
             FSFunction::ChangeDirectory.as_u8(),
             0xD0,
-            b"jobs".len() as u8,
+            b"jobs".len() as u8, (b"jobs".len() >> 8) as u8,
             b'j',
             b'o',
             b'b',
@@ -661,7 +691,7 @@ fn file_server_removed_volume_resets_and_blocks_current_directory_state() {
         vec![
             FSFunction::ChangeDirectory.as_u8(),
             0xD2,
-            b"jobs".len() as u8,
+            b"jobs".len() as u8, (b"jobs".len() >> 8) as u8,
             b'j',
             b'o',
             b'b',
@@ -725,13 +755,19 @@ fn file_server_volume_status_requests_drive_removal_state_without_ccm() {
         "VolumeStatus responses carry a counted volume name"
     );
 
-    let invalid_mode =
+    // B.30 bits 7-2 are "Reserved, send as 000000", which binds the sender.
+    // Masking them on receive is what lets a later FS revision define bit 2
+    // without this server refusing the request outright (ISO 11783-7 §5.4,
+    // undefined bits "received as 'don't care'"); §4.9 scopes Error Code 47 to
+    // a message "shorter than expected". Mode 0x04 is therefore mode 0x00.
+    let reserved_mode =
         server.handle_client_message(&fs_request(volume_status_request(0xD6, 0x04, ""), 0x42));
-    assert_eq!(invalid_mode[0].dest, Some(0x42));
-    assert_eq!(invalid_mode[0].data[0], FSFunction::VolumeStatus.as_u8());
+    assert_eq!(reserved_mode[0].dest, Some(0x42));
+    assert_eq!(reserved_mode[0].data[0], FSFunction::VolumeStatus.as_u8());
     assert_eq!(
-        invalid_mode[0].data[2], 0xFF,
-        "reserved VolumeStatus request bits are rejected without changing state"
+        reserved_mode[0].data[2],
+        VolumeState::Present.as_u8(),
+        "a reserved VolumeStatus bit is ignored, not treated as an error"
     );
     assert_eq!(server.get_volume_state(), VolumeState::Present);
 
@@ -802,8 +838,9 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut move_request = vec![
         FSFunction::MoveFile.as_u8(),
         0xD5,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
         b"two.txt".len() as u8,
+        (b"two.txt".len() >> 8) as u8,
     ];
     move_request.extend_from_slice(b"one.txt");
     move_request.extend_from_slice(b"two.txt");
@@ -815,7 +852,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
         FSError::MediaNotPresent,
     );
 
-    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xD6, b"one.txt".len() as u8];
+    let mut delete_request = vec![FSFunction::DeleteFile.as_u8(), 0xD6, b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8];
     delete_request.extend_from_slice(b"one.txt");
     let delete_denied = server.handle_client_message(&fs_request(delete_request, 0x42));
     assert_response(
@@ -828,7 +865,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut get_attrs_request = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xD7,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
     ];
     get_attrs_request.extend_from_slice(b"one.txt");
     let get_attrs_denied = server.handle_client_message(&fs_request(get_attrs_request, 0x42));
@@ -842,8 +879,9 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut set_attrs_request = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0xD8,
-        b"one.txt".len() as u8,
         FileAttributes::ReadOnly.bit(),
+        b"one.txt".len() as u8,
+        (b"one.txt".len() >> 8) as u8,
     ];
     set_attrs_request.extend_from_slice(b"one.txt");
     let set_attrs_denied = server.handle_client_message(&fs_request(set_attrs_request, 0x42));
@@ -898,7 +936,7 @@ fn file_server_removed_volume_rejects_path_mutations_before_media_state_changes(
     let mut get_attrs_after = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0xDC,
-        b"one.txt".len() as u8,
+        b"one.txt".len() as u8, (b"one.txt".len() >> 8) as u8,
     ];
     get_attrs_after.extend_from_slice(b"one.txt");
     let attrs_after = server.handle_client_message(&fs_request(get_attrs_after, 0x42));

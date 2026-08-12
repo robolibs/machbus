@@ -1,7 +1,7 @@
 //! ISO 11783 application-layer modules.
 //!
 //! Mirrors the C++ `machbus::isobus::*` namespace. Phase 10 covers
-//! the seven top-level files: auxiliary, file_transfer (legacy),
+//! the top-level files: auxiliary,
 //! functionalities, group_function, guidance, tim, tractor_ecu.
 //! Phases 11–15 add the subnamespaces: `implement/`, `sc/`, `vt/`,
 //! `tc/`, `fs/`.
@@ -14,7 +14,6 @@
 pub mod auxiliary;
 #[cfg(any(feature = "default", feature = "cli"))]
 pub mod conformance;
-pub mod file_transfer;
 pub mod fs;
 pub mod functionalities;
 pub mod group_function;
@@ -27,11 +26,6 @@ pub mod tractor_ecu;
 pub mod vt;
 
 pub use auxiliary::{AuxFunctionState, AuxFunctionType, AuxNFunction, AuxOFunction};
-pub use file_transfer::{
-    FILE_SERVER_BUSY_STATUS_INTERVAL_MS, FILE_SERVER_STATUS_INTERVAL_MS, FS_REQUEST_TIMEOUT_MS,
-    FileAttribute, FileClientState, FileOperation, FileProperties, FileServerConfig,
-    FileServerState, FileTransferError, OpenFileState, VolumeInfo,
-};
 pub use functionalities::{
     AuxNOptions, AuxOOptions, BasicTractorEcuOptions, Functionalities, Functionality,
     FunctionalityData, MinimumControlFunctionOptions, TaskControllerGeoServerOptions,
@@ -43,18 +37,17 @@ pub use group_function::{
 };
 pub use implement::{
     AuxValveCommandMsg, AuxValveFlowMsg, CURVATURE_MAX_PER_KM, CURVATURE_MIN_PER_KM,
-    CurvatureCommand, CurvatureCommandStatus, DriveStrategyCmd, DriveStrategyMode, ExitReasonCode,
-    FacilityGroup, FamilyLevel, GenericSaeBs02SlotValue, GroundBasedSpeedDist, GuidanceLimitStatus,
-    GuidanceMachineInfo, GuidanceSystemCmd, GuidanceSystemStatus, HitchCommand, HitchCommandMsg,
-    HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, IMPLEMENT_FAMILIES, ImplementFamilyInfo,
+    CurvatureCommandStatus, DriveStrategyCmd, DriveStrategyMode, ExitReasonCode, FacilityGroup,
+    FamilyLevel, GenericSaeBs02SlotValue, GroundBasedSpeedDist, GuidanceLimitStatus,
+    GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd,
+    HitchRollPitchCmd, HitchStatus, IMPLEMENT_FAMILIES, ImplementFamilyInfo,
     ImplementMessageFamily, LightState, LightingController, LightingState, LimitStatus,
-    MachineDirection, MachineSelectedSpeedFull, MachineSelectedSpeedMsg, MachineSpeedCommandMsg,
-    MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus,
-    RequiredFacilitiesAggregator, SpeedExitCode, SpeedSource, SteeringReadiness,
-    TECU_FACILITY_MATRIX, TecuClass, TractorControlModeMsg, TractorFacilities,
-    TractorFacilitiesRole, TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState,
-    WheelBasedSpeedDist, curvature_within_range, estimated_flow_pgn, facilities_in, family_info,
-    measured_flow_pgn, wheel_slip_percent,
+    MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout,
+    PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, RequiredFacilitiesAggregator,
+    SpeedExitCode, SpeedSource, TECU_FACILITY_MATRIX, TecuClass, TractorControlModeMsg,
+    TractorFacilities, TractorFacilitiesRole, TractorMode, ValveCommand, ValveFailSafe,
+    ValveLimitStatus, ValveState, WheelBasedSpeedDist, curvature_within_range, estimated_flow_pgn,
+    facilities_in, family_info, measured_flow_pgn, wheel_slip_percent,
 };
 pub use sc::{
     SC_MAX_SEQUENCE_STEP_ID, SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_STATUS_ACTIVE_RATE_MS,
@@ -80,11 +73,11 @@ pub use tractor_ecu::{
 mod arbitrary_decode_tests {
     use super::*;
     use crate::isobus::implement::{
-        AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommand, DriveStrategyCmd,
-        GroundBasedSpeedDist, GuidanceMachineInfo, GuidanceSystemCmd, GuidanceSystemStatus,
-        HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightingState,
-        MachineSelectedSpeedFull, MachineSelectedSpeedMsg, MachineSpeedCommandMsg, PtoCommandMsg,
-        PtoStatus, TractorControlModeMsg, TractorFacilities, WheelBasedSpeedDist,
+        AuxValveCommandMsg, AuxValveFlowMsg, DriveStrategyCmd, GroundBasedSpeedDist,
+        GuidanceMachineInfo, GuidanceSystemCmd, HitchCommandMsg, HitchPtoCombinedCmd,
+        HitchRollPitchCmd, HitchStatus, LightingState, MachineSelectedSpeedFull,
+        MachineSpeedCommandMsg, PtoCommandMsg, PtoStatus, TractorControlModeMsg, TractorFacilities,
+        WheelBasedSpeedDist,
     };
     use crate::net::Message;
     use crate::net::pgn_defs::{
@@ -132,16 +125,13 @@ mod arbitrary_decode_tests {
             let _ = PtoStatus::decode(&data, true);
             let _ = LightingState::decode(&data);
             let _ = AuxValveFlowMsg::decode(&data, valve_index);
-            let _ = MachineSelectedSpeedMsg::decode(&data);
             let _ = MachineSpeedCommandMsg::decode(&data);
             let _ = DriveStrategyCmd::decode(&data);
             let _ = GuidanceSystemCmd::decode(&data);
             let _ = HitchPtoCombinedCmd::decode(&data);
             let _ = HitchRollPitchCmd::decode(&data, false);
             let _ = HitchRollPitchCmd::decode(&data, true);
-            let _ = CurvatureCommand::decode(&data);
             let _ = GuidanceMachineInfo::decode(&data);
-            let _ = GuidanceSystemStatus::decode(&data);
             let _ = TractorFacilities::decode(&data);
         }
 
@@ -214,9 +204,6 @@ mod arbitrary_decode_tests {
                     Some(decoded)
                 );
             }
-            if let Some(decoded) = MachineSelectedSpeedMsg::decode(&data) {
-                prop_assert_eq!(MachineSelectedSpeedMsg::decode(&decoded.encode()), Some(decoded));
-            }
             if let Some(decoded) = MachineSpeedCommandMsg::decode(&data) {
                 prop_assert_eq!(MachineSpeedCommandMsg::decode(&decoded.encode()), Some(decoded));
             }
@@ -229,14 +216,8 @@ mod arbitrary_decode_tests {
             if let Some(decoded) = HitchPtoCombinedCmd::decode(&data) {
                 prop_assert_eq!(HitchPtoCombinedCmd::decode(&decoded.encode()), Some(decoded));
             }
-            if let Some(decoded) = CurvatureCommand::decode(&data) {
-                prop_assert_eq!(CurvatureCommand::decode(&decoded.encode()), Some(decoded));
-            }
             if let Some(decoded) = GuidanceMachineInfo::decode(&data) {
                 prop_assert_eq!(GuidanceMachineInfo::decode(&decoded.encode()), Some(decoded));
-            }
-            if let Some(decoded) = GuidanceSystemStatus::decode(&data) {
-                prop_assert_eq!(GuidanceSystemStatus::decode(&decoded.encode()), Some(decoded));
             }
         }
     }

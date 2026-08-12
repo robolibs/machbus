@@ -16,7 +16,7 @@ use machbus::net::tp::TP_T_HOLD_MS;
 use machbus::net::{
     BROADCAST_ADDRESS, ETP_MAX_DATA_LENGTH, ErrorCode, ExtendedTransportProtocol, Frame,
     Identifier, NULL_ADDRESS, Priority, SessionState, TP_MAX_DATA_LENGTH, TP_MAX_PACKETS_PER_CTS,
-    TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState, TransportAbortReason,
+    TP_TIMEOUT_T2_MS, TP_TIMEOUT_T3_MS, TP_TIMEOUT_T4_MS, TpSessionState, TransportAbortReason,
     TransportProtocol,
 };
 
@@ -1014,7 +1014,7 @@ fn datalink_tp_etp_reject_invalid_endpoint_frames_without_session_mutation() {
 }
 
 #[test]
-fn datalink_tp_rejects_concurrent_sessions_that_share_dt_endpoint_path() {
+fn datalink_tp_scopes_concurrent_sessions_by_their_dt_endpoint_path() {
     let payload = vec![0xA5; 20];
 
     let mut sender = TransportProtocol::new();
@@ -1064,14 +1064,37 @@ fn datalink_tp_rejects_concurrent_sessions_that_share_dt_endpoint_path() {
             0x00,
         ],
     );
+    // A BAM from the same source is *not* a conflict: its TP.DT frames go to
+    // the global address while the connection-mode session's go to 0x20, so the
+    // two streams are distinguishable and both may be open at once.
     assert!(
         receiver
             .process_frame(&bam_same_source_while_specific_session_is_active, 0)
             .is_empty(),
-        "a BAM from the same source would share the same TP.DT stream and must be dropped"
+        "a BAM is connectionless, so it is accepted without a response"
     );
-    assert_eq!(receiver.active_sessions().len(), 1);
-    assert_eq!(receiver.stats().dropped_frames, 2);
+    assert_eq!(
+        receiver.active_sessions().len(),
+        2,
+        "a broadcast and a destination-specific session coexist"
+    );
+    assert_eq!(receiver.stats().dropped_frames, 1);
+
+    // §5.10.4.2: a repeated RTS for the *same* PGN abandons the previous one
+    // and is answered with a CTS, never an abort.
+    let repeat_rts = tp_cm_frame(
+        0x10,
+        0x20,
+        [machbus::net::tp::tp_cm::RTS, 20, 0, 3, 16, 0x00, 0xEF, 0x00],
+    );
+    let responses = receiver.process_frame(&repeat_rts, 0);
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        responses[0].data[0],
+        machbus::net::tp::tp_cm::CTS,
+        "the most recent RTS is acted on, with no abort for the abandoned one"
+    );
+    assert_eq!(receiver.active_sessions().len(), 2);
 }
 
 #[test]
@@ -1087,6 +1110,8 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
         TransportAbortReason::BadSequence,
         TransportAbortReason::DuplicateSequence,
         TransportAbortReason::UnexpectedDataSize,
+        // J1939-21 Table 8 value 250, "any other reason".
+        TransportAbortReason::Other,
     ];
     for reason in valid {
         assert_eq!(
@@ -1097,6 +1122,10 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
     for raw in [10, 11, 0x7F, 0x80, 0xFE, 0xFF] {
         assert_eq!(TransportAbortReason::try_from_u8(raw), None);
     }
+    assert_eq!(
+        TransportAbortReason::try_from_u8(250),
+        Some(TransportAbortReason::Other)
+    );
 
     let pgn = 0xEF00;
     let mut tp = TransportProtocol::new();
@@ -1121,11 +1150,14 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
             ((pgn >> 16) & 0xFF) as u8,
         ],
     );
+    // An unassigned reason byte is still an abort: the peer has torn the
+    // connection down. This used to drop the frame and leave our half of the
+    // session open indefinitely.
     assert!(tp.process_frame(&invalid_tp_abort, 0).is_empty());
-    assert_eq!(tp.active_sessions().len(), 1);
-    assert_eq!(tp.active_sessions()[0].state, SessionState::WaitingForData);
-    assert_eq!(tp.stats().aborts_received, 0);
-    assert_eq!(tp.stats().dropped_frames, 1);
+    assert!(
+        tp.active_sessions().is_empty(),
+        "an abort with an unrecognised reason must still close the session"
+    );
 
     let etp_pgn = 0xCA00;
     let mut etp = ExtendedTransportProtocol::new();
@@ -1160,14 +1192,20 @@ fn datalink_transport_abort_public_decoder_rejects_noncanonical_bytes() {
         ],
     );
     assert!(etp.process_frame(&invalid_etp_abort, 0).is_empty());
-    assert_eq!(etp.active_sessions().len(), 1);
-    assert_eq!(etp.active_sessions()[0].state, SessionState::WaitingForData);
-    assert_eq!(etp.stats().aborts_received, 0);
-    assert_eq!(etp.stats().dropped_frames, 1);
+    assert!(
+        etp.active_sessions().is_empty(),
+        "an abort with an unrecognised reason must still close the ETP session"
+    );
 }
 
 #[test]
-fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
+fn datalink_tp_cm_reserved_bytes_are_ignored_on_receive() {
+    // G3 — reserved bytes are transmitted as 1 and ignored on receive. Every
+    // one of these frames used to be dropped before any state update: a peer
+    // that zero-filled its CTS left our transmit session in `WaitingForCTS`
+    // until T3 at 1250 ms, aborting the whole VT pool or TC DDOP upload with
+    // reason 3 and no way for the peer to see why, and a dropped Conn_Abort
+    // left our half of the session open forever.
     let pgn = 0xEF00;
     let payload = vec![0xA5; 20];
 
@@ -1175,14 +1213,15 @@ fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
     tx_waiting_for_cts
         .send(pgn, &payload, 0x10, 0x20, 0, Priority::Default)
         .unwrap();
-    let mut bad_cts = tp_cts(0x20, 0x10, 3, 1, pgn);
-    bad_cts.data[3] = 0x00;
-    assert!(tx_waiting_for_cts.process_frame(&bad_cts, 0).is_empty());
+    let mut zero_padded_cts = tp_cts(0x20, 0x10, 3, 1, pgn);
+    zero_padded_cts.data[3] = 0x00;
+    assert!(tx_waiting_for_cts.process_frame(&zero_padded_cts, 0).is_empty());
     assert_eq!(
         tx_waiting_for_cts.active_sessions()[0].state,
-        SessionState::WaitingForCTS
+        SessionState::SendingData,
+        "a CTS that differs only in a reserved byte must open the window"
     );
-    assert_eq!(tx_waiting_for_cts.stats().dropped_frames, 1);
+    assert_eq!(tx_waiting_for_cts.stats().dropped_frames, 0);
 
     let mut tx_waiting_for_eoma = TransportProtocol::new();
     tx_waiting_for_eoma
@@ -1194,16 +1233,16 @@ fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
             .is_empty()
     );
     assert_eq!(tx_waiting_for_eoma.get_pending_data_frames().len(), 3);
-    let mut bad_eoma = tp_eoma(0x20, 0x10, 20, 3, pgn);
-    bad_eoma.data[4] = 0x00;
-    assert!(tx_waiting_for_eoma.process_frame(&bad_eoma, 0).is_empty());
-    assert_eq!(
-        tx_waiting_for_eoma.active_sessions()[0].state,
-        SessionState::WaitingForEndOfMsg
+    let mut zero_padded_eoma = tp_eoma(0x20, 0x10, 20, 3, pgn);
+    zero_padded_eoma.data[4] = 0x00;
+    assert!(tx_waiting_for_eoma.process_frame(&zero_padded_eoma, 0).is_empty());
+    assert!(
+        tx_waiting_for_eoma.active_sessions().is_empty(),
+        "the EOMA completes the session"
     );
 
     let mut bam_receiver = TransportProtocol::new();
-    let bad_bam = tp_cm_frame(
+    let zero_padded_bam = tp_cm_frame(
         0x10,
         BROADCAST_ADDRESS,
         [
@@ -1217,9 +1256,13 @@ fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
             ((pgn >> 16) & 0xFF) as u8,
         ],
     );
-    assert!(bam_receiver.process_frame(&bad_bam, 0).is_empty());
-    assert!(bam_receiver.active_sessions().is_empty());
-    assert_eq!(bam_receiver.stats().dropped_frames, 1);
+    assert!(bam_receiver.process_frame(&zero_padded_bam, 0).is_empty());
+    assert_eq!(
+        bam_receiver.active_sessions().len(),
+        1,
+        "a BAM that differs only in a reserved byte still opens a session"
+    );
+    assert_eq!(bam_receiver.stats().dropped_frames, 0);
 
     let mut rx_session = TransportProtocol::new();
     let rts = tp_cm_frame(
@@ -1229,7 +1272,7 @@ fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
     );
     assert_eq!(rx_session.process_frame(&rts, 0).len(), 1);
     assert_eq!(rx_session.active_sessions().len(), 1);
-    let bad_abort = tp_cm_frame(
+    let zero_padded_abort = tp_cm_frame(
         0x10,
         0x20,
         [
@@ -1243,10 +1286,10 @@ fn datalink_tp_cm_rejects_non_canonical_reserved_bytes_before_state_mutation() {
             ((pgn >> 16) & 0xFF) as u8,
         ],
     );
-    assert!(rx_session.process_frame(&bad_abort, 0).is_empty());
-    assert_eq!(
-        rx_session.active_sessions()[0].state,
-        SessionState::WaitingForData
+    assert!(rx_session.process_frame(&zero_padded_abort, 0).is_empty());
+    assert!(
+        rx_session.active_sessions().is_empty(),
+        "dropping a peer abort left our half of the session open forever"
     );
 }
 
@@ -1427,7 +1470,7 @@ fn datalink_tp_timeout_windows_abort_without_leaking_partial_sessions() {
         rx_waiting_for_data.active_sessions()[0].state,
         SessionState::WaitingForData
     );
-    assert!(rx_waiting_for_data.update(TP_TIMEOUT_T1_MS - 1).is_empty());
+    assert!(rx_waiting_for_data.update(TP_TIMEOUT_T2_MS - 1).is_empty());
     assert_eq!(
         rx_waiting_for_data.active_sessions()[0].state,
         SessionState::WaitingForData
@@ -1567,8 +1610,9 @@ fn datalink_etp_timeout_window_aborts_extended_session_without_state_leak() {
     etp.send(pgn, &payload, 0x10, 0x20, 0, Priority::Default)
         .unwrap();
 
+    // A transmitter waiting for a CTS is on T3 (§5.11.4.1), not T1.
     assert!(
-        etp.update(machbus::net::ETP_TIMEOUT_T1_MS - 1).is_empty(),
+        etp.update(machbus::net::ETP_TIMEOUT_T3_MS - 1).is_empty(),
         "ETP timeout boundary should not fire one millisecond early"
     );
     assert_eq!(etp.active_sessions()[0].state, SessionState::WaitingForCTS);
@@ -1699,7 +1743,7 @@ fn datalink_etp_rejects_concurrent_sessions_that_share_dt_endpoint_path() {
 }
 
 #[test]
-fn datalink_etp_abort_rejects_non_canonical_reserved_bytes_before_state_mutation() {
+fn datalink_etp_abort_reserved_bytes_are_ignored_on_receive() {
     let pgn = 0xCA00;
     let mut receiver = ExtendedTransportProtocol::new();
     let rts = etp_cm_frame(
@@ -1723,7 +1767,11 @@ fn datalink_etp_abort_rejects_non_canonical_reserved_bytes_before_state_mutation
         SessionState::WaitingForData
     );
 
-    let bad_abort = etp_cm_frame(
+    // G3 — reserved bytes are ignored on receive. Dropping a peer's abort over
+    // one left our half of the session open forever, which is the failure the
+    // TP engine's own round-2 fix documents three lines from where this check
+    // was added.
+    let zero_padded_abort = etp_cm_frame(
         0x10,
         0x20,
         [
@@ -1737,14 +1785,13 @@ fn datalink_etp_abort_rejects_non_canonical_reserved_bytes_before_state_mutation
             ((pgn >> 16) & 0xFF) as u8,
         ],
     );
-    assert!(receiver.process_frame(&bad_abort, 0).is_empty());
-    assert_eq!(receiver.active_sessions().len(), 1);
-    assert_eq!(
-        receiver.active_sessions()[0].state,
-        SessionState::WaitingForData
+    assert!(receiver.process_frame(&zero_padded_abort, 0).is_empty());
+    assert!(
+        receiver.active_sessions().is_empty(),
+        "a peer abort that differs only in a reserved byte still closes our half"
     );
-    assert_eq!(receiver.stats().aborts_received, 0);
-    assert_eq!(receiver.stats().dropped_frames, 1);
+    assert_eq!(receiver.stats().aborts_received, 1);
+    assert_eq!(receiver.stats().dropped_frames, 0);
 }
 
 #[test]

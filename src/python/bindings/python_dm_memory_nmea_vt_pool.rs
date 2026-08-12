@@ -434,18 +434,18 @@ impl PyLanguageData {
         let msg = crate::net::Message::new(PGN_LANGUAGE_COMMAND, data, 0x80);
         crate::j1939::LanguageData::decode(&msg).map(|m| Self {
             language_code: m.language_code.to_vec(),
-            decimal: m.decimal as u8,
-            time_format: m.time_format as u8,
-            date_format: m.date_format as u8,
-            distance: m.distance as u8,
-            area: m.area as u8,
-            volume: m.volume as u8,
-            mass: m.mass as u8,
-            temperature: m.temperature as u8,
-            pressure: m.pressure as u8,
-            force: m.force as u8,
+            decimal: m.decimal.map_or(0xFF, |v| v.as_u8()),
+            time_format: m.time_format.map_or(0xFF, |v| v.as_u8()),
+            date_format: m.date_format.map_or(0xFF, |v| v.as_u8()),
+            distance: m.distance.map_or(0xFF, |v| v.as_u8()),
+            area: m.area.map_or(0xFF, |v| v.as_u8()),
+            volume: m.volume.map_or(0xFF, |v| v.as_u8()),
+            mass: m.mass.map_or(0xFF, |v| v.as_u8()),
+            temperature: m.temperature.map_or(0xFF, |v| v.as_u8()),
+            pressure: m.pressure.map_or(0xFF, |v| v.as_u8()),
+            force: m.force.map_or(0xFF, |v| v.as_u8()),
             country_code: m.country_code.to_vec(),
-            generic: m.generic as u8,
+            generic: m.generic.map_or(0xFF, |v| v.as_u8()),
         })
     }
     fn encode(&self) -> Option<Vec<u8>> {
@@ -459,18 +459,18 @@ impl PyLanguageData {
         Some(
             crate::j1939::LanguageData {
                 language_code: [self.language_code[0], self.language_code[1]],
-                decimal: DecimalSymbol::try_from_u8(self.decimal)?,
-                time_format: TimeFormat::try_from_u8(self.time_format)?,
-                date_format: DateFormat::try_from_u8(self.date_format)?,
-                distance: DistanceUnit::try_from_u8(self.distance)?,
-                area: AreaUnit::try_from_u8(self.area)?,
-                volume: VolumeUnit::try_from_u8(self.volume)?,
-                mass: MassUnit::try_from_u8(self.mass)?,
-                temperature: TemperatureUnit::try_from_u8(self.temperature)?,
-                pressure: PressureUnit::try_from_u8(self.pressure)?,
-                force: ForceUnit::try_from_u8(self.force)?,
+                decimal: DecimalSymbol::try_from_u8(self.decimal),
+                time_format: TimeFormat::try_from_u8(self.time_format),
+                date_format: DateFormat::try_from_u8(self.date_format),
+                distance: DistanceUnit::try_from_u8(self.distance),
+                area: AreaUnit::try_from_u8(self.area),
+                volume: VolumeUnit::try_from_u8(self.volume),
+                mass: MassUnit::try_from_u8(self.mass),
+                temperature: TemperatureUnit::try_from_u8(self.temperature),
+                pressure: PressureUnit::try_from_u8(self.pressure),
+                force: ForceUnit::try_from_u8(self.force),
                 country_code: [self.country_code[0], self.country_code[1]],
-                generic: UnitSystem::try_from_u8(self.generic)?,
+                generic: UnitSystem::try_from_u8(self.generic),
             }
             .encode()
             .to_vec(),
@@ -569,9 +569,31 @@ impl PySpeedAndDistance {
             distance_m,
         }
     }
+    /// Strict decode: requires bytes 7-8 to be `0xFF` padding.
+    ///
+    /// Real wheel-based, ground-based and machine-selected speed frames put
+    /// key switch state and maximum time of tractor power there, so this
+    /// returns `None` for them — use `decode_measurement_prefix`.
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::SpeedAndDistance::decode(&data).map(|m| Self {
+            speed_mps: m.speed_mps,
+            distance_m: m.distance_m,
+        })
+    }
+
+    /// Decode just the speed/distance prefix, ignoring the PGN-specific
+    /// status bytes 7-8.
+    ///
+    /// This is the one to use for the three PGNs this type covers. ISO
+    /// 11783-8 §4.2 gives the ISO 11783-7 definition precedence over the
+    /// J1939-71 one where both define a parameter, and under part 7 those
+    /// trailing bytes carry data rather than padding — so only the strict
+    /// decoder was reachable from Python and it rejected every conformant
+    /// frame.
+    #[staticmethod]
+    fn decode_measurement_prefix(data: Vec<u8>) -> Option<Self> {
+        crate::j1939::SpeedAndDistance::decode_measurement_prefix(&data).map(|m| Self {
             speed_mps: m.speed_mps,
             distance_m: m.distance_m,
         })
@@ -968,7 +990,7 @@ pub struct PyGnssPosition {
 
 impl PyGnssPosition {
     fn to_rust(&self) -> GNSSPosition {
-        use crate::nmea::definitions::{GNSSFixType, GNSSSystem};
+        use crate::nmea::definitions::{GNSSFixType, GNSSIntegrity, GNSSSystem};
         GNSSPosition {
             wgs: Wgs::new(
                 self.latitude,
@@ -983,6 +1005,7 @@ impl PyGnssPosition {
             pdop: self.pdop,
             vdop: self.vdop,
             satellites_used: self.satellites_used,
+            integrity: GNSSIntegrity::NoChecking,
             fix_type: GNSSFixType::from_u8(self.fix_type),
             gnss_system: GNSSSystem::try_from_u8(self.gnss_system).unwrap_or(GNSSSystem::GPS),
             geoidal_separation_m: self.geoidal_separation_m,

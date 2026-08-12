@@ -1,6 +1,6 @@
 [package]
 name = "machbus"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
 license = "MIT"
@@ -66,6 +66,10 @@ cli = ["wirebit", "dep:concord", "tracing/std"]
 embedded = []
 wirebit = ["dep:wirebit", "wirebit/socketcan"]
 async = ["dep:futures-core"]
+# AEF 023 TIM authentication (Sec 4.4.4): X.509 DER chain validation,
+# curve25519 ECDH and AES-CMAC challenge-response, on RustCrypto. Opt-in
+# because it pulls a crypto stack a bare guidance/TC node does not need.
+tim-auth = ["dep:aes", "dep:cmac", "dep:x509-cert", "dep:der", "dep:x25519-dalek", "dep:sha2", "dep:rsa"]
 
 [dependencies]
 wirebit = { version = "0.0.1", path = "../wirebit", optional = true, default-features = false }
@@ -75,6 +79,15 @@ tracing = { version = "0.1", default-features = false, features = ["attributes"]
 
 futures-core = { version = "0.3", optional = true, default-features = false }
 pyo3 = { version = "0.23", optional = true, features = ["abi3-py39"] }
+
+# ─── TIM authentication (feature `tim-auth`), all RustCrypto ───────────────
+aes = { version = "0.8", optional = true, default-features = false }
+cmac = { version = "0.7", optional = true, default-features = false }
+sha2 = { version = "0.10", optional = true, default-features = false }
+der = { version = "0.7", optional = true, default-features = false, features = ["alloc", "oid"] }
+x509-cert = { version = "0.2", optional = true, default-features = false }
+x25519-dalek = { version = "2", optional = true, default-features = false, features = ["static_secrets"] }
+rsa = { version = "0.9", optional = true, default-features = false, features = ["sha2"] }
 
 [dev-dependencies]
 proptest = "1"

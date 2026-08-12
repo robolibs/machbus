@@ -677,7 +677,18 @@ pub struct OutputStringBody {
     pub height: u16,
     pub background_color: u8,
     pub font_attributes: ObjectID,
-    /// Bit 0 = transparent background, bit 1 = horizontal scroll.
+    /// The same three option bits as Input String: bit 0 transparent
+    /// background, bit 1 auto-wrap, bit 2 wrap on hyphen (VT4+).
+    ///
+    /// "Horizontal scroll" is not an Output String option, and the mask stopped
+    /// at bit 1 while the sibling type documented and accepted bit 2 three
+    /// hundred lines up. A VT4+ working set setting wrap-on-hyphen on an Output
+    /// String — a long designator in a narrow field, exactly what the bit is
+    /// for — uploaded a pool that deserialized and then failed `validate()`, so
+    /// the whole pool was deleted and End of Object Pool NAKed with a
+    /// diagnostic naming the wrong cause. The encoder likewise refused to
+    /// serialize the bit, so a machbus-built pool could not express on an
+    /// Output String what it could express on an Input String.
     pub options: u8,
     pub variable_reference: ObjectID,
     /// Bits 0-1 = horizontal justification, bits 2-3 = vertical justification.
@@ -702,7 +713,7 @@ impl Default for OutputStringBody {
 
 impl OutputStringBody {
     pub fn encode(&self) -> Result<Vec<u8>> {
-        if self.options & !0x03 != 0 {
+        if self.options & !0x07 != 0 {
             return Err(Error::invalid_data(
                 "Output String options contain reserved bits",
             ));
@@ -734,7 +745,7 @@ impl OutputStringBody {
         if body.len() < 13 {
             return Err(Error::invalid_data("Output String body too short"));
         }
-        if body[7] & !0x03 != 0 {
+        if body[7] & !0x07 != 0 {
             return Err(Error::invalid_data(
                 "Output String body contains reserved option bits",
             ));
@@ -902,7 +913,20 @@ pub struct MeterBody {
     pub needle_color: u8,
     pub border_color: u8,
     pub arc_and_tick_color: u8,
-    /// Bit 0 = show numeric value.
+    /// Options bits 0-3; bits 4-7 reserved.
+    ///
+    /// The mask used to be `0x01`, so a Meter with any other option bit set
+    /// deserialized (the walker is length-driven) and then failed `validate()`,
+    /// which `handle_end_of_pool` maps to `Malformed`: the client's pool is
+    /// reset and End of Object Pool NAKed, and the operator gets no interface
+    /// at all from that implement. Both sibling gauges in the same family carry
+    /// multi-bit masks — Linear Bar Graph `0x3F` (border, target line, ticks,
+    /// line-only marker, axis, direction) and Arched Bar Graph `0x1F` — so a
+    /// single-bit Meter was the odd one out.
+    ///
+    /// The bit *names* are not transcribed here: the renderer still reads bit 0
+    /// through `show_value`, which needs Table B.19 checked before it changes.
+    /// Widening the mask only stops a legal pool being destroyed.
     pub options: u8,
     pub number_of_ticks: u8,
     pub start_angle: u8,
@@ -935,7 +959,7 @@ impl Default for MeterBody {
 
 impl MeterBody {
     pub fn encode(&self) -> Result<Vec<u8>> {
-        if self.options & !0x01 != 0 {
+        if self.options & !0x0F != 0 {
             return Err(Error::invalid_data("Meter options contain reserved bits"));
         }
         validate_half_degree_angle(self.start_angle, "Meter start angle")?;
@@ -960,7 +984,7 @@ impl MeterBody {
         if body.len() < 17 {
             return Err(Error::invalid_data("Meter body too short"));
         }
-        if body[5] & !0x01 != 0 {
+        if body[5] & !0x0F != 0 {
             return Err(Error::invalid_data(
                 "Meter body contains reserved option bits",
             ));

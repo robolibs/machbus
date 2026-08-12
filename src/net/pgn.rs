@@ -163,20 +163,6 @@ pub const PGN_TABLE: &[PgnInfo] = &[
         is_broadcast: true,
     },
     PgnInfo {
-        pgn: PGN_GUIDANCE_MACHINE,
-        name: "Guidance Machine",
-        data_length: 8,
-        default_priority: 3,
-        is_broadcast: true,
-    },
-    PgnInfo {
-        pgn: PGN_GUIDANCE_SYSTEM,
-        name: "Guidance System",
-        data_length: 8,
-        default_priority: 3,
-        is_broadcast: true,
-    },
-    PgnInfo {
         pgn: PGN_SHORTCUT_BUTTON,
         name: "Shortcut Button",
         data_length: 8,
@@ -357,8 +343,12 @@ mod tests {
 
     #[test]
     fn table_size_matches_cpp() {
-        // C++ PGN_TABLE has 31 entries (verified by inspection of pgn.hpp).
-        assert_eq!(PGN_TABLE.len(), 31);
+        // The C++ PGN_TABLE has 31 entries. This table deliberately omits two
+        // of them — the "Guidance Machine" (0xFE44) and "Guidance System"
+        // (0xFE45) rows — because no ISO 11783 part defines those PGNs. The
+        // divergence from the C++ source is intentional; see the guidance
+        // section of `pgn_defs.rs`.
+        assert_eq!(PGN_TABLE.len(), 29);
     }
 
     use proptest::prelude::*;

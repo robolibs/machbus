@@ -1,0 +1,87 @@
+name: ci
+
+# Neither `book.yml` nor `release.yml` builds the library, so nothing outside a
+# developer's own machine ever compiled the crate. Combined with `tim-auth`
+# sitting outside every Makefile gate, all of the TIM certificate-chain
+# validation could have stopped compiling without anything noticing.
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  hosted:
+    name: Hosted gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup component add clippy rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        run: make check-all
+
+      - name: Clippy
+        run: make clippy
+
+      - name: Test
+        run: make test-all
+
+  embedded:
+    name: no_std gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the bare-metal target
+        run: rustup target add thumbv7em-none-eabihf
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build for no_std
+        run: make no-std-check
+
+      - name: Build for a bare-metal target
+        run: make no-std-target-check
+
+      - name: Embedded examples
+        run: make embedded-examples-check
+
+      # `tim-auth` is the one feature combination that must also link without
+      # std: it is the only optional feature carrying cryptography.
+      - name: tim-auth on bare metal
+        run: |
+          RUSTC="$(rustup which rustc)" cargo rustc --lib \
+            --no-default-features --features embedded,tim-auth \
+            --target thumbv7em-none-eabihf --crate-type rlib
+
+  bindings:
+    name: C ABI header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --locked
+
+      - name: Header is not stale
+        run: make bind-c-check

@@ -167,6 +167,19 @@ pub struct VTMacro {
 
 // ─── VTClient ─────────────────────────────────────────────────────────
 
+/// ISO 11783-6 §4.6.9: the VT transmits its Status message once per second,
+/// and 3 s without one is treated as a VT shutdown.
+pub const VT_STATUS_TIMEOUT_MS: u32 = 3_000;
+
+/// §4.6.9 / Annex G.3: "Each Working Set Master sends the Working Set
+/// Maintenance message once per second."
+///
+/// Without it the VT declares an unexpected shutdown after 3 s, alerts the
+/// operator, deletes the working set's object pool from volatile memory and
+/// drops any auxiliary assignments mapped to it — so the machine's screen goes
+/// blank a few seconds after it appears.
+pub const WORKING_SET_MAINTENANCE_INTERVAL_MS: u32 = 1_000;
+
 /// VT client. See module-level doc for the pump-style API contract.
 pub struct VTClient {
     config: VTClientConfig,
@@ -174,13 +187,39 @@ pub struct VTClient {
     pool: ObjectPool,
     working_set: WorkingSet,
     timer_ms: u32,
+    /// Time since the last Working Set Maintenance message, and whether the
+    /// one-shot "initiating" bit has already gone out. G.3: a second message
+    /// with that bit set is read by the VT as a working-set restart.
+    since_maintenance_ms: u32,
+    maintenance_initiated: bool,
+    /// Annex H.1 byte 7, the VT's busy bitfield as last reported.
+    vt_busy_codes: u8,
+    /// Milliseconds since the last VT Status message. ISO 11783-6 §4.6.9: the
+    /// VT sends it once per second and 3 s of silence is a VT shutdown, at
+    /// which point the working set must enter a safe state. This was never
+    /// tracked — the `Connected` arm of the tick was empty, so a working set
+    /// stayed "connected" indefinitely to a terminal that had gone away.
+    since_vt_status_ms: u32,
     pending_end_of_pool_delay_ms: u32,
     vt_address: Address,
+    /// The version the *terminal* reported in its Get Memory response.
     vt_version: u16,
+    /// The ISO 11783-6 version this **working set** complies with (G.3 byte 3).
+    ///
+    /// Fixed at construction from the configured preference and never written
+    /// again. It used to be the same field as `vt_version`, so the moment Get
+    /// Memory returned, a working set built to version 4 started claiming
+    /// whatever the terminal was — and G.3 says the terminal then applies that
+    /// version's rules to it.
+    ws_version: u8,
     extended_version_label: String,
     vt_supports_extended_versions: bool,
     unsupported_functions: Vec<u8>,
     is_active_ws: bool,
+    /// Set while a VT session is meant to exist, so a §4.6.9 shutdown can
+    /// restart initialisation. Cleared by an explicit `disconnect()`, which is
+    /// the application saying it wants no session at all.
+    session_wanted: bool,
     /// Address of *this* client's control function — used to detect
     /// whether the active-WS-master address in VT_STATUS is us.
     /// `None` until the user calls [`Self::set_self_address`]; while
@@ -192,6 +231,10 @@ pub struct VTClient {
     auto_reload_on_language_change: bool,
 
     macros: Vec<VTMacro>,
+    /// TAN from the most recent activation or pointing event on a VT version 6
+    /// terminal (Annex H.2/H.4/H.6), `None` on version 5 and earlier. Needed to
+    /// echo the TAN in a future H.3/H.5 response.
+    last_activation_tan: Option<u8>,
 
     pub on_soft_key: Event<(ObjectID, ActivationCode)>,
     pub on_button: Event<(ObjectID, ActivationCode)>,
@@ -230,6 +273,9 @@ pub struct VTClient {
     pub on_extended_load_response: Event<(bool, u8)>,
     pub on_unsupported_function: Event<u8>,
     pub on_active_ws_status: Event<bool>,
+    /// The VT stopped sending its Status message for longer than
+    /// [`VT_STATUS_TIMEOUT_MS`]; the working set has entered the safe state.
+    pub on_vt_status_lost: Event<()>,
     /// `(old_lang, new_lang)`.
     pub on_language_change: Event<(LanguageCode, LanguageCode)>,
 }
@@ -243,18 +289,25 @@ impl VTClient {
             pool: ObjectPool::default(),
             working_set: WorkingSet::default(),
             timer_ms: 0,
+            since_vt_status_ms: 0,
+            since_maintenance_ms: 0,
+            maintenance_initiated: false,
+            vt_busy_codes: 0,
             pending_end_of_pool_delay_ms: 0,
             vt_address: NULL_ADDRESS,
             vt_version: 0,
+            ws_version: config.preferred_version.as_u8(),
             extended_version_label: String::new(),
             vt_supports_extended_versions: false,
             unsupported_functions: Vec::new(),
             is_active_ws: false,
+            session_wanted: false,
             self_address: None,
             current_language: LanguageCode::default(),
             vt_language: LanguageCode::default(),
             auto_reload_on_language_change: true,
             macros: Vec::new(),
+            last_activation_tan: None,
             on_soft_key: Event::new(),
             on_button: Event::new(),
             on_soft_key_detailed: Event::new(),
@@ -278,6 +331,7 @@ impl VTClient {
             on_extended_load_response: Event::new(),
             on_unsupported_function: Event::new(),
             on_active_ws_status: Event::new(),
+            on_vt_status_lost: Event::new(),
             on_language_change: Event::new(),
         }
     }
@@ -294,7 +348,9 @@ impl VTClient {
     /// C++ obtains this via `cf_->cf().address()` — we accept it
     /// directly since we don't carry a CF reference.
     pub fn set_self_address(&mut self, addr: Address) {
-        self.self_address = Some(addr);
+        // NULL is "no address", not an address; storing it as `Some` defeated
+        // the guarantee documented on the field.
+        self.self_address = (addr != NULL_ADDRESS).then_some(addr);
     }
 
     // ─── Connect / disconnect ─────────────────────────────────────────
@@ -305,6 +361,7 @@ impl VTClient {
         }
         let _ = serialize_pool_for_vt_transfer(&self.pool)?;
         self.clear_vt_session_binding();
+        self.session_wanted = true;
         self.transition(VTState::WaitForVTStatus);
         self.timer_ms = 0;
         self.pending_end_of_pool_delay_ms = 0;
@@ -313,9 +370,17 @@ impl VTClient {
 
     pub fn disconnect(&mut self) -> Result<()> {
         self.clear_vt_session_binding();
+        self.session_wanted = false;
         self.transition(VTState::Disconnected);
         self.pending_end_of_pool_delay_ms = 0;
         Ok(())
+    }
+
+    /// TAN from the most recent Soft Key / Button activation or Pointing Event,
+    /// `None` if the terminal is VT version 5 or earlier (Annex H.2/H.4/H.6).
+    #[must_use]
+    pub const fn last_activation_tan(&self) -> Option<u8> {
+        self.last_activation_tan
     }
 
     #[inline]
@@ -336,14 +401,33 @@ impl VTClient {
         self.vt_address
     }
 
+    /// The VT's last reported busy bitfield (Annex H.1 byte 7): bit 0 updating
+    /// the visible mask, bit 1 saving to non-volatile memory, bit 2 executing a
+    /// command, bit 3 executing a macro, bit 4 parsing an object pool, bit 6
+    /// auxiliary learn mode, bit 7 out of memory.
     #[inline]
     #[must_use]
+    pub const fn vt_busy_codes(&self) -> u8 {
+        self.vt_busy_codes
+    }
+
+    /// `true` when the VT reports it is out of memory (bit 7).
+    #[must_use]
+    pub const fn vt_is_out_of_memory(&self) -> bool {
+        self.vt_busy_codes & 0x80 != 0
+    }
+
     pub const fn vt_version_value(&self) -> u16 {
         self.vt_version
     }
 
-    pub fn set_vt_version_preference(&mut self, version: VTVersion) {
-        self.vt_version = version.as_u8() as u16;
+    /// Set the version this **working set** declares in Annex G.3 byte 3.
+    ///
+    /// This used to write `vt_version` — the terminal's reported version — so
+    /// it changed what the client believed the *VT* was rather than what the
+    /// working set claims about itself.
+    pub const fn set_working_set_version(&mut self, version: VTVersion) {
+        self.ws_version = version.as_u8();
     }
 
     // ─── Language ─────────────────────────────────────────────────────
@@ -1267,6 +1351,8 @@ impl VTClient {
     /// emission order) the caller should ship.
     pub fn update(&mut self, elapsed_ms: u32) -> Vec<ClientOutbound> {
         self.timer_ms = self.timer_ms.saturating_add(elapsed_ms);
+        self.since_vt_status_ms = self.since_vt_status_ms.saturating_add(elapsed_ms);
+        self.since_maintenance_ms = self.since_maintenance_ms.saturating_add(elapsed_ms);
         let mut out = Vec::new();
         match self.state() {
             VTState::WaitForVTStatus => {
@@ -1290,9 +1376,18 @@ impl VTClient {
                     self.timer_ms = 0;
                     return out;
                 };
+                // Annex D.2 Get Memory: "Byte 1: VT function code = 192;
+                // Byte 2: Reserved, set to FF16; Bytes 3-6: Memory required
+                // (bytes); Bytes 7-8: Reserved, set to FF16." The size used to
+                // start at byte 2, one byte early, so a conformant terminal
+                // read a 24-byte pool request as 4 278 190 080 bytes and
+                // answered D.3 status 1 ("not enough memory, do not transmit
+                // Object Pool"). Both halves of this crate carried the same
+                // off-by-one, which is why machbus-to-machbus worked and no
+                // third-party VT ever accepted a pool.
                 let mut data = [0xFFu8; 8];
                 data[0] = cmd::GET_MEMORY;
-                data[1..5].copy_from_slice(&pool_size.to_le_bytes());
+                data[2..6].copy_from_slice(&pool_size.to_le_bytes());
                 out.push(ClientOutbound::to(
                     PGN_ECU_TO_VT,
                     data.to_vec(),
@@ -1343,7 +1438,38 @@ impl VTClient {
                 self.transition(VTState::SendGetMemory);
                 self.timer_ms = 0;
             }
-            VTState::Disconnected | VTState::Connected => {}
+            VTState::Connected => {
+                // §4.6.9: 3 s without a VT Status is a VT shutdown. The working
+                // set enters a safe state and may restart initialisation.
+                if self.since_vt_status_ms >= VT_STATUS_TIMEOUT_MS {
+                    self.transition(VTState::Disconnected);
+                    self.is_active_ws = false;
+                    self.on_vt_status_lost.emit(&());
+                } else if self.since_maintenance_ms >= WORKING_SET_MAINTENANCE_INTERVAL_MS {
+                    self.since_maintenance_ms = 0;
+                    out.push(ClientOutbound::to(
+                        PGN_ECU_TO_VT,
+                        self.working_set_maintenance().to_vec(),
+                        self.vt_address,
+                    ));
+                }
+            }
+            VTState::Disconnected => {
+                // §4.6.9: the working set "may restart initialisation" after a
+                // VT shutdown. Without this the state was terminal — the plugin
+                // consumes `connect_requested` once and nothing re-arms it — so
+                // an operator power-cycling the terminal, or a >3 s dropout
+                // under load, left the implement absent from the VT for the
+                // rest of the session while every other plugin kept running.
+                // An explicit `disconnect()` clears `session_wanted`, so only a
+                // lost session restarts.
+                if self.session_wanted && !self.pool.is_empty() {
+                    self.transition(VTState::WaitForVTStatus);
+                    self.timer_ms = 0;
+                    self.since_vt_status_ms = 0;
+                    self.pending_end_of_pool_delay_ms = 0;
+                }
+            }
         }
         out
     }
@@ -1408,22 +1534,55 @@ impl VTClient {
             return;
         }
         self.vt_address = msg.source;
-        let reported = msg.data[6];
-        if reported > 0 {
-            self.vt_version = reported as u16;
-        }
-        if let Some(self_addr) = self.self_address {
-            let active_addr = msg.data[1];
-            let was_active = self.is_active_ws;
-            self.is_active_ws = active_addr == self_addr;
-            if was_active != self.is_active_ws {
-                self.on_active_ws_status.emit(&self.is_active_ws);
-            }
+        self.since_vt_status_ms = 0;
+        // Annex H.1 byte 7 is the **VT busy codes** bitfield (updating mask,
+        // saving to NVM, executing a command or macro, parsing a pool, learn
+        // mode, out of memory). The VT Status message carries no version at
+        // all; storing this byte as `vt_version` meant a VT that happened to be
+        // busy re-labelled itself as a different edition of the standard, and
+        // the working set then advertised that number back to it. The real
+        // version arrives in the Get Memory response (Annex D.3, byte 2).
+        self.vt_busy_codes = msg.data[6];
+        // Annex G.2 byte 2 is the SA of the active Working Set Master, and
+        // ISO 11783-5 gives 254 as the NULL address — a VT saying "no working
+        // set owns me". The plugin calls `set_self_address(ctx.address())`
+        // every tick, including before the claim completes and after an address
+        // is surrendered, so a plain equality made NULL match NULL and told the
+        // application it was the active working set at the moment its control
+        // function had no address at all. Evaluated unconditionally so a
+        // surrendered address also *clears* the flag.
+        let active_addr = msg.data[1];
+        let was_active = self.is_active_ws;
+        self.is_active_ws = self.self_address.is_some_and(|self_addr| {
+            self_addr != NULL_ADDRESS && active_addr != NULL_ADDRESS && active_addr == self_addr
+        });
+        if was_active != self.is_active_ws {
+            self.on_active_ws_status.emit(&self.is_active_ws);
         }
         if self.state() == VTState::WaitForVTStatus {
             self.transition(VTState::SendWorkingSetMaster);
             self.timer_ms = 0;
         }
+    }
+
+    /// The Annex G.3 Working Set Maintenance payload.
+    ///
+    /// Byte 2 carries the status bitmask, where bit 0 is the one-shot
+    /// "initiating" flag — G.3 warns that seeing it set in more than one
+    /// message tells the VT the working set restarted without a proper
+    /// shutdown, so it is cleared after the first transmission. Byte 3 is the
+    /// version this working set complies with.
+    fn working_set_maintenance(&mut self) -> [u8; 8] {
+        let mut data = [0xFFu8; 8];
+        data[0] = cmd::WORKING_SET_MAINTENANCE;
+        data[1] = u8::from(!self.maintenance_initiated);
+        // G.3 byte 3: "The ISO11783-6 version that this Working Set meets ...
+        // It shall not be the version of the VT." This reported the terminal's
+        // version, so a v4 working set connecting to a v6 terminal announced
+        // itself as v6 and was held to v6 rules it does not implement.
+        data[2] = self.ws_version;
+        self.maintenance_initiated = true;
+        data
     }
 
     fn handle_get_memory_response(&mut self, msg: &Message) {
@@ -1433,7 +1592,14 @@ impl VTClient {
         if msg.data.len() != 8 {
             return;
         }
-        if msg.data[1] == 0 {
+        // Annex D.3: byte 2 is the Version Number and byte 3 is the Status
+        // ("0 = There can be enough memory / 1 = There is not enough memory
+        // available. Do not transmit Object Pool."). Reading the status out of
+        // the version byte meant every VT reporting version >= 1 — that is,
+        // every VT built after 2001 — aborted before the pool was uploaded, so
+        // the machine's operator interface never appeared.
+        self.vt_version = u16::from(msg.data[1]);
+        if msg.data[2] == 0 {
             self.transition(VTState::UploadPool);
         } else {
             self.transition(VTState::Disconnected);
@@ -1462,10 +1628,29 @@ impl VTClient {
         }
     }
 
+    /// Byte 8 of an activation message (Annex H.2/H.4): reserved `FF` up to VT
+    /// version 5, `[TAN | 0xF]` from version 6.
+    ///
+    /// Treating it as a plain reserved byte dropped every v6 activation whose
+    /// TAN was not 15 — fifteen operator key presses in sixteen.
+    const fn reserved_or_tan(value: u8) -> Option<Option<u8>> {
+        if value == 0xFF {
+            Some(None)
+        } else if value & 0x0F == 0x0F {
+            Some(Some(value >> 4))
+        } else {
+            None
+        }
+    }
+
     fn handle_soft_key(&mut self, msg: &Message) {
-        if msg.data.len() != 8 || msg.data[7] != 0xFF {
+        if msg.data.len() != 8 {
             return;
         }
+        let Some(tan) = Self::reserved_or_tan(msg.data[7]) else {
+            return;
+        };
+        self.last_activation_tan = tan;
         let Some(code) = ActivationCode::try_from_u8(msg.data[1]) else {
             return;
         };
@@ -1478,9 +1663,13 @@ impl VTClient {
     }
 
     fn handle_button(&mut self, msg: &Message) {
-        if msg.data.len() != 8 || msg.data[7] != 0xFF {
+        if msg.data.len() != 8 {
             return;
         }
+        let Some(tan) = Self::reserved_or_tan(msg.data[7]) else {
+            return;
+        };
+        self.last_activation_tan = tan;
         let Some(code) = ActivationCode::try_from_u8(msg.data[1]) else {
             return;
         };
@@ -1492,17 +1681,25 @@ impl VTClient {
             .emit(&(btn_id, parent_id, msg.data[6], code));
     }
 
-    /// VT Pointing Event (function 0x02): `[0x02][X u16 LE][Y u16 LE][touch
-    /// state][object-id u16 LE]`. The touch-state byte uses VT v4+
-    /// [`ActivationCode`] values; pre-v4 VTs send `0xFF` there, decoded as
-    /// `Released`.
+    /// VT Pointing Event (function 0x02), ISO 11783-6 Annex H.6.
+    ///
+    /// Two layouts. Up to VT version 5 bytes 7-8 are reserved `FF` and byte 6
+    /// carries the touch state on its own. From version 6 byte 6 is
+    /// `[TAN | touch state]` and bytes 7-8 carry the parent mask Object ID, so
+    /// reading byte 6 whole yields a nonsense activation code on a v6 terminal.
     fn handle_pointing_event(&mut self, msg: &Message) {
         if msg.data.len() != 8 {
             return;
         }
         let x = u16_le(&msg.data[1..]);
         let y = u16_le(&msg.data[3..]);
-        let touch = ActivationCode::from_u8(msg.data[5]);
+        let legacy = msg.data[6] == 0xFF && msg.data[7] == 0xFF;
+        let touch = if legacy {
+            ActivationCode::from_u8(msg.data[5])
+        } else {
+            self.last_activation_tan = Some(msg.data[5] >> 4);
+            ActivationCode::from_u8(msg.data[5] & 0x0F)
+        };
         self.on_pointing_event.emit(&(x, y, touch));
     }
 
@@ -1574,8 +1771,9 @@ impl VTClient {
         if !version_operation_response_is_canonical(&msg.data) {
             return;
         }
-        let success = msg.data[1] == 0;
-        let error_code = msg.data[2];
+        // Annex E.5/E.7/E.9 put the error code in byte 6, not byte 2.
+        let error_code = msg.data[5];
+        let success = error_code == 0;
         self.on_store_version_response.emit(&(success, error_code));
     }
 
@@ -1583,8 +1781,9 @@ impl VTClient {
         if !version_operation_response_is_canonical(&msg.data) {
             return;
         }
-        let success = msg.data[1] == 0;
-        let error_code = msg.data[2];
+        // Annex E.5/E.7/E.9 put the error code in byte 6, not byte 2.
+        let error_code = msg.data[5];
+        let success = error_code == 0;
         self.on_load_version_response.emit(&(success, error_code));
         if success {
             self.transition(VTState::Connected);
@@ -1664,8 +1863,9 @@ impl VTClient {
             if !version_operation_response_is_canonical(&msg.data) {
                 return;
             }
-            let success = msg.data[1] == 0;
-            let error_code = msg.data[2];
+            // E.13/E.15 use the same byte-6 error code as the classic forms.
+            let error_code = msg.data[5];
+            let success = error_code == 0;
             if self.state() == VTState::WaitForEndOfPool {
                 self.on_extended_load_response.emit(&(success, error_code));
                 if success {

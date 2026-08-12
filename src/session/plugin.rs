@@ -36,6 +36,23 @@ pub trait Plugin: Any {
         &[]
     }
 
+    /// Command PGNs this plugin is the sole author of, from this control
+    /// function's address.
+    ///
+    /// [`SessionBuilder::build`](super::SessionBuilder::build) refuses to
+    /// assemble two plugins that claim the same one. Two controllers writing
+    /// the same command PGN from one source address means a stop commanded by
+    /// one is overwritten by the other on the next tick, and the steering ECU
+    /// sees intent-to-steer chatter that makes autosteer engage and drop
+    /// repeatedly. Declaring it here makes the conflict impossible to
+    /// assemble rather than something a preset has to document.
+    ///
+    /// Only declare PGNs where a second author is genuinely a conflict; status
+    /// or response PGNs that several subsystems legitimately emit stay out.
+    fn transmits(&self) -> &'static [Pgn] {
+        &[]
+    }
+
     /// A received [`Message`] whose PGN is in [`Self::interests`].
     fn on_frame(&mut self, msg: &Message, ctx: &mut PluginCtx<'_>) {
         let _ = (msg, ctx);
@@ -46,6 +63,18 @@ pub trait Plugin: Any {
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let _ = ctx;
         None
+    }
+
+    /// An [`Event`] the session observed, delivered before it reaches the
+    /// application. This is the inbound counterpart to [`PluginCtx::emit`]:
+    /// without it a plugin can only speak, so a bus-off, a lost address claim
+    /// or a heartbeat fault could be detected by the session and still never
+    /// reach a subsystem that must react to it by entering a safe state.
+    ///
+    /// Events emitted from here are dispatched in turn, so one plugin can
+    /// react to another's; the session bounds the number of rounds.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let _ = (event, ctx);
     }
 
     /// Upcast for typed component lookup. Implement as `self`.
@@ -81,6 +110,7 @@ pub struct PluginCtx<'a> {
     address: Address,
     name: Name,
     now: Instant,
+    claimed: bool,
     sends: &'a mut Vec<SendCmd>,
     events: &'a mut VecDeque<Event>,
     actions: &'a mut Vec<CtxAction>,
@@ -91,6 +121,7 @@ impl<'a> PluginCtx<'a> {
         address: Address,
         name: Name,
         now: Instant,
+        claimed: bool,
         sends: &'a mut Vec<SendCmd>,
         events: &'a mut VecDeque<Event>,
         actions: &'a mut Vec<CtxAction>,
@@ -99,6 +130,7 @@ impl<'a> PluginCtx<'a> {
             address,
             name,
             now,
+            claimed,
             sends,
             events,
             actions,
@@ -111,10 +143,22 @@ impl<'a> PluginCtx<'a> {
         self.now
     }
 
-    /// Our claimed source address (or `NULL_ADDRESS` before claim completes).
+    /// The control function's current source address.
+    ///
+    /// During address claiming this is already the *preferred* address, so it
+    /// is not a test for whether anything can reach the bus — use
+    /// [`Self::is_claimed`] for that.
     #[must_use]
     pub fn address(&self) -> Address {
         self.address
+    }
+
+    /// Whether the control function has won its address claim. Frames queued
+    /// before this is `true` are refused by the network layer and never reach
+    /// the bus.
+    #[must_use]
+    pub fn is_claimed(&self) -> bool {
+        self.claimed
     }
 
     /// The local control function's current NAME.

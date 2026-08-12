@@ -5,11 +5,10 @@ use machbus::isobus::tc::{
     MeasurementTriggerRuntime, ObjectPoolActivationError, ObjectPoolDeletionErrors,
     ObjectPoolErrorCodes, PeerControlAssignment, PeerControlInterface, PrescriptionMap,
     PrescriptionZone, ProcessDataAcknowledgeErrorCodes, ProcessDataCommands, ServerOptions,
-    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig, TCClientTaskStatus,
-    TCGEOInterface, TCServerConfig, TCState, TaskControllerClient, TaskControllerServer,
-    TriggerMethod, geo_ddi, prescription_rate_from_engineering,
-    prescription_rate_process_data_payload, prescription_rate_to_engineering, tc_cmd,
-    tc_options_byte_is_valid,
+    TC_SERVER_OPTIONS_KNOWN_MASK, TC_STATUS_INTERVAL_MS, TCClientConfig, TCGEOInterface,
+    TCServerConfig, TCState, TaskControllerClient, TaskControllerServer, TriggerMethod,
+    prescription_rate_from_engineering, prescription_rate_process_data_payload,
+    prescription_rate_to_engineering, tc_cmd, tc_options_byte_is_valid,
 };
 use machbus::net::constants::{BROADCAST_ADDRESS, NULL_ADDRESS};
 use machbus::net::pgn_defs::{
@@ -23,7 +22,7 @@ fn minimal_client_ddop() -> DDOP {
     DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
@@ -391,7 +390,6 @@ fn tc_process_data_try_handlers_reject_reserved_and_unsupported_commands() {
         ProcessDataCommands::MeasurementTimeInterval.as_u8(),
         ProcessDataCommands::MeasurementDistanceInterval.as_u8(),
         ProcessDataCommands::Acknowledge.as_u8(),
-        ProcessDataCommands::ClientTask.as_u8(),
     ] {
         let payload = vec![unsupported, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let err = client
@@ -415,6 +413,40 @@ fn tc_process_data_try_handlers_reject_reserved_and_unsupported_commands() {
         );
         assert!(server.clients().is_empty());
     }
+
+    // §6.6.3 Client Task is ECU-to-TC only: the client rejects it as before,
+    // and the server must accept it as the liveness message it is. Rejecting it
+    // meant the server dropped the client at t+6 s — losing its DDOP and
+    // `pool_activated` with no periodic call site to re-add it — and answered
+    // every later Activate `ThereAreErrorsInTheDDOP`.
+    let client_task = vec![
+        ProcessDataCommands::ClientTask.as_u8(),
+        0xFF,
+        0xFF,
+        0xFF,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+    ];
+    let err = client
+        .try_handle_tc_message(&Message::new(PGN_TC_TO_ECU, client_task.clone(), 0x33))
+        .expect_err("a TC never sends Client Task to an ECU");
+    assert_eq!(err.code, ErrorCode::InvalidState);
+
+    assert!(
+        server
+            .try_handle_client_message(&Message::new(PGN_ECU_TO_TC, client_task, 0x42))
+            .expect("B.8.2 Client Task is accepted")
+            .is_empty(),
+        "B.8.2 defines no response to Client Task"
+    );
+    assert_eq!(
+        server.clients().len(),
+        1,
+        "Client Task is what proves the client is alive"
+    );
+    assert!(server.clients()[0].task_totals_active);
 }
 
 #[test]
@@ -424,7 +456,7 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
         DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("implement")
                     .with_structure_label(*b"AGBUS1 ")
                     .with_localization_label([1, 2, 3, 4, 5, 6, 7]),
@@ -531,14 +563,16 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.9 reserves only bytes 7-8; bytes 3-6 are the received data
+            // size, so byte 7 is what must be FF for the frame to be canonical.
             vec![
                 tc_cmd::OBJECT_POOL_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
                 0xFF,
             ],
             0x33,
@@ -561,15 +595,17 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.11 reserves only byte 8; bytes 3-6 are the faulty parent and
+            // object IDs and byte 7 the object-pool error codes.
             vec![
                 tc_cmd::ACTIVATE_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
             ],
             0x33,
         ))
@@ -593,15 +629,16 @@ fn tc_client_lifecycle_responses_reject_malformed_fixed_frames_without_state_pro
     let err = client
         .try_handle_tc_message(&Message::new(
             PGN_TC_TO_ECU,
+            // B.6.11 again: byte 8 is the only reserved byte.
             vec![
                 tc_cmd::ACTIVATE_RESPONSE,
                 0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
+                0xFF,
                 0x00,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
-                0xFF,
             ],
             0x33,
         ))
@@ -709,14 +746,16 @@ fn tc_status_frames_preserve_busy_source_and_client_server_binding() {
     assert_eq!(idle[4] & 0x08, 0);
     assert_eq!(idle[5], 0x00);
     assert_eq!(idle[6], 0x00);
-    assert_eq!(idle[7], 3);
+    // F1 — B.8.1 byte 8 is Reserved; the channel count belongs to the B.5.3
+    // version/capabilities frame.
+    assert_eq!(idle[7], 0xFF);
 
     server.set_command_busy_for(0x42, ProcessDataCommands::RequestValue.as_u8());
     let busy = server.update(TC_STATUS_INTERVAL_MS).unwrap();
     assert_ne!(busy[4] & 0x08, 0);
     assert_eq!(busy[5], 0x42);
     assert_eq!(busy[6], ProcessDataCommands::RequestValue.as_u8());
-    assert_eq!(busy[7], 3);
+    assert_eq!(busy[7], 0xFF);
 
     server.set_command_busy(false);
     let cleared = server.update(TC_STATUS_INTERVAL_MS).unwrap();
@@ -748,60 +787,47 @@ fn tc_status_frames_preserve_busy_source_and_client_server_binding() {
         "wrong-source TC status must not move the lifecycle state"
     );
 
-    let status = TaskControllerClient::build_status(
-        TCClientTaskStatus::Active,
-        0x33,
-        ProcessDataCommands::RequestValue.as_u8(),
-    );
-    assert_eq!(&status[0..4], &[0xFF, 0xFF, 0xFF, 0xFF]);
-    assert_eq!(status[4], TCClientTaskStatus::Active.as_u8());
-    assert_eq!(status[5], 0x33);
-    assert_eq!(status[6], ProcessDataCommands::RequestValue.as_u8());
-    assert_eq!(status[7], 0x00);
+    // F5 — B.8.2: "Byte 2: Element number, set to not available FF16. Bytes
+    // 3, 4: DDI, set to not available FFFF16. Bytes 5 to 8: Bit 1 Actual TC or
+    // DL status: task totals active (as received in Task Controller Status
+    // message, Byte 5, Bit 1)."
+    //
+    // Bytes 5-8 are one 32-bit field carrying only that mirrored bit. This used
+    // to assert the B.8.1 *server* layout — a status enum, a command address
+    // and a command code — none of which B.8.2 defines.
+    let idle = TaskControllerClient::build_client_task(false);
+    assert_eq!(idle, [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00]);
+    let running = TaskControllerClient::build_client_task(true);
+    assert_eq!(running, [0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00]);
 }
 
+/// L1 — TC-GEO used to transmit latitude and longitude as Process Data under
+/// DDI 0x0087 and 0x0088. The ISO 11783-11 data dictionary assigns those to
+/// Device Element Offset Y and Device Element Offset Z, both in millimetres,
+/// so a conformant TC decoded a latitude of 52.1° as a device element sitting
+/// 521 km off the datum. There is no TC-GEO position DDI to substitute; the TC
+/// receives position over `PGN_GNSS_POSITION`.
 #[test]
-fn tc_geo_position_process_data_payloads_use_canonical_value_headers() {
+fn tc_geo_does_not_transmit_position_under_device_element_offset_ddis() {
     let mut geo = TCGEOInterface::new();
-    geo.set_position(GeoPoint {
-        position: Wgs::new(52.123_456_7, 5.765_432_1, 0.0),
-        timestamp_us: 42,
-    });
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&521_234_567i32.to_le_bytes());
+    payload.extend_from_slice(&57_654_321i32.to_le_bytes());
+    geo.try_handle_gnss_position(&Message::new(PGN_GNSS_POSITION, payload, 0x24))
+        .expect("a well-formed GNSS position is the supported ingress");
 
-    let [lat, lon] = geo.position_process_data_payloads().unwrap();
-    for payload in [lat, lon] {
-        assert_eq!(
-            payload[0] & 0x0F,
-            ProcessDataCommands::Value.as_u8(),
-            "TC-GEO position values must use the process-data Value command"
-        );
-        assert_eq!(
-            payload[0] >> 4,
-            0,
-            "TC-GEO position values must not leak reserved element low bits"
-        );
-        assert_eq!(
-            payload[1], 0,
-            "TC-GEO position values must use a canonical zero element high byte"
+    let held = geo.current_position().expect("position recorded");
+    assert!((held.position.latitude - 52.123_456_7).abs() < 1e-7);
+    assert!((held.position.longitude - 5.765_432_1).abs() < 1e-7);
+
+    // The offset DDIs are not rates and are refused as prescription payloads,
+    // which is the only process-data channel TC-GEO still builds.
+    for offset_ddi in [DDI(0x0087), DDI(0x0088)] {
+        assert!(
+            prescription_rate_from_engineering(offset_ddi, 1.0).is_err(),
+            "a device-element offset DDI is not a prescription rate"
         );
     }
-
-    assert_eq!(
-        u16::from_le_bytes([lat[2], lat[3]]),
-        geo_ddi::ACTUAL_LATITUDE
-    );
-    assert_eq!(
-        u16::from_le_bytes([lon[2], lon[3]]),
-        geo_ddi::ACTUAL_LONGITUDE
-    );
-    assert_eq!(
-        i32::from_le_bytes(lat[4..8].try_into().unwrap()),
-        521_234_567
-    );
-    assert_eq!(
-        i32::from_le_bytes(lon[4..8].try_into().unwrap()),
-        57_654_321
-    );
 }
 
 #[test]
@@ -931,7 +957,7 @@ fn tc_geo_prescription_rate_payloads_validate_ddi_resolution_and_range() {
             "non-finite and out-of-range engineering rates must not encode to TC process data"
         );
     }
-    for invalid_ddi in [geo_ddi::ACTUAL_LATITUDE, DDI(0xFFFF)] {
+    for invalid_ddi in [DDI(0x0087), DDI(0xFFFF)] {
         assert!(
             prescription_rate_from_engineering(invalid_ddi, 1.0).is_err(),
             "non-rate or unknown DDIs must not be accepted as prescription-rate payloads"
@@ -1434,6 +1460,42 @@ fn tc_server_rejects_malformed_client_version_responses_without_version_update()
         .unwrap();
     assert_eq!(server.get_client_version(0x42), 4);
     assert_eq!(*seen.borrow(), vec![(0x42, 4)]);
+}
+
+/// F6 — a "total" trigger is not a per-value retrigger.
+///
+/// ISO 11783-10 §6.8.3 makes a total something the TC stores once per Time XML
+/// element and requests at task pause/complete. The runtime treated it as
+/// "re-request on every value received": once one value had arrived,
+/// `previous.is_some()` was permanently true, so each inbound Value emitted
+/// another RequestValue whose reply was another Value — a self-sustaining storm
+/// on PGN 51968, well past §6.8 a)'s "maximum of 10 process data messages per
+/// process data variable per second".
+#[test]
+fn tc_total_trigger_does_not_re_request_on_every_value() {
+    let mut server =
+        TaskControllerServer::new(TCServerConfig::default().with_booms(1).with_sections(1));
+    server.start().unwrap();
+
+    let mut trigger = MeasurementTriggerRuntime::new(0x42, 7, 0x1234);
+    trigger.trigger_methods = TriggerMethod::Total.as_u8();
+    server.configure_measurement_trigger(trigger).unwrap();
+
+    // Two identical values, then a changed one: none of them is a reason to
+    // ask again, because a total is not sampled by request.
+    let mut emitted = 0;
+    for value in [10i32, 10, 25] {
+        let payload = TaskControllerServer::build_set_value(7u16, 0x1234u16, value)
+            .expect("a valid Value payload");
+        let out = server
+            .try_handle_client_message(&Message::new(PGN_ECU_TO_TC, payload.to_vec(), 0x42))
+            .unwrap();
+        emitted += out.len();
+    }
+    assert_eq!(
+        emitted, 0,
+        "a total trigger must not answer a Value with a RequestValue"
+    );
 }
 
 #[test]

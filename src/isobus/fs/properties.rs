@@ -19,6 +19,41 @@ pub const FS_CMD_PREPARE_VOLUME_REMOVAL: u8 = 0x72;
 pub const FS_CMD_MAINTAIN_VOLUME: u8 = 0x73;
 pub const FS_V2_PROPERTIES_VERSION: u8 = 2;
 
+/// ISO 11783-13:2022 Extended Attribute TLV Descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FsTlvAttribute {
+    pub tag: u8,
+    pub value: Vec<u8>,
+}
+
+impl FsTlvAttribute {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.value.len());
+        out.push(self.tag);
+        out.push(self.value.len() as u8);
+        out.extend_from_slice(&self.value);
+        out
+    }
+
+    pub fn decode(data: &[u8]) -> Option<(Self, usize)> {
+        if data.len() < 2 {
+            return None;
+        }
+        let tag = data[0];
+        let len = data[1] as usize;
+        if data.len() < 2 + len {
+            return None;
+        }
+        Some((
+            Self {
+                tag,
+                value: data[2..2 + len].to_vec(),
+            },
+            2 + len,
+        ))
+    }
+}
+
 // ─── NACK error codes ─────────────────────────────────────────────────
 
 pub const FS_NACK_NOT_SUPPORTED: u8 = 0x01;

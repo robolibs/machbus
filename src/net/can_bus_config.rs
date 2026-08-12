@@ -10,7 +10,12 @@ use alloc::string::{String, ToString};
 use super::error::{Error, Result};
 
 // ─── ISO 11783-2 mandated values ───────────────────────────────────────
+/// The only bit rate ISO 11783-2 defines (§5.6, Table 1).
 pub const ISO_CAN_BITRATE: u32 = 250_000;
+/// A commonly deployed non-ISO high-speed rate. It is **not** an ISO 11783-2
+/// bit rate: a bus running at 500 kbit/s is not compliant, however well it
+/// works. Reported separately so a caller can allow it knowingly.
+pub const NON_ISO_HIGH_SPEED_BITRATE: u32 = 500_000;
 pub const ISO_SAMPLE_POINT_NOMINAL: f64 = 0.80;
 pub const ISO_SAMPLE_POINT_MIN: f64 = 0.77;
 pub const ISO_SAMPLE_POINT_MAX: f64 = 0.83;
@@ -79,7 +84,12 @@ impl CanBusConfig {
 /// Result of ISO 11783-2 compliance validation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CanBusValidation {
+    /// `true` only for the ISO 11783-2 bit rate.
     pub bitrate_ok: bool,
+    /// `true` when the bit rate is the widely used 500 kbit/s. Compliance and
+    /// interoperability are different questions, so this is kept separate from
+    /// `bitrate_ok` rather than folded into it.
+    pub non_iso_high_speed_bitrate: bool,
     pub sample_point_ok: bool,
     pub bit_timing_ok: bool,
     pub physical_mode_ok: bool,
@@ -90,7 +100,10 @@ pub struct CanBusValidation {
 /// Validate `config` against ISO 11783-2 §6.3 / §6.4.
 #[must_use]
 pub fn validate_can_bus_config(config: &CanBusConfig) -> CanBusValidation {
+    // 500 kbit/s used to pass this gate, so `enforce_iso_can_config` reported a
+    // non-conformant bus as ISO 11783-2 compliant.
     let bitrate_ok = config.bitrate == ISO_CAN_BITRATE;
+    let non_iso_high_speed_bitrate = config.bitrate == NON_ISO_HIGH_SPEED_BITRATE;
     let sample_point_ok = config.sample_point.is_finite()
         && config.sample_point >= ISO_SAMPLE_POINT_MIN
         && config.sample_point <= ISO_SAMPLE_POINT_MAX;
@@ -99,7 +112,7 @@ pub fn validate_can_bus_config(config: &CanBusConfig) -> CanBusValidation {
     let overall_ok = bitrate_ok && sample_point_ok && bit_timing_ok && physical_mode_ok;
 
     let error_message = if !bitrate_ok {
-        "bitrate must be 250000".to_string()
+        "bitrate must be 250000 (ISO 11783-2 Table 1)".to_string()
     } else if !config.sample_point.is_finite() {
         "sample point must be finite".to_string()
     } else if !sample_point_ok {
@@ -123,6 +136,7 @@ pub fn validate_can_bus_config(config: &CanBusConfig) -> CanBusValidation {
 
     CanBusValidation {
         bitrate_ok,
+        non_iso_high_speed_bitrate,
         sample_point_ok,
         bit_timing_ok,
         physical_mode_ok,
@@ -141,7 +155,10 @@ fn validate_bit_timing_segments(config: &CanBusConfig) -> bool {
     if !explicit_segments {
         return true;
     }
-    if segments.contains(&0) || config.sjw > config.phase_seg2 {
+    // SJW may not exceed either phase segment: it is subtracted from
+    // PHASE_SEG2 and added to PHASE_SEG1 during resynchronisation. Bounding it
+    // against PHASE_SEG2 alone accepted a jump width that overruns PHASE_SEG1.
+    if segments.contains(&0) || config.sjw > config.phase_seg1 || config.sjw > config.phase_seg2 {
         return false;
     }
 
@@ -182,11 +199,55 @@ mod tests {
 
     #[test]
     fn wrong_bitrate_rejected() {
-        let cfg = CanBusConfig::default().bitrate(500_000);
+        let cfg = CanBusConfig::default().bitrate(125_000);
         let v = validate_can_bus_config(&cfg);
         assert!(!v.bitrate_ok);
         assert!(!v.overall_ok);
         assert!(enforce_iso_can_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn high_speed_500k_is_reported_but_not_iso_compliant() {
+        // ISO 11783-2 Table 1 defines 250 kbit/s only. 500 kbit/s is widely
+        // deployed and widely useful, and it is still not compliant — the gate
+        // used to say otherwise.
+        let cfg = CanBusConfig::default().bitrate(500_000);
+        let v = validate_can_bus_config(&cfg);
+        assert!(!v.bitrate_ok, "500 kbit/s is not an ISO 11783-2 bit rate");
+        assert!(
+            v.non_iso_high_speed_bitrate,
+            "but it is recognised, so a caller can allow it knowingly"
+        );
+        assert!(!v.overall_ok);
+        assert!(enforce_iso_can_config(&cfg).is_err());
+
+        let iso = CanBusConfig::default().bitrate(250_000);
+        let v = validate_can_bus_config(&iso);
+        assert!(v.bitrate_ok);
+        assert!(!v.non_iso_high_speed_bitrate);
+        assert!(enforce_iso_can_config(&iso).is_ok());
+    }
+
+    #[test]
+    fn sjw_may_not_overrun_either_phase_segment() {
+        // PHASE_SEG1 = 2, PHASE_SEG2 = 4: an SJW of 3 fits SEG2 but overruns
+        // SEG1, which bounding against SEG2 alone missed.
+        // 9 + 2 + 3 + 1 = 15 tq with the sample point at 12/15 = 0.80, so the
+        // only thing under test is the jump width.
+        let overrun = CanBusConfig {
+            prop_seg: 9,
+            phase_seg1: 2,
+            phase_seg2: 3,
+            sjw: 3,
+            ..CanBusConfig::default()
+        };
+        assert!(
+            !validate_bit_timing_segments(&overrun),
+            "SJW must not exceed PHASE_SEG1"
+        );
+
+        let ok = CanBusConfig { sjw: 2, ..overrun };
+        assert!(validate_bit_timing_segments(&ok));
     }
 
     #[test]

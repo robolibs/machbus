@@ -8,11 +8,11 @@ use alloc::{
 };
 
 use super::error_codes::{
-    FSError, FileAttributes, OpenFlags, fs_error_byte_is_valid, get_access_mode,
+    FILE_ATTRIBUTES_CLIENT_SETTABLE, FSError, OpenFlags, fs_error_byte_is_valid, get_access_mode,
     open_flags_have_no_reserved_bits,
 };
 use super::types::{
-    CCMMessage, FSFunction, FileHandle, FileServerProperties, FileServerStatus,
+    CCMMessage, FS_VERSION_NUMBER, FSFunction, FileHandle, FileServerProperties, FileServerStatus,
     INVALID_FILE_HANDLE, INVALID_TAN, RESERVED_FILE_HANDLE_0, TAN, VolumeState,
     dos_date_time_is_supported, is_valid_fs_path, is_valid_volume_name,
 };
@@ -23,24 +23,65 @@ use crate::net::message::Message;
 use crate::net::pgn_defs::{PGN_FILE_CLIENT_TO_SERVER, PGN_FILE_SERVER_TO_CLIENT};
 use crate::net::types::{Address, Pgn};
 
-/// Special CCM keepalive function code.
-const CCM_FUNCTION_CODE: u8 = 0xFF;
 const READ_FILE_REQUEST_LEN: usize = 8;
+const SEEK_FILE_RESPONSE_LEN: usize = 8;
 const READ_FILE_RESPONSE_HEADER_LEN: usize = 5;
+
+/// Walk `count` B.14 directory entries and return the byte offset just past the
+/// last one, or `None` if the payload does not hold exactly that many.
+///
+/// Entry layout: one length byte, that many name bytes, one attribute byte,
+/// two date bytes, two time bytes and four size bytes — so 11 bytes plus the
+/// name, and never fewer than 12 in practice.
+fn directory_entries_end(payload: &[u8], count: usize) -> Option<usize> {
+    let mut offset = 0usize;
+    for _ in 0..count {
+        let name_len = usize::from(*payload.get(offset)?);
+        if name_len == 0 {
+            return None;
+        }
+        offset = offset.checked_add(1 + name_len + 9)?;
+        if offset > payload.len() {
+            return None;
+        }
+    }
+    Some(offset)
+}
 const WRITE_FILE_RESPONSE_LEN: usize = 8;
 const VOLUME_MODE_MAINTAIN: u8 = 0x01;
 const VOLUME_MODE_PREPARE_REMOVAL: u8 = 0x02;
 const VOLUME_MODE_RESERVED_MASK: u8 = !0x03;
-const FILE_ATTRIBUTES_RESPONSE_ALLOWED_MASK: u8 = FileAttributes::ReadOnly as u8
-    | FileAttributes::Hidden as u8
-    | FileAttributes::System as u8
-    | FileAttributes::Directory as u8
-    | FileAttributes::Archive as u8;
-const FILE_ATTRIBUTES_SET_ALLOWED_MASK: u8 = FileAttributes::ReadOnly as u8
-    | FileAttributes::Hidden as u8
-    | FileAttributes::System as u8
-    | FileAttributes::Archive as u8;
+const FILE_ATTRIBUTES_SET_ALLOWED_MASK: u8 = FILE_ATTRIBUTES_CLIENT_SETTABLE;
 const INITIALIZE_VOLUME_FLAGS_RESERVED_MASK: u8 = !0x03;
+
+/// Seek origin (ISO 11783-13:2022 B.17 Position Mode). Values 3-255 are
+/// reserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
+pub enum SeekMode {
+    #[default]
+    Start = 0,
+    Current = 1,
+    End = 2,
+}
+
+impl SeekMode {
+    #[inline]
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    #[must_use]
+    pub const fn try_from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Start),
+            1 => Some(Self::Current),
+            2 => Some(Self::End),
+            _ => None,
+        }
+    }
+}
 
 /// FS Client connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -77,8 +118,6 @@ impl Default for OpenFileInfo {
 pub type FileDateTime = (u16, u16);
 pub type FileDateTimeResponse = Result<FileDateTime, FSError>;
 pub type FileAttributesResponse = Result<u8, FSError>;
-/// `(total_bytes, free_bytes)` or an error, from a `GetFreeSpace` query.
-pub type FreeSpaceResponse = Result<(u32, u32), FSError>;
 pub type FileOperationResponse = Result<(), FSError>;
 
 /// One in-flight request awaiting response. Tracked by TAN.
@@ -192,6 +231,11 @@ pub struct FileClient {
 
     open_files: BTreeMap<FileHandle, OpenFileInfo>,
     current_directory: String,
+    /// Volume capacity and free space in 512-byte blocks (B.11), taken from
+    /// the last Get Current Directory Response — the only place ISO 11783-13
+    /// reports them.
+    volume_total_blocks: u32,
+    volume_free_blocks: u32,
 
     pub on_connected: Event<()>,
     pub on_disconnected: Event<()>,
@@ -204,25 +248,18 @@ pub struct FileClient {
     /// `(tan, Ok(properties))` — fired when a
     /// `GetFileServerProperties` response arrives.
     pub on_properties_response: Event<(TAN, Result<FileServerProperties, FSError>)>,
-    /// `(tan, Ok(status))` — fired when a `FileServerStatus` response arrives.
-    pub on_status_response: Event<(TAN, Result<FileServerStatus, FSError>)>,
     pub on_close_response: Event<(TAN, Result<FileHandle, FSError>)>,
     /// `(tan, Ok(bytes_read_into))` — payload owned by the event,
     /// callers should clone if they need it past the dispatch frame.
     pub on_read_response: Event<(TAN, Result<Vec<u8>, FSError>)>,
     /// `(tan, Ok(bytes_written))` count.
     pub on_write_response: Event<(TAN, Result<u16, FSError>)>,
-    pub on_seek_response: Event<(TAN, Result<(), FSError>)>,
+    /// `(tan, Ok(new_position))` — C.3.3.3 reports where the pointer landed.
+    pub on_seek_response: Event<(TAN, Result<u32, FSError>)>,
     pub on_current_directory_response: Event<(TAN, Result<String, FSError>)>,
     pub on_change_directory_response: Event<(TAN, Result<String, FSError>)>,
     pub on_move_response: Event<(TAN, FileOperationResponse)>,
     pub on_delete_response: Event<(TAN, FileOperationResponse)>,
-    pub on_make_directory_response: Event<(TAN, FileOperationResponse)>,
-    pub on_remove_directory_response: Event<(TAN, FileOperationResponse)>,
-    pub on_copy_response: Event<(TAN, FileOperationResponse)>,
-    pub on_get_file_size_response: Event<(TAN, Result<u32, FSError>)>,
-    /// `(TAN, Result<(total_bytes, free_bytes), FSError>)`.
-    pub on_get_free_space_response: Event<(TAN, FreeSpaceResponse)>,
     pub on_file_attributes_response: Event<(TAN, FileAttributesResponse)>,
     pub on_set_file_attributes_response: Event<(TAN, FileOperationResponse)>,
     pub on_file_date_time_response: Event<(TAN, FileDateTimeResponse)>,
@@ -247,6 +284,8 @@ impl FileClient {
             server_status: None,
             open_files: BTreeMap::new(),
             current_directory: "\\".to_string(),
+            volume_total_blocks: 0,
+            volume_free_blocks: 0,
             on_connected: Event::new(),
             on_disconnected: Event::new(),
             on_error: Event::new(),
@@ -254,7 +293,6 @@ impl FileClient {
             on_file_closed: Event::new(),
             on_open_response: Event::new(),
             on_properties_response: Event::new(),
-            on_status_response: Event::new(),
             on_close_response: Event::new(),
             on_read_response: Event::new(),
             on_write_response: Event::new(),
@@ -262,11 +300,6 @@ impl FileClient {
             on_current_directory_response: Event::new(),
             on_change_directory_response: Event::new(),
             on_move_response: Event::new(),
-            on_make_directory_response: Event::new(),
-            on_remove_directory_response: Event::new(),
-            on_copy_response: Event::new(),
-            on_get_file_size_response: Event::new(),
-            on_get_free_space_response: Event::new(),
             on_delete_response: Event::new(),
             on_file_attributes_response: Event::new(),
             on_set_file_attributes_response: Event::new(),
@@ -352,6 +385,18 @@ impl FileClient {
         &self.current_directory
     }
 
+    /// Volume capacity and free space in bytes, from the last Get Current
+    /// Directory Response. C.2.2.3 is the only place ISO 11783-13 reports
+    /// these; both read zero until one arrives, and a server that cannot
+    /// detect them reports zero too.
+    #[must_use]
+    pub const fn volume_space_bytes(&self) -> (u64, u64) {
+        (
+            self.volume_total_blocks as u64 * 512,
+            self.volume_free_blocks as u64 * 512,
+        )
+    }
+
     #[must_use]
     pub fn server_properties(&self) -> Option<FileServerProperties> {
         self.server_properties
@@ -383,6 +428,12 @@ impl FileClient {
         &self.open_files
     }
 
+    /// Requests still awaiting a response, by TAN.
+    #[must_use]
+    pub fn pending_requests(&self) -> &BTreeMap<TAN, PendingRequest> {
+        &self.pending_requests
+    }
+
     // ─── File operations ──────────────────────────────────────────────
 
     pub fn request_server_properties(&mut self) -> FSClientOutbound {
@@ -401,18 +452,6 @@ impl FileClient {
             return Err(Error::not_connected());
         }
         Ok(self.build_fixed_server_request(FSFunction::GetFileServerProperties))
-    }
-
-    pub fn request_server_status(&mut self) -> FSClientOutbound {
-        self.build_fixed_server_request(FSFunction::FileServerStatus)
-    }
-
-    /// Build a `FileServerStatus` request only once the File Client is
-    /// connected. Invalid local state does not allocate a TAN.
-    pub fn try_request_server_status(&mut self) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        self.ensure_server_address_for_request()?;
-        Ok(self.build_fixed_server_request(FSFunction::FileServerStatus))
     }
 
     fn build_fixed_server_request(&mut self, function: FSFunction) -> FSClientOutbound {
@@ -436,17 +475,8 @@ impl FileClient {
             return Err(Error::not_connected());
         }
         let open_dir = get_access_mode(flags) == OpenFlags::OpenDir.bit();
-        if open_dir
-            && self
-                .server_properties
-                .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
         if !path.is_ascii()
-            || path.len() > u8::MAX as usize
+            || path.len() > FS_MAX_PATH_LEN
             || !open_flags_have_no_reserved_bits(flags)
             || !is_valid_fs_path(path, open_dir, false)
         {
@@ -455,13 +485,14 @@ impl FileClient {
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + path.len()];
+        // C.3.2.2: byte 3 Flags, bytes 4,5 Path Name Length, bytes 6-n Name.
+        let mut data = vec![0u8; 5 + path.len()];
         data[0] = FSFunction::OpenFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3] = flags;
-        data[4..].copy_from_slice(path.as_bytes());
+        data[2] = flags;
+        data[3..5].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[5..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::OpenFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -545,15 +576,26 @@ impl FileClient {
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
-    pub fn seek_file(&mut self, handle: FileHandle, position: u32) -> Option<FSClientOutbound> {
-        self.try_seek_file(handle, position).ok()
+    pub fn seek_file(
+        &mut self,
+        handle: FileHandle,
+        mode: SeekMode,
+        offset: i32,
+    ) -> Option<FSClientOutbound> {
+        self.try_seek_file(handle, mode, offset).ok()
     }
 
-    /// Build a `SeekFile` request for a known open handle.
+    /// Move the file pointer of `handle` by `offset` relative to `mode`
+    /// (C.3.3.2). The offset is signed, so a rewind is expressed as a negative
+    /// value from [`SeekMode::Current`] or [`SeekMode::End`].
+    ///
+    /// The request used to carry no mode at all and an unsigned absolute
+    /// position, which a conformant server read one byte out of alignment.
     pub fn try_seek_file(
         &mut self,
         handle: FileHandle,
-        position: u32,
+        mode: SeekMode,
+        offset: i32,
     ) -> NetResult<FSClientOutbound> {
         if !self.open_files.contains_key(&handle) {
             return Err(Error::invalid_data(format!(
@@ -565,7 +607,8 @@ impl FileClient {
         let tan = self.allocate_tan();
         data[1] = tan;
         data[2] = handle;
-        data[3..7].copy_from_slice(&position.to_le_bytes());
+        data[3] = mode.as_u8();
+        data[4..8].copy_from_slice(&offset.to_le_bytes());
         self.track_request(tan, FSFunction::SeekFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -578,14 +621,6 @@ impl FileClient {
     pub fn try_get_current_directory(&mut self) -> NetResult<FSClientOutbound> {
         if !self.is_connected() {
             return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
         }
         let mut data = vec![0xFFu8; 8];
         data[0] = FSFunction::GetCurrentDirectory.as_u8();
@@ -605,16 +640,8 @@ impl FileClient {
         if !self.is_connected() {
             return Err(Error::not_connected());
         }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
         if !path.is_ascii()
-            || path.len() > u8::MAX as usize
+            || path.len() > FS_MAX_PATH_LEN
             || (path != "." && path != ".." && !is_valid_fs_path(path, true, false))
         {
             return Err(Error::invalid_data(format!(
@@ -622,76 +649,33 @@ impl FileClient {
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::ChangeDirectory.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::ChangeDirectory, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
-    /// Build a Make Directory request for `path`. Response arrives on
-    /// [`Self::on_make_directory_response`].
+    /// Create `path` as a directory.
+    ///
+    /// ISO 11783-13 has no Make Directory command: C.3.2.2 creates a directory
+    /// through Open File with the access mode set to "directory" and the create
+    /// flag set. The response therefore arrives on
+    /// [`Self::on_open_response`] carrying a handle the caller closes.
     pub fn try_make_directory(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        if !self.is_connected() {
-            return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
-        if !path.is_ascii() || path.len() > u8::MAX as usize || !is_valid_fs_path(path, true, false)
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS MakeDirectory path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::MakeDirectory.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::MakeDirectory, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
+        self.try_open_file(path, OpenFlags::OpenDir | OpenFlags::Create)
     }
 
-    /// Build a Remove Directory request for `path`. Response arrives on
-    /// [`Self::on_remove_directory_response`].
+    /// Remove the directory at `path`.
+    ///
+    /// C.4.3 Delete File removes files and directories alike; there is no
+    /// separate Remove Directory command. The response arrives on
+    /// [`Self::on_delete_response`].
     pub fn try_remove_directory(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        if !self.is_connected() {
-            return Err(Error::not_connected());
-        }
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_directories)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise directory support",
-            ));
-        }
-        if !path.is_ascii() || path.len() > u8::MAX as usize || !is_valid_fs_path(path, true, false)
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS RemoveDirectory path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::RemoveDirectory.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::RemoveDirectory, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
+        self.try_delete_file(path)
     }
 
     pub fn move_file(
@@ -710,16 +694,8 @@ impl FileClient {
         destination_path: &str,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_move_file)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise MoveFile support",
-            ));
-        }
-        if !is_valid_one_byte_file_path(source_path)
-            || !is_valid_one_byte_file_path(destination_path)
+        if !is_valid_counted_file_path(source_path)
+            || !is_valid_counted_file_path(destination_path)
             || source_path == destination_path
         {
             return Err(Error::invalid_data(format!(
@@ -728,45 +704,15 @@ impl FileClient {
                 destination_path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + source_path.len() + destination_path.len()];
+        let mut data = vec![0u8; 6 + source_path.len() + destination_path.len()];
         data[0] = FSFunction::MoveFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = source_path.len() as u8;
-        data[3] = destination_path.len() as u8;
-        data[4..4 + source_path.len()].copy_from_slice(source_path.as_bytes());
-        data[4 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
+        data[2..4].copy_from_slice(&(source_path.len() as u16).to_le_bytes());
+        data[4..6].copy_from_slice(&(destination_path.len() as u16).to_le_bytes());
+        data[6..6 + source_path.len()].copy_from_slice(source_path.as_bytes());
+        data[6 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
         self.track_request(tan, FSFunction::MoveFile, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
-    }
-
-    /// Build a `CopyFile` request (one-byte source + destination counts).
-    /// Response arrives on [`Self::on_copy_response`].
-    pub fn try_copy_file(
-        &mut self,
-        source_path: &str,
-        destination_path: &str,
-    ) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(source_path)
-            || !is_valid_one_byte_file_path(destination_path)
-            || source_path == destination_path
-        {
-            return Err(Error::invalid_data(format!(
-                "invalid FS CopyFile source/destination lengths {} -> {}",
-                source_path.len(),
-                destination_path.len()
-            )));
-        }
-        let mut data = vec![0u8; 4 + source_path.len() + destination_path.len()];
-        data[0] = FSFunction::CopyFile.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = source_path.len() as u8;
-        data[3] = destination_path.len() as u8;
-        data[4..4 + source_path.len()].copy_from_slice(source_path.as_bytes());
-        data[4 + source_path.len()..].copy_from_slice(destination_path.as_bytes());
-        self.track_request(tan, FSFunction::CopyFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
 
@@ -777,26 +723,18 @@ impl FileClient {
     /// Build a `DeleteFile` request with a one-byte path count.
     pub fn try_delete_file(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_delete_file)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise DeleteFile support",
-            ));
-        }
-        if !is_valid_one_byte_file_path(path) {
+        if !is_valid_counted_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS DeleteFile path length {}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::DeleteFile.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::DeleteFile, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -805,59 +743,21 @@ impl FileClient {
         self.try_get_file_attributes(path).ok()
     }
 
-    /// Build a `GetFreeSpace` request (volume-wide; no path). Response (total +
-    /// free bytes) arrives on [`Self::on_get_free_space_response`].
-    pub fn try_get_free_space(&mut self) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        let tan = self.allocate_tan();
-        let data = vec![FSFunction::GetFreeSpace.as_u8(), tan];
-        self.track_request(tan, FSFunction::GetFreeSpace, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
-    }
-
-    /// Build a `GetFileSize` request. Response (the file size in bytes) arrives
-    /// on [`Self::on_get_file_size_response`].
-    pub fn try_get_file_size(&mut self, path: &str) -> NetResult<FSClientOutbound> {
-        self.ensure_connected_for_request()?;
-        if !is_valid_one_byte_file_path(path) {
-            return Err(Error::invalid_data(format!(
-                "invalid FS GetFileSize path length {}",
-                path.len()
-            )));
-        }
-        let mut data = vec![0u8; 3 + path.len()];
-        data[0] = FSFunction::GetFileSize.as_u8();
-        let tan = self.allocate_tan();
-        data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
-        self.track_request(tan, FSFunction::GetFileSize, data.clone());
-        Ok(FSClientOutbound::new(data, self.server_address))
-    }
-
     /// Build a `GetFileAttributes` request with a one-byte path count.
     pub fn try_get_file_attributes(&mut self, path: &str) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_file_attributes)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise file-attribute support",
-            ));
-        }
-        if !is_valid_one_byte_file_path(path) {
+        if !is_valid_counted_file_path(path) {
             return Err(Error::invalid_data(format!(
                 "invalid FS GetFileAttributes path length {}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 3 + path.len()];
+        let mut data = vec![0u8; 4 + path.len()];
         data[0] = FSFunction::GetFileAttributes.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3..].copy_from_slice(path.as_bytes());
+        data[2..4].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[4..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::GetFileAttributes, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -874,27 +774,19 @@ impl FileClient {
         attrs: u8,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_file_attributes)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise file-attribute support",
-            ));
-        }
-        if !is_valid_one_byte_file_path(path) || attrs & !FILE_ATTRIBUTES_SET_ALLOWED_MASK != 0 {
+        if !is_valid_counted_file_path(path) || attrs & !FILE_ATTRIBUTES_SET_ALLOWED_MASK != 0 {
             return Err(Error::invalid_data(format!(
                 "invalid FS SetFileAttributes path length {} or attributes 0x{attrs:02X}",
                 path.len()
             )));
         }
-        let mut data = vec![0u8; 4 + path.len()];
+        let mut data = vec![0u8; 5 + path.len()];
         data[0] = FSFunction::SetFileAttributes.as_u8();
         let tan = self.allocate_tan();
         data[1] = tan;
-        data[2] = path.len() as u8;
-        data[3] = attrs;
-        data[4..].copy_from_slice(path.as_bytes());
+        data[2] = attrs;
+        data[3..5].copy_from_slice(&(path.len() as u16).to_le_bytes());
+        data[5..].copy_from_slice(path.as_bytes());
         self.track_request(tan, FSFunction::SetFileAttributes, data.clone());
         Ok(FSClientOutbound::new(data, self.server_address))
     }
@@ -1004,14 +896,6 @@ impl FileClient {
         flags: u8,
     ) -> NetResult<FSClientOutbound> {
         self.ensure_connected_for_request()?;
-        if self
-            .server_properties
-            .is_some_and(|props| !props.supports_volume_management)
-        {
-            return Err(Error::invalid_state(
-                "FS server properties do not advertise volume-management support",
-            ));
-        }
         if flags & INITIALIZE_VOLUME_FLAGS_RESERVED_MASK != 0
             || volume_name.len() > u16::MAX as usize
             || (!volume_name.is_empty() && !is_valid_volume_name(volume_name))
@@ -1067,12 +951,14 @@ impl FileClient {
         out
     }
 
-    fn send_ccm(&mut self) -> FSClientOutbound {
-        let tan = self.allocate_tan();
-        let _ = CCMMessage { version: 1, tan };
-        let mut data = [0xFFu8; 8];
-        data[0] = CCM_FUNCTION_CODE;
-        data[1] = tan;
+    /// C.1.3: command byte, version number, six reserved bytes. The CCM used
+    /// to burn a TAN and put it in the version slot, which 4.10 forbids — the
+    /// CCM is what establishes the connection *before* any TAN is in play.
+    fn send_ccm(&self) -> FSClientOutbound {
+        let data = CCMMessage {
+            version: FS_VERSION_NUMBER,
+        }
+        .encode();
         FSClientOutbound::new(data.to_vec(), self.server_address)
     }
 
@@ -1093,10 +979,18 @@ impl FileClient {
         if msg.data.len() < 2 {
             return;
         }
-        let _function = msg.data[0];
+        let function = msg.data[0];
         let tan = msg.data[1];
 
-        if tan == 0xFF {
+        // The C.1.2 status broadcast has no TAN: its byte 2 is the B.3 status
+        // bitfield. Demultiplexing on byte 2 as a TAN made status values 1, 2
+        // and 3 (busy reading / writing / both) alias the first three TANs a
+        // client issues after connecting, and a busy server rebroadcasts every
+        // 200 ms with the same colliding byte — so *every* broadcast was
+        // dropped for the whole busy period and the outstanding request died at
+        // 600 ms. Dispatch on the command byte first; a server never answers a
+        // request with 0x00.
+        if function == FSFunction::FileServerStatus.as_u8() || tan == 0xFF {
             if self.handle_status_broadcast(&msg.data) {
                 self.server_status_timer_ms = 0;
             }
@@ -1110,6 +1004,12 @@ impl FileClient {
             return;
         };
         if msg.data[0] != pending.function.as_u8() {
+            // Belt and braces: a frame whose command byte does not match the
+            // request this TAN belongs to is not that response, so give the
+            // broadcast handler a chance at it rather than dropping it.
+            if self.handle_status_broadcast(&msg.data) {
+                self.server_status_timer_ms = 0;
+            }
             return;
         }
         if pending.function == FSFunction::VolumeStatus {
@@ -1124,8 +1024,13 @@ impl FileClient {
         };
         self.server_status_timer_ms = 0;
         match pending.function {
+            // A client never requests the status: C.1.2 is a server broadcast
+            // and the 0x00 byte from a client is a CCM (C.1.3). The frame this
+            // arm used to build was read by a conformant server as a CCM with a
+            // rolling 0..0xFE version number, and no server in or out of this
+            // crate answers it, so the request sat until timeout.
+            FSFunction::FileServerStatus => {}
             FSFunction::GetFileServerProperties => self.handle_properties_response(tan, &msg.data),
-            FSFunction::FileServerStatus => self.handle_status_response(tan, &msg.data),
             FSFunction::OpenFile => {
                 self.handle_open_response(tan, &pending.request_data, &msg.data)
             }
@@ -1153,20 +1058,6 @@ impl FileClient {
                 let result = self.parse_simple_operation_response(&msg.data, false);
                 self.on_delete_response.emit(&(tan, result));
             }
-            FSFunction::MakeDirectory => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_make_directory_response.emit(&(tan, result));
-            }
-            FSFunction::RemoveDirectory => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_remove_directory_response.emit(&(tan, result));
-            }
-            FSFunction::CopyFile => {
-                let result = self.parse_simple_operation_response(&msg.data, false);
-                self.on_copy_response.emit(&(tan, result));
-            }
-            FSFunction::GetFileSize => self.handle_get_file_size_response(tan, &msg.data),
-            FSFunction::GetFreeSpace => self.handle_get_free_space_response(tan, &msg.data),
             FSFunction::GetFileAttributes => self.handle_file_attributes_response(tan, &msg.data),
             FSFunction::SetFileAttributes => {
                 let result = self.parse_simple_operation_response(&msg.data, false);
@@ -1186,6 +1077,16 @@ impl FileClient {
             return false;
         }
         if let Some(status) = FileServerStatus::decode(data) {
+            // 4.3.3: a busy server tells the client to keep waiting. Restart
+            // the age of every in-flight request so the 600 ms request timeout
+            // only counts time the server was *not* busy — otherwise a large
+            // task-log flush to a stick times out while it is still running.
+            if status.is_busy() {
+                let now = self.current_time_ms;
+                for pending in self.pending_requests.values_mut() {
+                    pending.timestamp_ms = now;
+                }
+            }
             self.server_status = Some(status);
             return true;
         }
@@ -1226,70 +1127,22 @@ impl FileClient {
         true
     }
 
+    /// C.1.5 carries no error-code byte: command, TAN, version, max open
+    /// files, capabilities, three reserved.
     fn handle_properties_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 3 {
-            self.on_properties_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_properties_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_properties_response.emit(&(tan, Err(error)));
-            return;
-        }
-        // Skip the 3-byte response header.
-        if response.len() < 6 {
-            self.on_properties_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        // Capture the reported version (first properties byte) regardless of
-        // whether the detailed v1 block decodes — enables version negotiation.
-        self.server_version = Some(response[3]);
-        let Some(properties) = FileServerProperties::decode(&response[3..]) else {
+        let Some((_, properties)) = FileServerProperties::decode_response(response) else {
             self.on_properties_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         };
+        // B.5 forbids rejecting a peer over its reported version, so this is
+        // recorded for diagnostics and never used as an acceptance test.
+        self.server_version = Some(properties.version_number);
         self.server_properties = Some(properties);
         self.on_properties_response.emit(&(tan, Ok(properties)));
         if self.state == ClientState::WaitingForStatus {
             self.state = ClientState::Connected;
             self.on_connected.emit(&());
-        }
-    }
-
-    fn handle_status_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 5 {
-            self.on_status_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_status_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_status_response.emit(&(tan, Err(error)));
-            return;
-        }
-        if let Some(status) = FileServerStatus::decode(&response[3..]) {
-            self.server_status = Some(status);
-            self.on_status_response.emit(&(tan, Ok(status)));
-        } else {
-            self.on_status_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
         }
     }
 
@@ -1322,12 +1175,13 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::InvalidHandle)));
             return;
         }
-        // Recover path + flags from the original request (bytes 2..).
-        if request.len() >= 4 {
-            let path_len = request[2] as usize;
-            let flags = request[3];
-            if request.len() >= 4 + path_len {
-                let path_bytes = &request[4..4 + path_len];
+        // Recover flags and path from the original C.3.2.2 request: byte 3
+        // Flags, bytes 4,5 Path Name Length, bytes 6-n Name.
+        if request.len() >= 5 {
+            let flags = request[2];
+            let path_len = u16::from_le_bytes([request[3], request[4]]) as usize;
+            if request.len() >= 5 + path_len {
+                let path_bytes = &request[5..5 + path_len];
                 if !path_bytes.is_ascii() {
                     self.on_open_response
                         .emit(&(tan, Err(FSError::InvalidSourceName)));
@@ -1423,7 +1277,28 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let end = READ_FILE_RESPONSE_HEADER_LEN + count;
+        // C.3.4: on a directory handle the Count field is an *entry* count, not
+        // a byte count — which is what our own server encodes and its own test
+        // asserts. Reading it as bytes meant `5 + count` could never equal the
+        // frame length for any count ≥ 1, since every B.14 entry is at least 11
+        // bytes: enumerating a volume failed totally, with `MalformedRequest`,
+        // and a TC walking the stick for `\TASKDATA\TASKDATA.XML` reported a
+        // corrupt file server. Nothing pinned the client side.
+        let opened_as_directory = self
+            .open_files
+            .get(&handle)
+            .is_some_and(|info| get_access_mode(info.flags) == OpenFlags::OpenDir.bit());
+        let (end, advance) = if opened_as_directory {
+            let Some(end) = directory_entries_end(&response[READ_FILE_RESPONSE_HEADER_LEN..], count)
+            else {
+                self.on_read_response
+                    .emit(&(tan, Err(FSError::MalformedRequest)));
+                return;
+            };
+            (READ_FILE_RESPONSE_HEADER_LEN + end, count as u32)
+        } else {
+            (READ_FILE_RESPONSE_HEADER_LEN + count, count as u32)
+        };
         if !fs_payload_len_is_canonical(response, end) {
             self.on_read_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
@@ -1431,7 +1306,7 @@ impl FileClient {
         }
         let data = response[READ_FILE_RESPONSE_HEADER_LEN..end].to_vec();
         if let Some(info) = self.open_files.get_mut(&handle) {
-            info.position = info.position.saturating_add(data.len() as u32);
+            info.position = info.position.saturating_add(advance);
         }
         self.on_read_response.emit(&(tan, Ok(data)));
     }
@@ -1480,16 +1355,14 @@ impl FileClient {
         self.on_write_response.emit(&(tan, Ok(written)));
     }
 
+    /// C.3.3.3: byte 3 error code, byte 4 reserved, bytes 5-8 the resulting
+    /// Position. The new pointer is reported by the server, not inferred from
+    /// the request — a relative seek cannot be predicted client-side.
     fn handle_seek_response(&mut self, tan: TAN, request: &[u8], response: &[u8]) {
         let handle = if request.len() >= 3 {
             request[2]
         } else {
             INVALID_FILE_HANDLE
-        };
-        let position = if request.len() >= 7 {
-            u32::from_le_bytes(request[3..7].try_into().unwrap())
-        } else {
-            0
         };
         if response.len() < 3 {
             self.on_seek_response
@@ -1508,23 +1381,29 @@ impl FileClient {
             self.on_seek_response.emit(&(tan, Err(error)));
             return;
         }
-        if !fs_payload_len_is_canonical(response, 3) {
+        if !fs_payload_len_is_canonical(response, SEEK_FILE_RESPONSE_LEN) {
             self.on_seek_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
+        let position = u32::from_le_bytes([response[4], response[5], response[6], response[7]]);
         if let Some(info) = self.open_files.get_mut(&handle) {
             info.position = position;
         }
-        self.on_seek_response.emit(&(tan, Ok(())));
+        self.on_seek_response.emit(&(tan, Ok(position)));
     }
 
+    /// C.2.2.3: error code, Total Space, Free Space, Path Name Length, path.
+    /// The response used to end after a one-byte length at byte 4, so the two
+    /// space fields were read out of the path text.
     fn handle_get_directory_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 4 {
-            self.on_current_directory_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
+        // C.2.2.3's Total / Free / Path fields exist only in a Success
+        // response; an error response is the 8-byte error frame, which the
+        // crate's own server sends for this command. Requiring 13 bytes first
+        // turned every one of them into `MalformedRequest`, so pulling the USB
+        // stick reported a corrupt frame rather than `MediaNotPresent` — one of
+        // the three codes `FSError::is_fatal` recognises — and the fatal-media
+        // path never fired.
         let error = match decode_response_error(response) {
             Ok(error) => error,
             Err(error) => {
@@ -1536,14 +1415,23 @@ impl FileClient {
             self.on_current_directory_response.emit(&(tan, Err(error)));
             return;
         }
-        let path_len = response[3] as usize;
-        let end = 4 + path_len;
+        if response.len() < 13 {
+            self.on_current_directory_response
+                .emit(&(tan, Err(FSError::MalformedRequest)));
+            return;
+        }
+        self.volume_total_blocks =
+            u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
+        self.volume_free_blocks =
+            u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
+        let path_len = u16::from_le_bytes([response[11], response[12]]) as usize;
+        let end = 13 + path_len;
         if !fs_payload_len_is_canonical(response, end) {
             self.on_current_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let path_bytes = &response[4..end];
+        let path_bytes = &response[13..end];
         if !path_bytes.is_ascii() {
             self.on_current_directory_response
                 .emit(&(tan, Err(FSError::InvalidSourceName)));
@@ -1584,19 +1472,20 @@ impl FileClient {
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        if request.len() < 3 {
+        // C.2.3.2: bytes 3,4 Path Name Length; bytes 5-n Path Name.
+        if request.len() < 4 {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let path_len = request[2] as usize;
-        let end = 3 + path_len;
+        let path_len = u16::from_le_bytes([request[2], request[3]]) as usize;
+        let end = 4 + path_len;
         if end > request.len() {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
-        let requested_path_bytes = &request[3..end];
+        let requested_path_bytes = &request[4..end];
         if !requested_path_bytes.is_ascii() {
             self.on_change_directory_response
                 .emit(&(tan, Err(FSError::InvalidSourceName)));
@@ -1657,61 +1546,15 @@ impl FileClient {
             self.on_file_attributes_response.emit(&(tan, Err(error)));
             return;
         }
-        if !fs_payload_len_is_canonical(response, 4)
-            || response[3] & !FILE_ATTRIBUTES_RESPONSE_ALLOWED_MASK != 0
-        {
+        // B.15 assigns all eight bits, so there is nothing reserved to reject
+        // here; only the frame length is checked.
+        if !fs_payload_len_is_canonical(response, 4) {
             self.on_file_attributes_response
                 .emit(&(tan, Err(FSError::MalformedRequest)));
             return;
         }
         self.on_file_attributes_response
             .emit(&(tan, Ok(response[3])));
-    }
-
-    fn handle_get_file_size_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 7 {
-            self.on_get_file_size_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_get_file_size_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_get_file_size_response.emit(&(tan, Err(error)));
-            return;
-        }
-        let size = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
-        self.on_get_file_size_response.emit(&(tan, Ok(size)));
-    }
-
-    fn handle_get_free_space_response(&mut self, tan: TAN, response: &[u8]) {
-        if response.len() < 11 {
-            self.on_get_free_space_response
-                .emit(&(tan, Err(FSError::MalformedRequest)));
-            return;
-        }
-        let error = match decode_response_error(response) {
-            Ok(error) => error,
-            Err(error) => {
-                self.on_get_free_space_response.emit(&(tan, Err(error)));
-                return;
-            }
-        };
-        if error != FSError::Success {
-            self.on_error.emit(&error);
-            self.on_get_free_space_response.emit(&(tan, Err(error)));
-            return;
-        }
-        let total = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
-        let free = u32::from_le_bytes([response[7], response[8], response[9], response[10]]);
-        self.on_get_free_space_response
-            .emit(&(tan, Ok((total, free))));
     }
 
     fn handle_file_date_time_response(&mut self, tan: TAN, response: &[u8]) {

@@ -117,15 +117,15 @@ impl Plugin for ScMaster {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
 
         if let Some(payload) = self.master.update(elapsed) {
             ctx.send(
                 PGN_SC_MASTER_STATUS,
                 payload.to_vec(),
                 BROADCAST_ADDRESS,
-                Priority::Default,
+                // ISO 11783-14 B.1: SC messages default to priority 4.
+                Priority::BelowNormal,
             );
         }
         self.drain_events(ctx);

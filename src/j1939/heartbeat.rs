@@ -238,6 +238,13 @@ pub enum HbReceiverState {
     Normal,
     SequenceError,
     CommError,
+    /// §8.3.3 — the sender declared its own fault (sequence 254). It used to be
+    /// reported and then discarded, leaving the peer in `Normal`, so the
+    /// autonomy path kept consuming data from a CF that had said it was broken.
+    TransmissionError,
+    /// §8.3.3 — the sender announced an orderly shutdown (sequence 255, when the
+    /// previous value was not 255).
+    GracefulShutdown,
 }
 
 /// State machine that consumes inbound heartbeat sequence bytes and
@@ -248,6 +255,10 @@ pub struct HeartbeatReceiver {
     recovery_counter: u8,
     time_since_last_ms: u32,
     first_received: bool,
+    /// §8.3.3 keys the shutdown announcement off the *previous* value being
+    /// 255. Tracked separately so the sentinel never enters `last_sequence`,
+    /// which is only meaningful for the 0..=250 band.
+    last_was_shutdown: bool,
 
     pub on_state_change: Event<(HbReceiverState, HbReceiverState)>,
     pub on_shutdown_received: Event<()>,
@@ -270,6 +281,7 @@ impl HeartbeatReceiver {
             recovery_counter: 0,
             time_since_last_ms: 0,
             first_received: false,
+            last_was_shutdown: false,
             on_state_change: Event::new(),
             on_shutdown_received: Event::new(),
             on_sender_error: Event::new(),
@@ -284,13 +296,21 @@ impl HeartbeatReceiver {
         }
         self.time_since_last_ms = 0;
         if sequence == hb_seq::SENDER_ERROR {
+            self.enter_fault(HbReceiverState::TransmissionError);
             self.on_sender_error.emit(&());
             return;
         }
         if sequence == hb_seq::SHUTDOWN {
-            self.on_shutdown_received.emit(&());
+            // "…but the previously received value is not equal to 255": a
+            // repeated 255 is the same shutdown, not a new one.
+            if !self.last_was_shutdown {
+                self.enter_fault(HbReceiverState::GracefulShutdown);
+                self.on_shutdown_received.emit(&());
+            }
+            self.last_was_shutdown = true;
             return;
         }
+        self.last_was_shutdown = false;
 
         // Recover from CommError on any valid heartbeat.
         if matches!(self.state, HbReceiverState::CommError) {
@@ -338,7 +358,13 @@ impl HeartbeatReceiver {
                     );
                 }
             }
-            HbReceiverState::SequenceError => {
+            // §8.3.3: "listen for 8 correct, sequential heartbeat messages in a
+            // row before returning to Heartbeat Sequence Operational State".
+            // A sender that declared a fault or a shutdown is held to the same
+            // bar — one good byte is not evidence it recovered.
+            HbReceiverState::SequenceError
+            | HbReceiverState::TransmissionError
+            | HbReceiverState::GracefulShutdown => {
                 if is_error {
                     self.recovery_counter = 0;
                 } else {
@@ -350,7 +376,8 @@ impl HeartbeatReceiver {
                         self.on_state_change.emit(&(old, self.state));
                         tracing::debug!(
                             target: "machbus.heartbeat.rx",
-                            "recovered from SequenceError",
+                            from = ?old,
+                            "recovered after 8 sequential heartbeats",
                         );
                     }
                 }
@@ -358,6 +385,19 @@ impl HeartbeatReceiver {
             HbReceiverState::CommError => unreachable!("handled above"),
         }
         self.last_sequence = sequence;
+    }
+
+    /// Enter a declared-fault state, reporting the transition once.
+    fn enter_fault(&mut self, next: HbReceiverState) {
+        self.first_received = true;
+        self.recovery_counter = 0;
+        if self.state == next {
+            return;
+        }
+        let old = self.state;
+        self.state = next;
+        self.on_state_change.emit(&(old, next));
+        tracing::warn!(target: "machbus.heartbeat.rx", state = ?next, "sender declared a fault");
     }
 
     /// Drive the comm-error timer. Triggers the
@@ -383,8 +423,17 @@ impl HeartbeatReceiver {
         }
     }
 
+    /// Last sequence byte accepted, or `None` before the first heartbeat.
     #[inline]
     #[must_use]
+    pub const fn last_sequence(&self) -> Option<u8> {
+        if self.first_received {
+            Some(self.last_sequence)
+        } else {
+            None
+        }
+    }
+
     pub fn state(&self) -> HbReceiverState {
         self.state
     }
@@ -523,7 +572,12 @@ fn compute_jump(from: u8, to: u8) -> u8 {
     if to > from {
         to - from
     } else {
-        ((hb_seq::MAX_NORMAL as u16 + 1) - from as u16 + to as u16) as u8
+        // `from` is only ever a normal value here, but saturate rather than
+        // underflow so no sequence byte can panic the receiver.
+        ((hb_seq::MAX_NORMAL as u16 + 1)
+            .saturating_sub(from as u16)
+            .saturating_add(to as u16)
+            .min(u8::MAX as u16)) as u8
     }
 }
 
@@ -786,8 +840,15 @@ mod tests {
         assert_eq!(r.state(), HbReceiverState::Normal);
     }
 
+    /// §8.3.3: "If the currently received heartbeat message heartbeat sequence
+    /// number value is 254, then the recipient shall treat the message as in
+    /// Heartbeat Transmission Error State."
+    ///
+    /// This used to emit the event and return, leaving the peer `Normal` — so a
+    /// CF that had declared its own fault still read as healthy and the
+    /// autonomy path kept trusting it.
     #[test]
-    fn receiver_special_values_dont_change_state() {
+    fn sender_error_enters_the_transmission_error_state() {
         let mut r = HeartbeatReceiver::new();
         r.process(0);
         let counter = Rc::new(RefCell::new(0u32));
@@ -795,10 +856,61 @@ mod tests {
         r.on_sender_error.subscribe(move |_| *c.borrow_mut() += 1);
 
         r.process(hb_seq::SENDER_ERROR);
+        assert_eq!(r.state(), HbReceiverState::TransmissionError);
+        assert!(!r.is_healthy(), "a self-declared fault is not healthy");
+        assert_eq!(*counter.borrow(), 1);
+
+        // 252/253 are reserved and genuinely ignored: they neither clear the
+        // fault nor count toward recovery.
         r.process(hb_seq::RESERVED_LOW);
         r.process(hb_seq::RESERVED_HIGH);
+        assert_eq!(r.state(), HbReceiverState::TransmissionError);
+    }
+
+    /// §8.3.3 requires 8 correct sequential messages before returning to the
+    /// operational state. One good byte is not evidence of recovery.
+    #[test]
+    fn recovery_from_a_declared_fault_needs_eight_good_heartbeats() {
+        let mut r = HeartbeatReceiver::new();
+        r.process(0);
+        r.process(hb_seq::SENDER_ERROR);
+        assert_eq!(r.state(), HbReceiverState::TransmissionError);
+
+        let mut seq = 0u8;
+        for _ in 0..(HB_RECOVERY_COUNT - 1) {
+            seq += 1;
+            r.process(seq);
+            assert_eq!(
+                r.state(),
+                HbReceiverState::TransmissionError,
+                "must not recover before the eighth good heartbeat"
+            );
+        }
+        seq += 1;
+        r.process(seq);
         assert_eq!(r.state(), HbReceiverState::Normal);
-        assert_eq!(*counter.borrow(), 1);
+    }
+
+    /// §8.3.3: 255 is a shutdown "but the previously received value is not
+    /// equal to 255" — a repeated 255 is the same shutdown, not a new one.
+    #[test]
+    fn graceful_shutdown_enters_its_state_and_reports_once() {
+        let mut r = HeartbeatReceiver::new();
+        r.process(0);
+        let counter = Rc::new(RefCell::new(0u32));
+        let c = counter.clone();
+        r.on_shutdown_received
+            .subscribe(move |_| *c.borrow_mut() += 1);
+
+        r.process(hb_seq::SHUTDOWN);
+        assert_eq!(r.state(), HbReceiverState::GracefulShutdown);
+        assert!(!r.is_healthy());
+        r.process(hb_seq::SHUTDOWN);
+        assert_eq!(
+            *counter.borrow(),
+            1,
+            "a repeated 255 is the same shutdown announcement"
+        );
     }
 
     #[test]
@@ -930,6 +1042,8 @@ mod tests {
                     HbReceiverState::Normal
                         | HbReceiverState::SequenceError
                         | HbReceiverState::CommError
+                        | HbReceiverState::TransmissionError
+                        | HbReceiverState::GracefulShutdown
                 ));
                 prop_assert!(receiver.recovery_counter <= HB_RECOVERY_COUNT);
                 if !receiver.first_received {

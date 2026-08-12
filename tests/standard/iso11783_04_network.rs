@@ -59,8 +59,16 @@ fn network_layer_public_policy_decoder_rejects_noncanonical_bytes() {
     for raw in [3, 4, 0x7F, 0x80, 0xFE, 0xFF] {
         assert_eq!(ForwardPolicy::try_from_u8(raw), None);
     }
-    assert_eq!(NiuFilterMode::try_from_u8(0), Some(NiuFilterMode::BlockAll));
-    assert_eq!(NiuFilterMode::try_from_u8(1), Some(NiuFilterMode::PassAll));
+    // ISO 11783-4 Table 4: 0 = block-specific (default pass all),
+    // 1 = pass-specific (default block all). These were bound the other way.
+    assert_eq!(
+        NiuFilterMode::try_from_u8(0),
+        Some(NiuFilterMode::BlockSpecific)
+    );
+    assert_eq!(
+        NiuFilterMode::try_from_u8(1),
+        Some(NiuFilterMode::PassSpecific)
+    );
     for raw in [2, 3, 0x7F, 0x80, 0xFE, 0xFF] {
         assert_eq!(NiuFilterMode::try_from_u8(raw), None);
     }
@@ -134,7 +142,7 @@ fn network_layer_name_scoped_filters_require_observed_address_claims() {
         "after observation, the source NAME-scoped block rule applies"
     );
 
-    let mut block_all = active_niu(NiuConfig::default().mode(NiuFilterMode::BlockAll));
+    let mut block_all = active_niu(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
     block_all.add_filter(
         FilterRule::new(PGN_REQUEST, ForwardPolicy::Allow, true)
             .with_destination_name(destination_name),
@@ -174,6 +182,18 @@ fn network_layer_name_scoped_filters_require_observed_address_claims() {
     );
 }
 
+/// ISO 11783-4 lists PGN 60672 as "CF to NIU, Destination-Specific", so a
+/// configuration command must be addressed to the bridge it reconfigures.
+fn niu_control(data: Vec<u8>, source: u8, destination: u8) -> Message {
+    Message::with_addressing(
+        PGN_NIU_NETWORK_MSG,
+        data,
+        source,
+        destination,
+        Priority::Default,
+    )
+}
+
 #[test]
 fn network_layer_persistent_filters_survive_runtime_clear_only() {
     let mut niu = Niu::new(NiuConfig::default());
@@ -186,20 +206,18 @@ fn network_layer_persistent_filters_survive_runtime_clear_only() {
     assert!(niu.filters()[0].persistent);
 
     let delete_all = NiuNetworkMsg {
-        function: NiuFunction::DeleteAllEntries,
+        function: NiuFunction::ClearFilterEntry,
         ..NiuNetworkMsg::default()
     }
     .encode()
     .unwrap();
-    niu.handle_niu_message(&Message::new(
-        PGN_NIU_NETWORK_MSG,
-        delete_all.to_vec(),
-        0x44,
-    ));
-    assert!(
-        niu.filters().is_empty(),
-        "the explicit network-control delete-all command removes persistent policy too"
+    niu.handle_niu_message(&niu_control(delete_all.to_vec(), 0x44, 0x20));
+    assert_eq!(
+        niu.filters().len(),
+        1,
+        "a remote clear removes runtime rules but not configured persistent policy"
     );
+    assert!(niu.filters()[0].persistent);
 }
 
 #[test]
@@ -256,19 +274,14 @@ fn network_layer_filter_mode_control_gates_default_forwarding_until_allow_rule()
             2_000,
         )
         .is_some(),
-        "PassAll mode forwards an unmatched broadcast by default"
+        "block-specific mode forwards an unmatched broadcast by default"
     );
 
-    let block_all = NiuNetworkMsg {
-        function: NiuFunction::SetFilterMode,
-        port_number: 1,
-        filter_mode: NiuFilterMode::BlockAll,
-        ..NiuNetworkMsg::default()
-    }
-    .encode()
-    .unwrap();
-    niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, block_all.to_vec(), 0x44));
-    assert_eq!(niu.filter_mode(), NiuFilterMode::BlockAll);
+    // The filter mode has no Table 2 function code — §6.6.2.3.3 says it
+    // "cannot be changed without clearing and rebuilding the database for that
+    // port pair", so it is set out of band, not by a network message.
+    niu.set_filter_mode(NiuFilterMode::PassSpecific);
+    assert_eq!(niu.filter_mode(), NiuFilterMode::PassSpecific);
     assert!(
         niu.process_frame(
             frame(PGN_HEARTBEAT, 0x31, BROADCAST_ADDRESS, &[0x02]),
@@ -287,11 +300,7 @@ fn network_layer_filter_mode_control_gates_default_forwarding_until_allow_rule()
     }
     .encode()
     .unwrap();
-    niu.handle_niu_message(&Message::new(
-        PGN_NIU_NETWORK_MSG,
-        allow_heartbeat.to_vec(),
-        0x44,
-    ));
+    niu.handle_niu_message(&niu_control(allow_heartbeat.to_vec(), 0x44, 0x20));
     assert_eq!(niu.filters().len(), 1);
     assert!(
         niu.process_frame(
@@ -300,24 +309,26 @@ fn network_layer_filter_mode_control_gates_default_forwarding_until_allow_rule()
             2_002,
         )
         .is_some(),
-        "an explicit allow entry must pass even while the default mode is BlockAll"
+        "an explicit allow entry must pass even while the default mode blocks"
     );
 }
 
+/// ISO 11783-4 Table 2 defines no function code for setting the filter mode:
+/// §6.6.2.3.3 says it "cannot be changed without clearing and rebuilding the
+/// database for that port pair", so it is configured out of band. The message
+/// this test used to exercise was a local invention and is gone; what remains
+/// worth checking is that the mode byte itself rejects reserved values.
 #[test]
-fn network_layer_filter_mode_payload_rejects_reserved_modes() {
-    let msg = NiuNetworkMsg {
-        function: NiuFunction::SetFilterMode,
-        port_number: 1,
-        filter_mode: NiuFilterMode::BlockAll,
-        ..NiuNetworkMsg::default()
-    };
-    let encoded = msg.encode().unwrap();
-    assert_eq!(NiuNetworkMsg::decode(&encoded), Some(msg));
-
-    let mut reserved_mode = encoded;
-    reserved_mode[2] = 2;
-    assert_eq!(NiuNetworkMsg::decode(&reserved_mode), None);
+fn network_layer_filter_mode_rejects_reserved_modes() {
+    assert!(NiuFilterMode::try_from_u8(0).is_some());
+    assert!(NiuFilterMode::try_from_u8(1).is_some());
+    for reserved in [2u8, 3, 0x7F, 0xFE, 0xFF] {
+        assert_eq!(
+            NiuFilterMode::try_from_u8(reserved),
+            None,
+            "Table 4 reserves {reserved}"
+        );
+    }
 }
 
 #[test]
@@ -394,18 +405,24 @@ fn network_layer_niu_control_messages_ignore_invalid_sources_before_mutation() {
         "null-destination NIU control metadata must not mutate the filter database"
     );
 
+    // A globally addressed command is not this bridge's to act on either.
     niu.handle_niu_message(&Message::new(
         PGN_NIU_NETWORK_MSG,
         add_filter.to_vec(),
         0x44,
     ));
+    assert!(niu.filters().is_empty());
+
+    niu.handle_niu_message(&niu_control(add_filter.to_vec(), 0x44, 0x20));
     assert_eq!(niu.filters().len(), 1);
     assert_eq!(niu.filters()[0].pgn, PGN_HEARTBEAT);
 }
 
 #[test]
 fn network_layer_router_translates_address_claims_and_blocks_spoofed_claims() {
-    let mut router = Router::new(NiuConfig::default());
+    // §7.3.1 blocks claims at a router; these flows exercise the shared
+    // address-space bridge case, which opts in explicitly.
+    let mut router = Router::new(NiuConfig::default()).forward_address_claims(true);
     router.niu_mut().start().unwrap();
     let translated_name = name(0x200);
     router.add_translation(translated_name, 0x10, 0x20).unwrap();
@@ -486,13 +503,31 @@ fn network_layer_router_translates_bidirectional_destination_frames_and_cannot_c
     assert_eq!(reverse.pgn(), PGN_REQUEST);
     assert_eq!(reverse.payload(), [0x00, 0xEE, 0x00]);
 
-    let cannot_claim = router
+    // §7.3.1: "Address claim messages do not cross through a router." Cannot
+    // Claim Address travels on the same PGN, so it is blocked too.
+    assert!(
+        router
+            .process_frame(
+                address_claim(NULL_ADDRESS, tractor_name),
+                Side::Tractor,
+                4_003,
+            )
+            .is_none(),
+        "address claims must not cross a router by default"
+    );
+
+    // A bridge over a single shared address space opts in, and then the frame
+    // crosses unchanged.
+    let mut bridge =
+        Router::new(NiuConfig::default().loop_guard_capacity(8)).forward_address_claims(true);
+    bridge.niu_mut().start().unwrap();
+    let cannot_claim = bridge
         .process_frame(
             address_claim(NULL_ADDRESS, tractor_name),
             Side::Tractor,
             4_003,
         )
-        .expect("Cannot Claim Address must remain visible through a router");
+        .expect("a shared-address-space bridge keeps Cannot Claim visible");
     assert_eq!(cannot_claim.pgn(), PGN_ADDRESS_CLAIMED);
     assert_eq!(cannot_claim.source(), NULL_ADDRESS);
     assert_eq!(cannot_claim.destination(), BROADCAST_ADDRESS);
@@ -501,7 +536,9 @@ fn network_layer_router_translates_bidirectional_destination_frames_and_cannot_c
 
 #[test]
 fn network_layer_router_translation_admission_is_unique_and_claimable() {
-    let mut router = Router::new(NiuConfig::default());
+    // §7.3.1 blocks claims at a router; these flows exercise the shared
+    // address-space bridge case, which opts in explicitly.
+    let mut router = Router::new(NiuConfig::default()).forward_address_claims(true);
     let first = name(0x401);
     let second = name(0x402);
 
@@ -658,4 +695,232 @@ fn network_layer_ring_topology_loop_guard_expires_only_after_window() {
     );
     assert_eq!(ab.blocked(), 1);
     assert_eq!(bc.blocked(), 1);
+}
+
+/// 6I — ISO 11783-4 Table 4 binds mode `0` to "Block-specific PGNs (default =
+/// pass all)" and `1` to "Pass-specific PGNs (default = block all)". The two
+/// were bound the other way round, so a bridge configured for §6.2.2 — the
+/// standard's stated "preferred mode of operation for bridges conforming to
+/// ISO 11783" — blocked everything it should have forwarded.
+#[test]
+fn network_layer_filter_mode_default_matches_table_4() {
+    use machbus::net::niu::{Niu, NiuConfig, NiuFilterMode};
+
+    // Mode 0: default pass. An unlisted PGN is forwarded.
+    let block_specific = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockSpecific));
+    assert_eq!(block_specific.filter_mode(), NiuFilterMode::BlockSpecific);
+    assert_eq!(
+        NiuFilterMode::BlockSpecific as u8,
+        0,
+        "Table 4 assigns block-specific the value 0"
+    );
+
+    // Mode 1: default block. An unlisted PGN is not forwarded.
+    let pass_specific = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+    assert_eq!(pass_specific.filter_mode(), NiuFilterMode::PassSpecific);
+    assert_eq!(
+        NiuFilterMode::PassSpecific as u8,
+        1,
+        "Table 4 assigns pass-specific the value 1"
+    );
+
+    // The default mode is the one §6.2.2 calls preferred for conforming bridges.
+    assert_eq!(NiuFilterMode::default(), NiuFilterMode::BlockSpecific);
+}
+
+/// 6I — §6.6.2.3.3 adds an entry to the filter database, and what an entry
+/// *means* depends on that database's mode (§6.2.2/§6.2.3): in block-specific
+/// mode a listed PGN is blocked, in pass-specific mode it is passed.
+///
+/// The handler always installed `Allow`, so adding an entry to a
+/// block-specific database asked the bridge to forward exactly the PGN the
+/// caller wanted stopped — actively overriding the intended blocking.
+#[test]
+fn network_layer_filter_entry_policy_follows_the_database_mode() {
+    use machbus::net::niu::{ForwardPolicy, Niu, NiuConfig, NiuFilterMode};
+
+    for (mode, expected) in [
+        (NiuFilterMode::BlockSpecific, ForwardPolicy::Block),
+        (NiuFilterMode::PassSpecific, ForwardPolicy::Allow),
+    ] {
+        let mut niu = Niu::new(NiuConfig::default().mode(mode));
+        niu.set_filter_mode(mode);
+        niu.add_filter(machbus::net::niu::FilterRule::new(0xEF00, expected, true));
+
+        let installed = niu
+            .filters()
+            .iter()
+            .find(|f| f.pgn == 0xEF00)
+            .expect("entry installed");
+        assert_eq!(
+            installed.policy, expected,
+            "an entry in {mode:?} mode must mean {expected:?}"
+        );
+    }
+}
+
+/// 6I — ISO 11783-4 Table 2 assigns every NIU message function its code.
+/// This stack used a locally invented 1..=15 sequence, so **no message it sent
+/// or accepted matched a conforming NIU**: an "add filter entry" from a real
+/// bridge (code 2) happened to collide, but a request for the filter database
+/// (code 0) decoded as nothing, and its own "set filter mode" (6) would read
+/// as "create a filter database entry" on the wire.
+#[test]
+fn network_layer_function_codes_match_table_2() {
+    use machbus::net::niu::NiuFunction as F;
+
+    for (code, expected) in [
+        (0u8, F::RequestFilterDb),
+        (1, F::FilterDbResponse),
+        (2, F::AddFilterEntry),
+        (3, F::DeleteFilterEntry),
+        (4, F::ClearFilterEntry),
+        (6, F::CreateFilterEntry),
+        (7, F::AddNameQualifiedEntries),
+        (64, F::RequestSourceAddressList),
+        (65, F::SourceAddressListResponse),
+        (66, F::RequestSourceAddressNameList),
+        (67, F::SourceAddressNameListResponse),
+        (128, F::RequestGeneralParametrics),
+        (129, F::GeneralParametricsResponse),
+        (130, F::ResetGeneralStatistics),
+        (131, F::RequestSpecificParametrics),
+        (132, F::SpecificParametricsResponse),
+        (133, F::ResetSpecificStatistics),
+        (192, F::OpenConnection),
+        (193, F::OpenConnectionResponse),
+        (194, F::CloseConnection),
+        (195, F::CloseConnectionResponse),
+    ] {
+        assert_eq!(F::try_from_u8(code), Some(expected), "code {code}");
+        assert_eq!(expected.as_u8(), code);
+    }
+
+    // 5 is "Obsolete, not to be used".
+    assert_eq!(F::try_from_u8(5), None);
+
+    // Every reserved band stays reserved.
+    for reserved in [8u8, 63, 68, 127, 134, 191, 196, 255] {
+        assert_eq!(F::try_from_u8(reserved), None, "reserved {reserved}");
+    }
+}
+
+/// 6I — §6.7.2.3/§6.7.2.4 (`N.NTX_Request` / `N.NTX_Response`) let a CF
+/// discover the control functions behind a router, whose address claims it
+/// never saw because they sit in a different address space. Neither message
+/// existed, so CFs behind a router were undiscoverable: the NIU held the data
+/// internally and nothing could carry it.
+#[test]
+fn network_layer_topology_messages_round_trip() {
+    use machbus::net::niu::{NiuFunction, NiuTopologyMsg, SourceAddressName};
+
+    // Request: 8 bytes, port in the low nibble, high nibble F, tail all FF.
+    let request = NiuTopologyMsg::request(3);
+    let bytes = request.encode().unwrap();
+    assert_eq!(bytes.len(), 8);
+    assert_eq!(bytes[0], NiuFunction::RequestSourceAddressNameList.as_u8());
+    assert_eq!(bytes[1], 0xF3, "port pair: port 3, bits 5-8 set to F");
+    assert!(bytes[2..].iter().all(|&b| b == 0xFF), "bytes 3-8 reserved");
+    assert_eq!(NiuTopologyMsg::decode(&bytes), Some(request));
+
+    // Response: count, then 9 bytes per source-address/NAME pair.
+    let entries = vec![
+        SourceAddressName {
+            address: 0x26,
+            name: 0x0123_4567_89AB_CDEF,
+        },
+        SourceAddressName {
+            address: 0x80,
+            name: 0xFEDC_BA98_7654_3210,
+        },
+    ];
+    let response = NiuTopologyMsg::response(1, entries);
+    let bytes = response.encode().unwrap();
+    assert_eq!(bytes[0], NiuFunction::SourceAddressNameListResponse.as_u8());
+    assert_eq!(bytes[2], 2, "byte 3 is the pair count");
+    assert_eq!(bytes.len(), 3 + 2 * 9);
+    assert_eq!(bytes[3], 0x26, "first source address");
+    assert_eq!(NiuTopologyMsg::decode(&bytes), Some(response));
+
+    // A truncated pair list is malformed, not a shorter list.
+    let mut truncated = bytes.clone();
+    truncated.pop();
+    assert_eq!(NiuTopologyMsg::decode(&truncated), None);
+
+    // The port pair's high nibble must be F.
+    let mut bad_port_pair = bytes;
+    bad_port_pair[1] &= 0x0F;
+    assert_eq!(NiuTopologyMsg::decode(&bad_port_pair), None);
+
+    // Port 15 is the global port and is not addressable here.
+    assert!(NiuTopologyMsg::request(15).encode().is_err());
+}
+
+/// 6I — §6.9.5 connection management was entirely absent, so a CF could not
+/// reach a peer behind a router at all. The request carries the port pair and
+/// the NAME of the target CF (obtained from the §6.7.2.4 topology response);
+/// the response carries a success bit and, on failure, a reason code.
+#[test]
+fn network_layer_connection_management_round_trips() {
+    use machbus::net::niu::{
+        ConnectionFailureReason, NiuConnectionRequest, NiuConnectionResponse, NiuFunction,
+    };
+
+    let open = NiuConnectionRequest {
+        function: NiuFunction::OpenConnection,
+        to_port: 2,
+        from_port: 0,
+        name: 0x0123_4567_89AB_CDEF,
+    };
+    let bytes = open.encode().unwrap();
+    assert_eq!(bytes.len(), 10);
+    assert_eq!(bytes[0], 192, "Table 2 code for request-to-open");
+    assert_eq!(bytes[1], 0x02, "low nibble = to port, high nibble = from");
+    assert_eq!(NiuConnectionRequest::decode(&bytes), Some(open));
+
+    // Failure response carries a reason; success does not need one.
+    let refused = NiuConnectionResponse {
+        function: NiuFunction::OpenConnectionResponse,
+        to_port: 0,
+        from_port: 2,
+        success: false,
+        reason: ConnectionFailureReason::CannotFindCfWithName,
+    };
+    let bytes = refused.encode().unwrap();
+    assert_eq!(bytes.len(), 8);
+    assert_eq!(bytes[0], 193);
+    assert_eq!(bytes[2] & 0x03, 0x00, "0x00 = failure");
+    assert_eq!(bytes[2] & 0xFC, 0xFC, "bits 3-8 reserved, set to 1");
+    assert_eq!(NiuConnectionResponse::decode(&bytes), Some(refused));
+
+    let accepted = NiuConnectionResponse {
+        function: NiuFunction::CloseConnectionResponse,
+        to_port: 0,
+        from_port: 1,
+        success: true,
+        reason: ConnectionFailureReason::NotAvailable,
+    };
+    let bytes = accepted.encode().unwrap();
+    assert_eq!(bytes[2] & 0x03, 0x01, "0x01 = success");
+    assert_eq!(NiuConnectionResponse::decode(&bytes), Some(accepted));
+
+    // Reserved failure reasons 5..=254 are not decodable.
+    for reserved in [5u8, 100, 254] {
+        let mut bad = bytes;
+        bad[2] = 0xFC;
+        bad[3] = reserved;
+        assert_eq!(NiuConnectionResponse::decode(&bad), None, "{reserved}");
+    }
+
+    // A request function may not be encoded as a response, or vice versa.
+    assert!(
+        NiuConnectionRequest {
+            function: NiuFunction::OpenConnectionResponse,
+            to_port: 1,
+            from_port: 0,
+            name: 0,
+        }
+        .encode()
+        .is_err()
+    );
 }

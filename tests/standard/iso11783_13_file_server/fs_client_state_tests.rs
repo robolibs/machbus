@@ -1,45 +1,54 @@
+/// B.7 has room for exactly two capability bits — multiple volumes and
+/// removable volumes — so a client cannot learn which optional commands a
+/// server implements from the properties response. 4.9 has the server answer
+/// error code 12 instead, and the client must send the request to find out.
 #[test]
-fn file_client_gates_requests_by_advertised_server_capabilities_without_allocating_tans() {
+fn optional_commands_are_refused_by_the_server_not_gated_on_the_capability_byte() {
     let properties = FileServerProperties {
-        supports_directories: false,
-        supports_volume_management: false,
-        supports_file_attributes: false,
-        supports_move_file: false,
-        supports_delete_file: false,
+        supports_multiple_volumes: false,
+        supports_removable_volumes: false,
         ..FileServerProperties::default()
     };
 
     let mut client = FileClient::new(FileClientConfig::default());
     connect_file_client_with_properties(&mut client, 0x80, properties);
 
-    for err in [
-        client.try_get_current_directory().unwrap_err(),
-        client.try_change_directory("logs").unwrap_err(),
+    // Every optional command is still emitted; none is refused locally.
+    for request in [
+        client.try_get_current_directory().unwrap(),
+        client.try_change_directory("logs").unwrap(),
         client
             .try_open_file("logs", OpenFlags::OpenDir.bit())
-            .unwrap_err(),
-        client.try_move_file("old.txt", "new.txt").unwrap_err(),
-        client.try_delete_file("old.txt").unwrap_err(),
-        client.try_get_file_attributes("old.txt").unwrap_err(),
+            .unwrap(),
+        client.try_move_file("old.txt", "new.txt").unwrap(),
+        client.try_delete_file("old.txt").unwrap(),
+        client.try_get_file_attributes("old.txt").unwrap(),
         client
             .try_set_file_attributes("old.txt", FileAttributes::Hidden.bit())
-            .unwrap_err(),
-        client.try_initialize_volume("ISOBUS", 0, 0).unwrap_err(),
+            .unwrap(),
+        client.try_initialize_volume("ISOBUS", 0, 0).unwrap(),
     ] {
-        assert_eq!(
-            err.code,
-            ErrorCode::InvalidState,
-            "unsupported operations must fail as local capability-state errors"
-        );
+        assert!(FSFunction::try_from_u8(request.data[0]).is_some());
     }
 
-    let regular_open = client
-        .try_open_file("plain.txt", OpenFlags::Read.bit())
-        .expect("regular file opens remain legal when optional capabilities are disabled");
-    assert_eq!(regular_open.data[0], FSFunction::OpenFile.as_u8());
-    assert_eq!(
-        regular_open.data[1], 1,
-        "capability-gated rejected requests must not allocate or consume TANs"
+    // A server that does not implement them answers B.9 code 12.
+    let mut server = FileServer::new(FileServerConfig {
+        supports_directories: false,
+        supports_file_attributes: false,
+        supports_move_file: false,
+        supports_delete_file: false,
+        supports_volume_management: false,
+        ..FileServerConfig::default()
+    });
+    let refused = server.handle_client_message(&fs_request(
+        vec![FSFunction::ChangeDirectory.as_u8(), 0x10, 1, 0, b'\\'],
+        0x42,
+    ));
+    assert_response(
+        &refused[0].data,
+        FSFunction::ChangeDirectory,
+        0x10,
+        FSError::NotSupported,
     );
 }
 
@@ -94,12 +103,17 @@ fn file_client_transaction_numbers_wrap_without_using_reserved_tan() {
     let mut client = FileClient::new(FileClientConfig::default());
     connect_file_client(&mut client, 0x80);
 
+    // C.2.2.3 Get Current Directory — a request that exists. This used to walk
+    // the TAN space with a phantom "status request" whose 0x00 command byte a
+    // conformant server reads as a CCM.
     let tans: Vec<u8> = (0..260)
         .map(|_| {
-            let outbound = client.request_server_status();
+            let outbound = client
+                .try_get_current_directory()
+                .expect("a connected client can ask where it is");
             assert_eq!(outbound.pgn, PGN_FILE_CLIENT_TO_SERVER);
             assert_eq!(outbound.dest, Some(0x80));
-            assert_eq!(outbound.data[0], FSFunction::FileServerStatus.as_u8());
+            assert_eq!(outbound.data[0], FSFunction::GetCurrentDirectory.as_u8());
             outbound.data[1]
         })
         .collect();
@@ -118,18 +132,21 @@ fn file_client_transaction_numbers_wrap_without_using_reserved_tan() {
 }
 
 #[test]
-fn file_client_explicit_status_and_property_requests_reject_disconnected_state_without_tan() {
-    let mut client = FileClient::new(FileClientConfig::default());
+fn a_client_never_emits_the_status_command_byte_except_as_a_ccm() {
+    let mut client = FileClient::new(
+        FileClientConfig {
+            server_status_timeout_ms: 1_000_000,
+            ..FileClientConfig::default()
+        },
+    );
 
-    for err in [
-        client.try_request_server_properties().unwrap_err(),
-        client.try_request_server_status().unwrap_err(),
-    ] {
-        assert!(
-            matches!(err.code, ErrorCode::InvalidState | ErrorCode::NotConnected),
-            "disconnected explicit server requests must fail before wire emission"
-        );
-    }
+    assert!(
+        matches!(
+            client.try_request_server_properties().unwrap_err().code,
+            ErrorCode::InvalidState | ErrorCode::NotConnected
+        ),
+        "disconnected explicit server requests must fail before wire emission"
+    );
 
     let connect = client
         .connect_to_server(0x80)
@@ -140,8 +157,7 @@ fn file_client_explicit_status_and_property_requests_reject_disconnected_state_w
     );
 
     let tan = connect.data[1];
-    let mut properties_response = vec![FSFunction::GetFileServerProperties.as_u8(), tan, 0x00];
-    properties_response.extend_from_slice(&FileServerProperties::default().encode());
+    let properties_response = FileServerProperties::default().encode_response(tan).to_vec();
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
         properties_response,
@@ -149,15 +165,35 @@ fn file_client_explicit_status_and_property_requests_reject_disconnected_state_w
     ));
     assert!(client.is_connected());
 
-    let status = client
-        .try_request_server_status()
-        .expect("connected client can explicitly request FileServerStatus");
-    assert_eq!(status.dest, Some(0x80));
-    assert_eq!(status.data[0], FSFunction::FileServerStatus.as_u8());
-    assert_eq!(
-        status.data[1], 1,
-        "first connected refresh after handshake should receive the next TAN"
-    );
+    // C.1.3: the only client-to-server frame with command byte 0x00 is the
+    // Client Connection Maintenance message, whose byte 2 is a *version*. The
+    // deleted `request_server_status` emitted `[0x00, TAN, FF x6]`, which a
+    // conformant server decodes as a CCM announcing a rolling 0..0xFE version;
+    // C.1.2 is a server broadcast and there is no client status request at all.
+    let mut emitted: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..8 {
+        emitted.push(
+            client
+                .try_get_current_directory()
+                .expect("connected")
+                .data
+                .clone(),
+        );
+        emitted.extend(client.update(2_500).into_iter().map(|out| out.data));
+    }
+    let ccms = emitted
+        .iter()
+        .filter(|frame| frame[0] == FSFunction::FileServerStatus.as_u8())
+        .count();
+    assert!(ccms > 0, "the client keepalive must have fired");
+    for frame in &emitted {
+        if frame[0] == FSFunction::FileServerStatus.as_u8() {
+            assert_eq!(
+                frame[1], FS_VERSION_NUMBER,
+                "a 0x00 command byte from a client is a CCM, and byte 2 is its version"
+            );
+        }
+    }
 }
 
 #[test]
@@ -319,7 +355,7 @@ fn file_client_request_timeout_keeps_boundary_and_drops_late_successes() {
 }
 
 #[test]
-fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_update() {
+fn a_status_broadcast_with_undefined_bits_still_feeds_the_connection_watchdog() {
     let mut client = FileClient::new(
         FileClientConfig::default()
             .with_ccm_interval(10_000)
@@ -328,43 +364,51 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     connect_file_client(&mut client, 0x80);
     assert!(client.server_status().is_none());
 
-    let mut malformed_busy = FileServerStatus {
-        busy: true,
+    // G3 — undefined B.3 bits, a zero-padded reserved tail and an out-of-range
+    // open-file count are all ignored on receive. Each used to discard the whole
+    // broadcast, and this message is what feeds the connection watchdog: a
+    // server that differed in any of them was declared gone at 6 s.
+    let mut undefined_busy_bit = FileServerStatus {
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 2,
     }
     .encode()
     .to_vec();
-    malformed_busy[0] = 0x02;
+    undefined_busy_bit[1] |= 0x04;
     client.update(500);
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
-        malformed_busy,
+        undefined_busy_bit,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "malformed busy bits must not update the File Server status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.busy_writing),
+        Some(true),
+        "bits 3-8 of B.3 say nothing about the two that are defined"
     );
 
-    let mut malformed_tail = FileServerStatus {
-        busy: false,
+    let mut zero_padded_tail = FileServerStatus {
+        busy_reading: false,
+        busy_writing: false,
         number_of_open_files: 1,
     }
     .encode()
     .to_vec();
-    malformed_tail[2] = 0x00;
+    zero_padded_tail[3] = 0x00;
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
-        malformed_tail,
+        zero_padded_tail,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "non-canonical reserved tail bytes must not update the status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.number_of_open_files),
+        Some(1)
     );
 
     let out_of_range_open_count = FileServerStatus {
-        busy: false,
+        busy_reading: false,
+        busy_writing: false,
         number_of_open_files: 251,
     }
     .encode()
@@ -374,15 +418,16 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
         out_of_range_open_count,
         0x80,
     ));
-    assert!(
-        client.server_status().is_none(),
-        "out-of-range open-file counts must not update the status cache"
+    assert_eq!(
+        client.server_status().map(|s| s.number_of_open_files),
+        Some(250),
+        "B.6 caps what we can honour; clamp rather than discard"
     );
 
     client.update(5_500);
     assert!(
-        !client.is_connected(),
-        "malformed status broadcasts must not refresh the server-status timeout"
+        client.is_connected(),
+        "the broadcasts were understood, so the server-status timeout is fed"
     );
 
     let mut client = FileClient::new(
@@ -393,7 +438,8 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     connect_file_client(&mut client, 0x80);
     client.update(500);
     let valid = FileServerStatus {
-        busy: true,
+        busy_reading: false,
+        busy_writing: true,
         number_of_open_files: 3,
     }
     .encode()
@@ -402,7 +448,8 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
     assert_eq!(
         client.server_status(),
         Some(FileServerStatus {
-            busy: true,
+            busy_reading: false,
+            busy_writing: true,
             number_of_open_files: 3
         })
     );
@@ -411,6 +458,54 @@ fn file_client_rejects_malformed_status_broadcasts_without_keepalive_or_cache_up
         client.is_connected(),
         "valid status broadcasts should refresh the server-status timeout"
     );
+}
+
+/// E6 — the C.2.2.3 Total / Free / Path fields exist only in a Success
+/// response; an error response is the 8-byte error frame the crate's own server
+/// sends for this command. Requiring 13 bytes before reading the error byte
+/// turned every one of them into `MalformedRequest`, so pulling the USB stick
+/// reported a corrupt frame instead of `MediaNotPresent` — one of the three
+/// codes `FSError::is_fatal` recognises — and fatal-media handling never fired.
+#[test]
+fn a_short_error_response_to_getcwd_reports_the_real_error_code() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    for code in [FSError::MediaNotPresent, FSError::NotSupported] {
+        let mut client = FileClient::new(FileClientConfig::default());
+        connect_file_client(&mut client, 0x80);
+
+        let seen: Rc<RefCell<Vec<FSError>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        client
+            .on_current_directory_response
+            .subscribe(move |(_, result)| {
+                if let Err(error) = result {
+                    log.borrow_mut().push(*error);
+                }
+            });
+
+        let request = client.get_current_directory().unwrap();
+        let tan = request.data[1];
+        let mut error_frame = vec![FSFunction::GetCurrentDirectory.as_u8(), tan, code.as_u8()];
+        error_frame.resize(8, 0xFF);
+        client.handle_server_response(&Message::new(
+            PGN_FILE_SERVER_TO_CLIENT,
+            error_frame,
+            0x80,
+        ));
+
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[code],
+            "an error response must reach the application as its B.9 code"
+        );
+        assert_eq!(
+            client.current_directory(),
+            "\\",
+            "an error response must not move the cached directory"
+        );
+    }
 }
 
 #[test]
@@ -426,8 +521,10 @@ fn file_client_rejects_invalid_current_directory_responses_before_state_mutation
             FSFunction::GetCurrentDirectory.as_u8(),
             tan,
             FSError::Success.as_u8(),
-            invalid.len() as u8,
         ];
+        // C.2.2.3 bytes 4-11 Total/Free Space, bytes 12,13 Path Name Length.
+        response.extend_from_slice(&[0u8; 8]);
+        response.extend_from_slice(&(invalid.len() as u16).to_le_bytes());
         response.extend_from_slice(invalid.as_bytes());
         while response.len() < 8 {
             response.push(0xFF);
@@ -446,8 +543,9 @@ fn file_client_rejects_invalid_current_directory_responses_before_state_mutation
         FSFunction::GetCurrentDirectory.as_u8(),
         tan,
         FSError::Success.as_u8(),
-        6,
     ];
+    response.extend_from_slice(&[0u8; 8]);
+    response.extend_from_slice(&6u16.to_le_bytes());
     response.extend_from_slice(b"\\logs\\");
     client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, response, 0x80));
     assert_eq!(client.current_directory(), "\\logs\\");
@@ -472,7 +570,16 @@ fn file_client_rejects_non_ascii_current_directory_response_before_state_mutatio
         FSFunction::GetCurrentDirectory.as_u8(),
         tan,
         FSError::Success.as_u8(),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
         4,
+        0,
         b'\\',
         0xC3,
         0xBF,
@@ -501,8 +608,9 @@ fn file_client_rejects_non_ascii_current_directory_response_before_state_mutatio
         FSFunction::GetCurrentDirectory.as_u8(),
         valid_tan,
         FSError::Success.as_u8(),
-        6,
     ];
+    valid_response.extend_from_slice(&[0u8; 8]);
+    valid_response.extend_from_slice(&6u16.to_le_bytes());
     valid_response.extend_from_slice(b"\\logs\\");
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
@@ -711,7 +819,9 @@ fn file_client_rejects_malformed_close_and_seek_successes_before_state_mutation(
     ));
     assert_eq!(client.open_files().get(&7).unwrap().position, 0);
 
-    let seek = client.seek_file(7, 123).unwrap();
+    // A success response that is too short to carry C.3.3.3's Position field
+    // must not move the cached pointer.
+    let seek = client.seek_file(7, machbus::isobus::fs::SeekMode::Start, 123).unwrap();
     let seek_tan = seek.data[1];
     client.handle_server_response(&Message::new(
         PGN_FILE_SERVER_TO_CLIENT,
@@ -726,25 +836,21 @@ fn file_client_rejects_malformed_close_and_seek_successes_before_state_mutation(
     assert_eq!(
         client.open_files().get(&7).unwrap().position,
         0,
-        "malformed SeekFile success must not apply the requested position"
+        "a truncated SeekFile success must not apply a position"
     );
 
-    let seek = client.seek_file(7, 123).unwrap();
+    // The pointer comes from the response, not from the request: a relative
+    // seek cannot be predicted client-side.
+    let seek = client.seek_file(7, machbus::isobus::fs::SeekMode::Current, -4).unwrap();
     let seek_tan = seek.data[1];
-    client.handle_server_response(&Message::new(
-        PGN_FILE_SERVER_TO_CLIENT,
-        vec![
-            FSFunction::SeekFile.as_u8(),
-            seek_tan,
-            FSError::Success.as_u8(),
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-            0xFF,
-        ],
-        0x80,
-    ));
+    let mut seek_ok = vec![
+        FSFunction::SeekFile.as_u8(),
+        seek_tan,
+        FSError::Success.as_u8(),
+        0xFF,
+    ];
+    seek_ok.extend_from_slice(&123u32.to_le_bytes());
+    client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, seek_ok, 0x80));
     assert_eq!(client.open_files().get(&7).unwrap().position, 123);
 
     let close = client.close_file(7).unwrap();
@@ -1232,7 +1338,7 @@ fn file_client_rejects_malformed_volume_status_responses_without_media_state_or_
 fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut server = FileServer::new(FileServerConfig::default());
     server
-        .add_file("log.txt", b"abc".to_vec(), FileAttributes::Archive.bit())
+        .add_file("log.txt", b"abc".to_vec(), FileAttributes::Hidden.bit())
         .unwrap();
 
     let open = server.handle_client_message(&fs_request(
@@ -1245,8 +1351,8 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut set_attrs = vec![
         FSFunction::SetFileAttributes.as_u8(),
         0x41,
-        path.len() as u8,
         FileAttributes::Hidden.bit(),
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     set_attrs.extend_from_slice(path);
     let denied = server.handle_client_message(&fs_request(set_attrs, 0x43));
@@ -1260,7 +1366,7 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     let mut get_attrs = vec![
         FSFunction::GetFileAttributes.as_u8(),
         0x42,
-        path.len() as u8,
+        path.len() as u8, (path.len() >> 8) as u8,
     ];
     get_attrs.extend_from_slice(path);
     let attrs = server.handle_client_message(&fs_request(get_attrs, 0x42));
@@ -1272,7 +1378,7 @@ fn file_server_rejects_attribute_changes_while_file_is_open_without_mutation() {
     );
     assert_eq!(
         attrs[0].data[3],
-        FileAttributes::Archive.bit(),
+        FileAttributes::Hidden.bit(),
         "denied SetFileAttributes must not mutate the existing attributes"
     );
 }
@@ -1295,7 +1401,7 @@ fn file_server_rejects_seek_on_directory_handles_without_position_mutation() {
     );
 
     let denied = server.handle_client_message(&fs_request(
-        vec![FSFunction::SeekFile.as_u8(), 0x51, handle, 5, 0, 0, 0],
+        vec![FSFunction::SeekFile.as_u8(), 0x51, handle, 0, 5, 0, 0, 0],
         0x42,
     ));
     assert_response(
@@ -1530,8 +1636,9 @@ fn file_server_rejects_move_of_read_only_source_without_file_mutation() {
     let mut request = vec![
         FSFunction::MoveFile.as_u8(),
         0x70,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         destination.len() as u8,
+        (destination.len() >> 8) as u8,
     ];
     request.extend_from_slice(source);
     request.extend_from_slice(destination);
@@ -1606,7 +1713,7 @@ fn file_server_requires_existing_parent_directories_for_create_and_move() {
         &create_under_file[0].data,
         FSFunction::OpenFile,
         0x74,
-        FSError::WrongType,
+        FSError::InvalidAccess,
     );
 
     let missing_created = server.handle_client_message(&fs_request(
@@ -1625,8 +1732,9 @@ fn file_server_requires_existing_parent_directories_for_create_and_move() {
     let mut move_missing_parent = vec![
         FSFunction::MoveFile.as_u8(),
         0x76,
-        source.len() as u8,
+        source.len() as u8, (source.len() >> 8) as u8,
         missing_dest.len() as u8,
+        (missing_dest.len() >> 8) as u8,
     ];
     move_missing_parent.extend_from_slice(source);
     move_missing_parent.extend_from_slice(missing_dest);
@@ -1704,7 +1812,7 @@ fn file_server_enforces_advertised_open_file_capacity_before_creation() {
         &over_capacity[0].data,
         FSFunction::OpenFile,
         0x81,
-        FSError::MaxHandles,
+        FSError::TooManyOpen,
     );
     assert_eq!(
         server.open_files().len(),
@@ -1736,3 +1844,76 @@ fn file_server_enforces_advertised_open_file_capacity_before_creation() {
     );
 }
 
+
+/// E1 — C.3.4's Count field is an *entry* count on a directory handle. The
+/// client read it as a byte count, and since every B.14 entry is at least 11
+/// bytes, `5 + count` could never equal the frame length for any count ≥ 1:
+/// enumerating a volume failed totally with `MalformedRequest`, and a TC
+/// walking the stick for `\TASKDATA\TASKDATA.XML` reported a corrupt file
+/// server. The two halves of the crate disagreed and nothing pinned the client
+/// side, so the suite stayed green — this drives both against each other.
+#[test]
+fn a_client_and_server_agree_on_the_directory_read_count() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut server = FileServer::new(FileServerConfig::default());
+    server.add_directory("jobs").unwrap();
+    server.add_file("visible.txt", b"hello".to_vec(), 0).unwrap();
+
+    let mut client = FileClient::new(FileClientConfig::default());
+    connect_file_client(&mut client, 0x80);
+
+    type ReadLog = Rc<RefCell<Vec<Result<Vec<u8>, FSError>>>>;
+    let reads: ReadLog = Rc::new(RefCell::new(Vec::new()));
+    let log = reads.clone();
+    client
+        .on_read_response
+        .subscribe(move |(_, result)| log.borrow_mut().push(result.clone()));
+
+    // Open the root as a directory, through the real server.
+    let open = client
+        .try_open_file("\\", OpenFlags::OpenDir.bit())
+        .expect("connected");
+    let open_response = server.handle_client_message(&fs_request(open.data.clone(), 0x42));
+    client.handle_server_response(&Message::new(
+        PGN_FILE_SERVER_TO_CLIENT,
+        open_response[0].data.clone(),
+        0x80,
+    ));
+    let handle = client
+        .open_files()
+        .keys()
+        .copied()
+        .next()
+        .expect("the server granted a directory handle");
+
+    let read = client.try_read_file(handle, 2).expect("connected");
+    let read_response = server.handle_client_message(&fs_request(read.data.clone(), 0x42));
+    let encoded = read_response[0].data.clone();
+    assert_eq!(
+        u16::from_le_bytes([encoded[3], encoded[4]]) as usize,
+        2,
+        "the server encodes Count as an entry count"
+    );
+    assert!(
+        encoded.len() > 5 + 2,
+        "two B.14 entries are far longer than two bytes"
+    );
+    client.handle_server_response(&Message::new(PGN_FILE_SERVER_TO_CLIENT, encoded, 0x80));
+
+    let entries = reads.borrow();
+    let payload = entries
+        .last()
+        .expect("a read response arrived")
+        .as_ref()
+        .expect("the directory listing must not be MalformedRequest");
+    let text = String::from_utf8_lossy(payload);
+    assert!(text.contains("visible.txt"), "got {text:?}");
+    assert!(text.contains("jobs"), "got {text:?}");
+    assert_eq!(
+        client.open_files().get(&handle).map(|info| info.position),
+        Some(2),
+        "a directory handle's position advances by entries, not encoded bytes"
+    );
+}

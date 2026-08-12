@@ -282,7 +282,6 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
         "client_recording_completion_step7",
         "client_reserved_state_ready",
         "client_ready_bad_func_error",
-        "client_ready_bad_tail",
     ] {
         malformed_master.handle_client_status(&Message::new(
             PGN_SC_CLIENT_STATUS,
@@ -294,6 +293,23 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
             "{malformed} must be ignored instead of prefix-decoded"
         );
     }
+
+    // G3 — reserved bits go out as 1 and are ignored on receive. A peer that
+    // zero-pads its reserved tail differs only in bits neither side uses, and
+    // used to be rejected before any state update, so the master never left
+    // Ready and the client stayed Idle forever.
+    let mut g3_master = SCMaster::new(master_cfg);
+    g3_master.add_step(sc_step(7)).unwrap();
+    g3_master.start().unwrap();
+    g3_master.handle_client_status(&Message::new(
+        PGN_SC_CLIENT_STATUS,
+        parse_named_hex_bytes(ISOBUS_SC_STATUS_HEX, "client_ready_zero_padded_tail"),
+        0x20,
+    ));
+    assert!(
+        !g3_master.is(SCState::Ready),
+        "a zero-padded reserved tail must not cost the client its Ready"
+    );
     malformed_master.handle_client_status(&Message::new(
         PGN_SC_MASTER_STATUS,
         client_ready.to_vec(),
@@ -324,8 +340,6 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
         "master_recording_step7",
         "master_recording_completion_step7",
         "master_reserved_state_ready",
-        "master_ready_bad_busy_flags",
-        "master_ready_bad_tail",
     ] {
         assert!(
             malformed_client
@@ -338,6 +352,22 @@ fn fixture_isobus_sc_master_client_status_vectors_are_stable() {
             "{malformed} must not emit a client response"
         );
         assert!(malformed_client.is(SCState::Idle));
+    }
+
+    for g3 in [
+        "master_ready_undefined_busy_bits",
+        "master_ready_zero_padded_tail",
+    ] {
+        let mut g3_client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+        g3_client.handle_master_status(&Message::new(
+            PGN_SC_MASTER_STATUS,
+            parse_named_hex_bytes(ISOBUS_SC_STATUS_HEX, g3),
+            0x10,
+        ));
+        assert!(
+            g3_client.is(SCState::Ready),
+            "{g3} differs only in bits neither side uses; G3 says ignore them"
+        );
     }
     assert!(
         malformed_client
@@ -1402,7 +1432,7 @@ fn fixture_nmea_gnss_position_cog_sog_and_heading_vectors_are_stable() {
 fn fixture_nmea_gnss_detail_dops_and_attitude_vectors_are_stable() {
     let position_detail = parse_hex_bytes(NMEA_GNSS_POSITION_DATA_52N_5E_ALT12_345_RTK_HEX.trim());
     let dops_bytes = parse_hex_bytes(NMEA_GNSS_DOPS_AUTO_3D_HDOP0_85_VDOP1_10_TDOP0_50_HEX.trim());
-    let dops_bad_reserved = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_RESERVED_BITS_HEX.trim());
+    let dops_bad_sequence = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_SEQUENCE_ID_HEX.trim());
     let dops_bad_reserved_mode = parse_hex_bytes(NMEA_GNSS_DOPS_BAD_RESERVED_MODE_HEX.trim());
     let attitude_bytes = parse_hex_bytes(NMEA_ATTITUDE_YAW1_PITCH_NEG0_1_ROLL0_25_HEX.trim());
     let position_detail_one_ref = parse_named_hex_bytes(
@@ -1492,13 +1522,26 @@ fn fixture_nmea_gnss_detail_dops_and_attitude_vectors_are_stable() {
     assert!((dop_cached.vdop.unwrap() - 1.10).abs() < 0.000001);
     assert!((dop_cached.pdop.unwrap() - 1.32).abs() < 0.000001);
 
-    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved, 0x23));
-    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved_mode, 0x23));
+    // DD056 reserves SID 253-254, but the SID is only a correlation tag — it
+    // carries no measurement — so a reserved one costs the binding, not the
+    // report: it decodes and lands on 0xFF, "No binding provided".
+    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_sequence, 0x23));
     assert_eq!(
         dops_log.borrow().len(),
-        1,
-        "GNSS DOPs reserved bits/modes must be ignored before event emission"
+        2,
+        "a reserved sequence ID must not discard the DOP report"
     );
+    assert_eq!(
+        dops_log.borrow()[1].sid,
+        0xFF,
+        "a reserved sequence ID reads as 'No binding provided'"
+    );
+
+    // A reserved Set Mode value *is* refused — that one is a data field. The
+    // two NMEA reserved bits in byte 2 are set in every fixture here, as a
+    // conformant transmitter sends them, and must not cause a rejection.
+    iface.handle_message(&Message::new(PGN_GNSS_DOPS, dops_bad_reserved_mode, 0x23));
+    assert_eq!(dops_log.borrow().len(), 2, "a reserved Set Mode is refused");
     let dop_cached = iface
         .latest_position()
         .expect("bad DOPs reserved bits should preserve cache");

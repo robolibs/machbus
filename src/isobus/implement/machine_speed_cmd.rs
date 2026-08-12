@@ -8,6 +8,12 @@
 //!
 //! The C++ `MachineSpeedInterface` is intentionally not ported.
 
+/// Origin of the machine-selected speed (ISO 11783-9 §4.4.2.8).
+///
+/// This is a **3-bit** field. Read as 2 bits, raw 4 (`Simulated`) aliases to
+/// `WheelBased` and raw 7 (`NotAvailable`) aliases to `Blended` — an autonomy
+/// controller would then close its loop on a test-bench or absent speed
+/// believing it came from the wheels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum SpeedSource {
@@ -16,16 +22,21 @@ pub enum SpeedSource {
     GroundBased = 1,
     NavigationBased = 2,
     Blended = 3,
+    /// Bench/spoofed speed. Never close a control loop on this.
+    Simulated = 4,
+    NotAvailable = 7,
 }
 
 impl SpeedSource {
     #[must_use]
     pub const fn from_u8(v: u8) -> Self {
-        match v & 0x03 {
+        match v & 0x07 {
             0 => Self::WheelBased,
             1 => Self::GroundBased,
             2 => Self::NavigationBased,
-            _ => Self::Blended,
+            3 => Self::Blended,
+            4 => Self::Simulated,
+            _ => Self::NotAvailable,
         }
     }
 
@@ -36,8 +47,17 @@ impl SpeedSource {
             1 => Some(Self::GroundBased),
             2 => Some(Self::NavigationBased),
             3 => Some(Self::Blended),
+            4 => Some(Self::Simulated),
+            7 => Some(Self::NotAvailable),
             _ => None,
         }
+    }
+
+    /// `true` when the value does not describe real motion of this machine, so
+    /// a controller must not treat it as feedback.
+    #[must_use]
+    pub const fn is_trustworthy_for_control(self) -> bool {
+        !matches!(self, Self::Simulated | Self::NotAvailable)
     }
 
     #[inline]
@@ -125,23 +145,34 @@ impl SpeedExitCode {
     }
 }
 
+/// Table 1, 2-byte row: valid is `0x0000..=0xFAFF`, `0xFE00..=0xFEFF` is the
+/// error band and `0xFF00..=0xFFFF` is not-available. Clamping to `u16::MAX - 1`
+/// landed on 0xFFFE — inside the not-available band — so any commanded speed at
+/// or above 65.535 m/s was transmitted as "not available" by the autodrive and
+/// guidance controllers that broadcast this every control tick. One saturation
+/// rule, shared with the sibling module.
 fn encode_speed_mps_non_na(mps: f64) -> u16 {
-    if !mps.is_finite() {
-        return 0;
-    }
-    let raw = mps / 0.001;
-    if raw <= 0.0 {
-        0
-    } else if raw >= f64::from(u16::MAX) {
-        u16::MAX - 1
-    } else {
-        raw as u16
-    }
+    super::speed_distance::scaled_u16_non_na(mps, 0.001)
 }
 
-/// Machine Selected Speed status (PGN 0xF022). Speed: `0.001 m/s`
-/// per bit. `0xFFFF` = not available.
+/// A compact speed/direction/source triple retained for C++ parity.
+///
+/// **This is not PGN 0xF022.** It used to claim to be, and it is a second,
+/// contradictory layout for that PGN: it puts direction, source and limit
+/// status in byte 5 where ISO 11783-7 puts them in byte 8, and it reads the
+/// speed source as 2 bits rather than 3 — so raw 4 (Simulated) aliases to
+/// WheelBased, the same hazard [`MachineSelectedSpeedFull`] was already fixed
+/// for. The committed real-bus capture contradicts this layout.
+///
+/// Use [`MachineSelectedSpeedFull`] for anything that touches a bus.
+///
+/// [`MachineSelectedSpeedFull`]: crate::isobus::implement::MachineSelectedSpeedFull
+#[deprecated(
+    since = "0.1.0",
+    note = "not the ISO 11783-7 PGN 0xF022 layout; use MachineSelectedSpeedFull"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(deprecated)]
 pub struct MachineSelectedSpeedMsg {
     pub speed_raw: u16,
     pub direction: MachineDirection,
@@ -149,6 +180,7 @@ pub struct MachineSelectedSpeedMsg {
     pub limit_status: SpeedExitCode,
 }
 
+#[allow(deprecated)]
 impl Default for MachineSelectedSpeedMsg {
     fn default() -> Self {
         Self {
@@ -160,6 +192,7 @@ impl Default for MachineSelectedSpeedMsg {
     }
 }
 
+#[allow(deprecated)]
 impl MachineSelectedSpeedMsg {
     /// Speed in m/s. Returns `0.0` if the raw is the `0xFFFF`
     /// not-available sentinel.
@@ -192,13 +225,11 @@ impl MachineSelectedSpeedMsg {
         if data.len() != 8 {
             return None;
         }
-        if data[2] != 0xFF
-            || data[3] != 0xFF
-            || data[4] & 0xC0 != 0xC0
-            || data[5..].iter().any(|&byte| byte != 0xFF)
-        {
-            return None;
-        }
+        // ISO 11783-7:2022 §5.4: "All undefined bits should be received as
+        // 'don't care' (either masked out or ignored). This permits them to be
+        // defined and used in the future without causing any incompatibilities."
+        // Requiring the exact value machbus writes made them load-bearing on
+        // receive, so a transmitter one revision ahead was rejected outright.
         Some(Self {
             speed_raw: (data[0] as u16) | ((data[1] as u16) << 8),
             direction: MachineDirection::try_from_u8(data[4] & 0x03)?,
@@ -262,9 +293,9 @@ impl MachineSpeedCommandMsg {
         if data.len() != 8 {
             return None;
         }
-        if data[2] & 0xFC != 0xFC || data[3..].iter().any(|&byte| byte != 0xFF) {
-            return None;
-        }
+        // Undefined bits and bytes are "don't care" on receive (§5.4); the
+        // defined two bits of byte 2 are masked out below.
+
         Some(Self {
             target_speed_raw: (data[0] as u16) | ((data[1] as u16) << 8),
             direction_cmd: MachineDirection::try_from_u8(data[2] & 0x03)?,
@@ -273,11 +304,17 @@ impl MachineSpeedCommandMsg {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
+    /// The deprecated legacy layout still round-trips through itself; what it
+    /// must not do is claim to be PGN 0xF022, which
+    /// [`MachineSelectedSpeedFull`] owns.
+    ///
+    /// [`MachineSelectedSpeedFull`]: crate::isobus::implement::MachineSelectedSpeedFull
     #[test]
-    fn status_round_trip() {
+    fn legacy_status_round_trip() {
         let m = MachineSelectedSpeedMsg {
             speed_raw: 5000, // 5 m/s
             direction: MachineDirection::Forward,
@@ -288,6 +325,21 @@ mod tests {
         let decoded = MachineSelectedSpeedMsg::decode(&bytes).unwrap();
         assert_eq!(decoded, m);
         assert!((decoded.speed_mps() - 5.0).abs() < 1e-9);
+
+        // The 2-bit source read is exactly why it may not be used on a bus: a
+        // conformant transmitter's Simulated (4) is unrepresentable here.
+        assert_eq!(SpeedSource::from_u8(4), SpeedSource::Simulated);
+        let aliased = MachineSelectedSpeedMsg {
+            source: SpeedSource::Simulated,
+            ..m
+        };
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&aliased.encode())
+                .expect("round trip")
+                .source,
+            SpeedSource::WheelBased,
+            "the legacy 2-bit field aliases Simulated onto WheelBased"
+        );
     }
 
     #[test]
@@ -320,17 +372,22 @@ mod tests {
                 .target_speed_raw,
             0
         );
+        // Table 1, 2-byte row: valid is 0x0000..=0xFAFF, the error band is
+        // 0xFE00..=0xFEFF and 0xFF00..=0xFFFF is not-available. 0xFFFE is
+        // *inside* the not-available band, so clamping there transmitted "not
+        // available" for any setpoint at or above 65.535 m/s — from the
+        // autodrive and guidance controllers that broadcast this every tick.
         assert_eq!(
             MachineSpeedCommandMsg::default()
                 .with_speed_mps(1_000_000.0)
                 .target_speed_raw,
-            0xFFFE
+            0xFAFF
         );
         assert_eq!(
             MachineSpeedCommandMsg::default()
                 .with_speed_mps(65.535)
                 .target_speed_raw,
-            0xFFFE
+            0xFAFF
         );
     }
 
@@ -376,24 +433,44 @@ mod tests {
 
     #[test]
     fn decoders_reject_bad_reserved_padding_and_bits() {
-        let mut status_bad_reserved_byte = MachineSelectedSpeedMsg::default().encode();
-        status_bad_reserved_byte[2] = 0x00;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_reserved_byte).is_none());
+        // B5 — ISO 11783-7 §5.4: undefined bits and bytes are "don't care" on
+        // receive. Every case below used to be asserted as a decode failure.
+        let status = MachineSelectedSpeedMsg::default();
 
-        let mut status_bad_reserved_bits = MachineSelectedSpeedMsg::default().encode();
-        status_bad_reserved_bits[4] &= 0x3F;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_reserved_bits).is_none());
+        let mut reserved_byte_zeroed = status.encode();
+        reserved_byte_zeroed[2] = 0x00;
+        reserved_byte_zeroed[3] = 0x00;
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&reserved_byte_zeroed),
+            Some(status)
+        );
 
-        let mut status_bad_tail = MachineSelectedSpeedMsg::default().encode();
-        status_bad_tail[5] = 0x00;
-        assert!(MachineSelectedSpeedMsg::decode(&status_bad_tail).is_none());
+        let mut reserved_bits_clear = status.encode();
+        reserved_bits_clear[4] &= 0x3F;
+        assert_eq!(
+            MachineSelectedSpeedMsg::decode(&reserved_bits_clear),
+            Some(status)
+        );
 
-        let mut command_bad_reserved_bits = MachineSpeedCommandMsg::default().encode();
-        command_bad_reserved_bits[2] &= 0x03;
-        assert!(MachineSpeedCommandMsg::decode(&command_bad_reserved_bits).is_none());
+        let mut future_tail = status.encode();
+        future_tail[5] = 0x00;
+        future_tail[7] = 0x5A;
+        assert_eq!(MachineSelectedSpeedMsg::decode(&future_tail), Some(status));
 
-        let mut command_bad_tail = MachineSpeedCommandMsg::default().encode();
-        command_bad_tail[3] = 0x00;
-        assert!(MachineSpeedCommandMsg::decode(&command_bad_tail).is_none());
+        let command = MachineSpeedCommandMsg::default();
+        let mut command_reserved_clear = command.encode();
+        command_reserved_clear[2] &= 0x03;
+        assert_eq!(
+            MachineSpeedCommandMsg::decode(&command_reserved_clear),
+            Some(command)
+        );
+
+        let mut command_future_tail = command.encode();
+        command_future_tail[3] = 0x00;
+        command_future_tail[7] = 0x5A;
+        assert_eq!(
+            MachineSpeedCommandMsg::decode(&command_future_tail),
+            Some(command)
+        );
     }
 }

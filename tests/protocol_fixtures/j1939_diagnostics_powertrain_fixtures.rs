@@ -22,11 +22,13 @@ fn fixture_j1939_diagnostic_request_response_payloads_are_stable() {
                 spn: 100,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 0,
+                conversion_method: false,
             },
             Dtc {
                 spn: 523_312,
                 fmi: Fmi::AboveNormal,
                 occurrence_count: 0,
+                conversion_method: false,
             },
         ]
     );
@@ -255,6 +257,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
         spn: 0x1_2345,
         fmi: Fmi::Erratic,
         occurrence_count: 7,
+        conversion_method: false,
     };
     assert_eq!(expected_dtc.encode(), dtc.as_slice());
     assert_eq!(Dtc::decode(&dtc), Some(expected_dtc));
@@ -263,6 +266,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 0x8_0000,
             fmi: Fmi::Erratic,
             occurrence_count: 0xFF,
+            conversion_method: false,
         }
         .encode()
         .as_slice(),
@@ -292,6 +296,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 42,
             fmi: Fmi::CurrentLow,
             occurrence_count: 3,
+            conversion_method: false,
         }],
     };
     assert_eq!(expected_dm4.encode(), dm4);
@@ -550,6 +555,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
             spn: 0x123,
             fmi: Fmi::VoltageHigh,
             occurrence_count: 2,
+            conversion_method: false,
         },
         timestamp_ms: 0xCAFE_F00D,
         snapshots: vec![SpnSnapshot {
@@ -565,6 +571,7 @@ fn fixture_j1939_variable_diagnostic_codecs_reject_prefix_payloads() {
                 spn: 0x8_0000,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 3,
+                conversion_method: false,
             },
             timestamp_ms: 0xCAFE_F00D,
             snapshots: vec![SpnSnapshot {
@@ -713,14 +720,17 @@ fn fixture_j1939_heartbeat_and_maintain_power_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in ["maintain_bad_reserved_flags", "maintain_bad_reserved_tail"] {
+    // G3 / ISO 11783-7 §5.4 — both of these are conformant frames that merely
+    // differ in bits nobody has assigned. Rejecting them dropped an
+    // implement's request to hold power, and the TECU cut ECU_PWR/PWR on it.
+    for name in ["undefined_bits_maintain_flags", "undefined_bits_maintain_tail"] {
         assert!(
             MaintainPowerData::decode(&parse_named_hex_bytes(
                 J1939_HEARTBEAT_MAINTAIN_POWER_HEX,
-                malformed,
+                name,
             ))
-            .is_none(),
-            "{malformed} must be rejected"
+            .is_some(),
+            "{name} must decode: undefined bits are don't-care on receive"
         );
     }
 
@@ -728,11 +738,12 @@ fn fixture_j1939_heartbeat_and_maintain_power_codecs_are_stable() {
         J1939_HEARTBEAT_MAINTAIN_POWER_HEX,
         "maintain_all_inactive_no_request",
     );
+    // H56 — a TECU receives Maintain Power, it does not transmit it
+    // (ISO 11783-10 §6.6.3: "The client shall send a 'Maintain Power'
+    // message"). The payload itself is still exercised below from the CF side.
     let mut tecu = PowerManager::new(PowerRole::Tecu);
     tecu.key_off();
-    let broadcasts = tecu.update(100);
-    assert_eq!(broadcasts.len(), 1);
-    assert_eq!(broadcasts[0].encode(), keyoff);
+    assert!(tecu.update(100).is_empty());
 
     let keyoff_msg = Message::new(PGN_MAINTAIN_POWER, keyoff.to_vec(), 0xF0);
     let mut cf = PowerManager::new(PowerRole::Cf);
@@ -758,19 +769,19 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         "eec1_50_75_45_1500rpm_src10_starter5",
     );
     let expected_eec1 = Eec1 {
-        engine_torque_percent: 50.0,
-        driver_demand_percent: 75.0,
-        actual_engine_percent: 45.0,
-        engine_speed_rpm: 1500.0,
+        engine_torque_percent: machbus::isobus::implement::Signal::Value(50.0),
+        driver_demand_percent: machbus::isobus::implement::Signal::Value(75.0),
+        actual_engine_percent: machbus::isobus::implement::Signal::Value(45.0),
+        engine_speed_rpm: machbus::isobus::implement::Signal::Value(1500.0),
         starter_mode: 0x05,
         source_address: 0x10,
     };
     assert_eq!(expected_eec1.encode(), eec1);
     let decoded_eec1 = Eec1::decode(&eec1).unwrap();
-    assert_eq!(decoded_eec1.engine_torque_percent, 50.0);
-    assert_eq!(decoded_eec1.driver_demand_percent, 75.0);
-    assert_eq!(decoded_eec1.actual_engine_percent, 45.0);
-    assert_eq!(decoded_eec1.engine_speed_rpm, 1500.0);
+    assert_eq!(decoded_eec1.engine_torque_percent.value(), Some(50.0));
+    assert_eq!(decoded_eec1.driver_demand_percent.value(), Some(75.0));
+    assert_eq!(decoded_eec1.actual_engine_percent.value(), Some(45.0));
+    assert_eq!(decoded_eec1.engine_speed_rpm.value(), Some(1500.0));
     assert_eq!(decoded_eec1.starter_mode, 0x05);
     assert_eq!(decoded_eec1.source_address, 0x10);
 
@@ -778,65 +789,67 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "eec2_pedal200_load65_limit80",
     );
+    // The pedal is now the percentage its name promises, at the SPN 91
+    // resolution of 0.4 %/bit — raw 200 is 80 %, so the golden bytes hold.
     let expected_eec2 = Eec2 {
-        accel_pedal_position: 200,
-        engine_load_percent: 65.0,
+        accel_pedal_position: sig(80.0),
+        engine_load_percent: sig(65.0),
         accel_pedal_low_idle: 1,
         accel_pedal_kickdown: 0,
-        road_speed_limit: 80,
+        road_speed_limit: sig(80.0),
     };
     assert_eq!(expected_eec2.encode(), eec2);
     let decoded_eec2 = Eec2::decode(&eec2).unwrap();
-    assert_eq!(decoded_eec2.accel_pedal_position, 200);
-    assert_eq!(decoded_eec2.engine_load_percent, 65.0);
+    assert_sig(decoded_eec2.accel_pedal_position, 80.0, 0.4);
+    assert_sig(decoded_eec2.engine_load_percent, 65.0, 0.0);
     assert_eq!(decoded_eec2.accel_pedal_low_idle, 1);
     assert_eq!(decoded_eec2.accel_pedal_kickdown, 0);
-    assert_eq!(decoded_eec2.road_speed_limit, 80);
+    assert_sig(decoded_eec2.road_speed_limit, 80.0, 0.0);
 
     let engine_temp1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "engine_temp1_90_50_100_110_60",
     );
     let expected_temp1 = EngineTemp1 {
-        coolant_temp_c: 90.0,
-        fuel_temp_c: 50.0,
-        oil_temp_c: 100.0,
-        turbo_oil_temp_c: 110.0,
-        intercooler_temp_c: 60.0,
+        coolant_temp_c: sig(90.0),
+        fuel_temp_c: sig(50.0),
+        oil_temp_c: sig(100.0),
+        turbo_oil_temp_c: sig(110.0),
+        intercooler_temp_c: sig(60.0),
     };
     assert_eq!(expected_temp1.encode(), engine_temp1);
     let decoded_temp1 = EngineTemp1::decode(&engine_temp1).unwrap();
-    assert_eq!(decoded_temp1.coolant_temp_c, 90.0);
-    assert_eq!(decoded_temp1.fuel_temp_c, 50.0);
-    assert!((decoded_temp1.oil_temp_c - 100.0).abs() < 0.1);
-    assert!((decoded_temp1.turbo_oil_temp_c - 110.0).abs() < 0.1);
-    assert_eq!(decoded_temp1.intercooler_temp_c, 60.0);
+    assert_sig(decoded_temp1.coolant_temp_c, 90.0, 0.0);
+    assert_sig(decoded_temp1.fuel_temp_c, 50.0, 0.0);
+    assert_sig(decoded_temp1.oil_temp_c, 100.0, 0.1);
+    assert_sig(decoded_temp1.turbo_oil_temp_c, 110.0, 0.1);
+    assert_sig(decoded_temp1.intercooler_temp_c, 60.0, 0.0);
 
     let engine_hours = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "engine_hours_12345_7_1e9rev",
     );
     let expected_hours = EngineHours {
-        total_hours: 12_345.7,
-        total_revolutions: 1_000_000_000.0,
+        total_hours: sig(12_345.7),
+        total_revolutions: sig(1_000_000_000.0),
     };
     assert_eq!(expected_hours.encode(), engine_hours);
     let decoded_hours = EngineHours::decode(&engine_hours).unwrap();
-    assert!((decoded_hours.total_hours - expected_hours.total_hours).abs() < 0.1);
-    assert!((decoded_hours.total_revolutions - expected_hours.total_revolutions).abs() < 1000.0);
+    assert_sig(decoded_hours.total_hours, 12_345.7, 0.1);
+    assert_sig(decoded_hours.total_revolutions, 1_000_000_000.0, 1000.0);
 
     let fuel_economy =
         parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "fuel_economy_25_6_5_80");
     let expected_fuel = FuelEconomy {
-        fuel_rate_lph: 25.0,
-        instantaneous_lph: 6.5,
-        throttle_position: 80.0,
+        fuel_rate_lph: sig(25.0),
+        instantaneous_lph: sig(6.5),
+        throttle_position: sig(80.0),
     };
     assert_eq!(expected_fuel.encode(), fuel_economy);
     let decoded_fuel = FuelEconomy::decode(&fuel_economy).unwrap();
-    assert!((decoded_fuel.fuel_rate_lph - 25.0).abs() < 0.1);
-    assert!((decoded_fuel.instantaneous_lph - 6.5).abs() < 0.01);
-    assert!((decoded_fuel.throttle_position - 80.0).abs() < 0.5);
+    assert_sig(decoded_fuel.fuel_rate_lph, 25.0, 0.1);
+    assert_sig(decoded_fuel.instantaneous_lph, 6.5, 0.01);
+    assert_sig(decoded_fuel.throttle_position, 80.0, 0.5);
 
     let tsc1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
@@ -844,8 +857,8 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
     );
     let expected_tsc1 = Tsc1 {
         override_mode: OverrideControlMode::SpeedControl,
-        requested_speed_rpm: 1200.0,
-        requested_torque_percent: 50.0,
+        requested_speed_rpm: sig(1200.0),
+        requested_torque_percent: sig(50.0),
     };
     assert_eq!(expected_tsc1.encode(), tsc1);
     let decoded_tsc1 = Tsc1::decode(&tsc1).unwrap();
@@ -853,8 +866,8 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
         decoded_tsc1.override_mode,
         OverrideControlMode::SpeedControl
     );
-    assert_eq!(decoded_tsc1.requested_speed_rpm, 1200.0);
-    assert_eq!(decoded_tsc1.requested_torque_percent, 50.0);
+    assert_sig(decoded_tsc1.requested_speed_rpm, 1200.0, 0.0);
+    assert_sig(decoded_tsc1.requested_torque_percent, 50.0, 0.0);
 
     let etc1 = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "etc1_gear5_6_1500rpm");
     let expected_etc1 = Etc1 {
@@ -931,146 +944,149 @@ fn fixture_j1939_engine_powertrain_codecs_are_stable() {
 fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
     let eec3 = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "eec3_25_1800rpm_asym50");
     let expected_eec3 = Eec3 {
-        nominal_friction_percent: 25.0,
-        desired_operating_speed_rpm: 1800.0,
-        operating_speed_asymmetry: 50,
+        nominal_friction_percent: sig(25.0),
+        desired_operating_speed_rpm: sig(1800.0),
+        operating_speed_asymmetry: sig(50.0),
     };
     assert_eq!(expected_eec3.encode(), eec3);
     let decoded_eec3 = Eec3::decode(&eec3).unwrap();
-    assert!((decoded_eec3.nominal_friction_percent - 25.0).abs() < 1.0);
-    assert!((decoded_eec3.desired_operating_speed_rpm - 1800.0).abs() < 0.125);
-    assert_eq!(decoded_eec3.operating_speed_asymmetry, 50);
+    assert_sig(decoded_eec3.nominal_friction_percent, 25.0, 1.0);
+    assert_sig(decoded_eec3.desired_operating_speed_rpm, 1800.0, 0.125);
+    assert_sig(decoded_eec3.operating_speed_asymmetry, 50.0, 0.0);
 
     let engine_temp2 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "engine_temp2_95_105_55_200",
     );
     let expected_temp2 = EngineTemp2 {
-        engine_oil_temp_c: 95.0,
-        turbo_oil_temp_c: 105.0,
-        engine_intercooler_temp_c: 55.0,
-        turbo_1_temp_c: 200.0,
+        engine_oil_temp_c: sig(95.0),
+        turbo_oil_temp_c: sig(105.0),
+        engine_intercooler_temp_c: sig(55.0),
+        turbo_1_temp_c: sig(200.0),
     };
     assert_eq!(expected_temp2.encode(), engine_temp2);
     let decoded_temp2 = EngineTemp2::decode(&engine_temp2).unwrap();
-    assert!((decoded_temp2.engine_oil_temp_c - 95.0).abs() < 0.1);
-    assert!((decoded_temp2.turbo_oil_temp_c - 105.0).abs() < 0.1);
-    assert_eq!(decoded_temp2.engine_intercooler_temp_c, 55.0);
-    assert!((decoded_temp2.turbo_1_temp_c - 200.0).abs() < 0.1);
+    assert_sig(decoded_temp2.engine_oil_temp_c, 95.0, 0.1);
+    assert_sig(decoded_temp2.turbo_oil_temp_c, 105.0, 0.1);
+    assert_sig(decoded_temp2.engine_intercooler_temp_c, 55.0, 0.0);
+    assert_sig(decoded_temp2.turbo_1_temp_c, 200.0, 0.1);
 
     let fluid = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "engine_fluid_lp_400_200_levels_crank",
     );
+    // The level fields are now the percentage their names promise, at the
+    // SPN 98/111 resolution of 0.4 %/bit — raw 200/220 is 80 %/88 %, so the
+    // golden bytes are unchanged.
     let expected_fluid = EngineFluidLp {
-        oil_pressure_kpa: 400.0,
-        coolant_pressure_kpa: 200.0,
-        oil_level_percent: 200,
-        coolant_level_percent: 220,
-        fuel_delivery_pressure_kpa: 300.0,
-        crankcase_pressure_kpa: 0.5,
+        oil_pressure_kpa: sig(400.0),
+        coolant_pressure_kpa: sig(200.0),
+        oil_level_percent: sig(80.0),
+        coolant_level_percent: sig(88.0),
+        fuel_delivery_pressure_kpa: sig(300.0),
+        crankcase_pressure_kpa: sig(0.5),
     };
     assert_eq!(expected_fluid.encode(), fluid);
     let decoded_fluid = EngineFluidLp::decode(&fluid).unwrap();
-    assert_eq!(decoded_fluid.oil_level_percent, 200);
-    assert_eq!(decoded_fluid.coolant_level_percent, 220);
-    assert!((decoded_fluid.fuel_delivery_pressure_kpa - 300.0).abs() < 4.0);
-    assert!((decoded_fluid.oil_pressure_kpa - 400.0).abs() < 4.0);
-    assert!((decoded_fluid.coolant_pressure_kpa - 200.0).abs() < 2.0);
-    assert!((decoded_fluid.crankcase_pressure_kpa - 0.5).abs() < 0.05);
+    assert_sig(decoded_fluid.oil_level_percent, 80.0, 0.4);
+    assert_sig(decoded_fluid.coolant_level_percent, 88.0, 0.4);
+    assert_sig(decoded_fluid.fuel_delivery_pressure_kpa, 300.0, 4.0);
+    assert_sig(decoded_fluid.oil_pressure_kpa, 400.0, 4.0);
+    assert_sig(decoded_fluid.coolant_pressure_kpa, 200.0, 2.0);
+    assert_sig(decoded_fluid.crankcase_pressure_kpa, 0.5, 0.05);
 
     let vep1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "vep1_12_5_14_0_12_0_alt50",
     );
     let expected_vep1 = Vep1 {
-        battery_voltage_v: 12.5,
-        alternator_current_a: 50.0,
-        charging_system_voltage_v: 14.0,
-        key_switch_voltage_v: 12.0,
+        battery_voltage_v: sig(12.5),
+        alternator_current_a: sig(50.0),
+        charging_system_voltage_v: sig(14.0),
+        key_switch_voltage_v: sig(12.0),
     };
     assert_eq!(expected_vep1.encode(), vep1);
     let decoded_vep1 = Vep1::decode(&vep1).unwrap();
-    assert!((decoded_vep1.battery_voltage_v - 12.5).abs() < 0.05);
-    assert!((decoded_vep1.charging_system_voltage_v - 14.0).abs() < 0.05);
-    assert!((decoded_vep1.key_switch_voltage_v - 12.0).abs() < 0.05);
-    assert_eq!(decoded_vep1.alternator_current_a, 50.0);
+    assert_sig(decoded_vep1.battery_voltage_v, 12.5, 0.05);
+    assert_sig(decoded_vep1.charging_system_voltage_v, 14.0, 0.05);
+    assert_sig(decoded_vep1.key_switch_voltage_v, 12.0, 0.05);
+    assert_sig(decoded_vep1.alternator_current_a, 50.0, 0.0);
 
     let ambient = parse_named_hex_frame(J1939_ENGINE_POWERTRAIN_CODECS_HEX, "ambient_101_25_30_22");
     let expected_ambient = AmbientConditions {
-        barometric_pressure_kpa: 101.0,
-        ambient_air_temp_c: 25.0,
-        intake_air_temp_c: 30.0,
-        road_surface_temp_c: 22.0,
+        barometric_pressure_kpa: sig(101.0),
+        ambient_air_temp_c: sig(25.0),
+        intake_air_temp_c: sig(30.0),
+        road_surface_temp_c: sig(22.0),
     };
     assert_eq!(expected_ambient.encode(), ambient);
     let decoded_ambient = AmbientConditions::decode(&ambient).unwrap();
-    assert_eq!(decoded_ambient.barometric_pressure_kpa, 101.0);
-    assert!((decoded_ambient.ambient_air_temp_c - 25.0).abs() < 0.1);
-    assert_eq!(decoded_ambient.intake_air_temp_c, 30.0);
-    assert!((decoded_ambient.road_surface_temp_c - 22.0).abs() < 0.1);
+    assert_sig(decoded_ambient.barometric_pressure_kpa, 101.0, 0.0);
+    assert_sig(decoded_ambient.ambient_air_temp_c, 25.0, 0.1);
+    assert_sig(decoded_ambient.intake_air_temp_c, 30.0, 0.0);
+    assert_sig(decoded_ambient.road_surface_temp_c, 22.0, 0.1);
 
     let dash = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "dash_display_levels_filters_temp",
     );
     let expected_dash = DashDisplay {
-        fuel_level_percent: 200,
-        washer_fluid_level: 180,
-        fuel_filter_diff_kpa: 50.0,
-        oil_filter_diff_kpa: 25.0,
-        cargo_ambient_temp_c: 20.0,
+        fuel_level_percent: sig(80.0),
+        washer_fluid_level: sig(72.0),
+        fuel_filter_diff_kpa: sig(50.0),
+        oil_filter_diff_kpa: sig(25.0),
+        cargo_ambient_temp_c: sig(20.0),
     };
     assert_eq!(expected_dash.encode(), dash);
     let decoded_dash = DashDisplay::decode(&dash).unwrap();
-    assert_eq!(decoded_dash.fuel_level_percent, 200);
-    assert_eq!(decoded_dash.washer_fluid_level, 180);
-    assert_eq!(decoded_dash.fuel_filter_diff_kpa, 50.0);
-    assert_eq!(decoded_dash.oil_filter_diff_kpa, 25.0);
-    assert!((decoded_dash.cargo_ambient_temp_c - 20.0).abs() < 0.1);
+    assert_sig(decoded_dash.fuel_level_percent, 80.0, 0.4);
+    assert_sig(decoded_dash.washer_fluid_level, 72.0, 0.4);
+    assert_sig(decoded_dash.fuel_filter_diff_kpa, 50.0, 0.0);
+    assert_sig(decoded_dash.oil_filter_diff_kpa, 25.0, 0.0);
+    assert_sig(decoded_dash.cargo_ambient_temp_c, 20.0, 0.1);
 
     let position = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "vehicle_position_zero_zero",
     );
     let expected_position = VehiclePosition {
-        latitude_deg: 0.0,
-        longitude_deg: 0.0,
+        latitude_deg: sig(0.0),
+        longitude_deg: sig(0.0),
     };
     assert_eq!(expected_position.encode(), position);
     let decoded_position = VehiclePosition::decode(&position).unwrap();
-    assert!((decoded_position.latitude_deg - 0.0).abs() < 1e-6);
-    assert!((decoded_position.longitude_deg - 0.0).abs() < 1e-6);
+    assert_sig(decoded_position.latitude_deg, 0.0, 1e-6);
+    assert_sig(decoded_position.longitude_deg, 0.0, 1e-6);
 
     let fuel_consumption = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "fuel_consumption_250_5_12345",
     );
     let expected_consumption = FuelConsumption {
-        trip_fuel_l: 250.5,
-        total_fuel_l: 12_345.0,
+        trip_fuel_l: sig(250.5),
+        total_fuel_l: sig(12_345.0),
     };
     assert_eq!(expected_consumption.encode(), fuel_consumption);
     let decoded_consumption = FuelConsumption::decode(&fuel_consumption).unwrap();
-    assert!((decoded_consumption.trip_fuel_l - 250.5).abs() < 0.5);
-    assert!((decoded_consumption.total_fuel_l - 12_345.0).abs() < 0.5);
+    assert_sig(decoded_consumption.trip_fuel_l, 250.5, 0.5);
+    assert_sig(decoded_consumption.total_fuel_l, 12_345.0, 0.5);
 
     let aftertreatment1 = parse_named_hex_frame(
         J1939_ENGINE_POWERTRAIN_CODECS_HEX,
         "aftertreatment1_def75_nox",
     );
     let expected_at1 = Aftertreatment1 {
-        def_tank_level: 75.0,
-        intake_nox_ppm: 1500.0,
-        outlet_nox_ppm: 50.0,
+        def_tank_level: sig(75.0),
+        intake_nox_ppm: sig(1500.0),
+        outlet_nox_ppm: sig(50.0),
         intake_nox_reading_status: 1,
         outlet_nox_reading_status: 1,
     };
     assert_eq!(expected_at1.encode(), aftertreatment1);
     let decoded_at1 = Aftertreatment1::decode(&aftertreatment1).unwrap();
-    assert!((decoded_at1.def_tank_level - 75.0).abs() < 0.5);
-    assert!((decoded_at1.intake_nox_ppm - 1500.0).abs() < 0.05);
-    assert!((decoded_at1.outlet_nox_ppm - 50.0).abs() < 0.05);
+    assert_sig(decoded_at1.def_tank_level, 75.0, 0.5);
+    assert_sig(decoded_at1.intake_nox_ppm, 1500.0, 0.05);
+    assert_sig(decoded_at1.outlet_nox_ppm, 50.0, 0.05);
     assert_eq!(decoded_at1.intake_nox_reading_status, 1);
     assert_eq!(decoded_at1.outlet_nox_reading_status, 1);
 
@@ -1079,17 +1095,17 @@ fn fixture_j1939_remaining_engine_powertrain_codecs_are_stable() {
         "aftertreatment2_diff5_5_def32_5_soot75",
     );
     let expected_at2 = Aftertreatment2 {
-        dpf_differential_pressure_kpa: 5.5,
-        def_concentration: 32.5,
-        dpf_soot_load_percent: 75.0,
+        dpf_differential_pressure_kpa: sig(5.5),
+        def_concentration: sig(32.5),
+        dpf_soot_load_percent: sig(75.0),
         dpf_active_regeneration_status: 2,
         dpf_passive_regeneration_status: 1,
     };
     assert_eq!(expected_at2.encode(), aftertreatment2);
     let decoded_at2 = Aftertreatment2::decode(&aftertreatment2).unwrap();
-    assert!((decoded_at2.dpf_differential_pressure_kpa - 5.5).abs() < 0.1);
-    assert!((decoded_at2.def_concentration - 32.4).abs() < 0.1);
-    assert!((decoded_at2.dpf_soot_load_percent - 74.8).abs() < 0.5);
+    assert_sig(decoded_at2.dpf_differential_pressure_kpa, 5.5, 0.1);
+    assert_sig(decoded_at2.def_concentration, 32.4, 0.1);
+    assert_sig(decoded_at2.dpf_soot_load_percent, 74.8, 0.5);
     assert_eq!(decoded_at2.dpf_active_regeneration_status, 2);
     assert_eq!(decoded_at2.dpf_passive_regeneration_status, 1);
 

@@ -10,6 +10,18 @@ mod tests {
         Frame::from_message(Priority::Default, pgn, src, dst, &[1, 2, 3])
     }
 
+    /// An NIU configuration command addressed to a specific bridge, as
+    /// ISO 11783-4 requires for PGN 60672.
+    fn niu_command(data: Vec<u8>, source: Address, destination: Address) -> Message {
+        Message::with_addressing(
+            PGN_NIU_NETWORK_MSG,
+            data,
+            source,
+            destination,
+            Priority::Default,
+        )
+    }
+
     #[test]
     fn niu_profiles_state_behaviours_and_honest_support() {
         assert_eq!(NIU_PROFILES.len(), 4);
@@ -83,8 +95,8 @@ mod tests {
 
     #[test]
     fn block_all_default_drops_unlisted() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.start().unwrap();
         let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
         assert!(niu.process_frame(f, Side::Tractor, 0).is_none());
@@ -93,8 +105,8 @@ mod tests {
 
     #[test]
     fn block_all_with_explicit_allow_passes_listed() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, true);
         niu.start().unwrap();
 
@@ -286,14 +298,14 @@ mod tests {
 
     #[test]
     fn unidirectional_rule_only_applies_tractor_side() {
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, false); // tractor → implement only
         niu.start().unwrap();
 
         let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
         assert!(niu.process_frame(f, Side::Tractor, 0).is_some());
-        // Implement-side: rule does not apply ⇒ default mode = BlockAll → blocked.
+        // Implement-side: rule does not apply ⇒ default mode = PassSpecific → blocked.
         assert!(niu.process_frame(f, Side::Implement, 0).is_none());
     }
 
@@ -337,8 +349,8 @@ mod tests {
         let name = Name::default()
             .with_identity_number(0x3456)
             .with_manufacturer_code(0x234);
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.add_filter(FilterRule::new(PGN_DM1, ForwardPolicy::Allow, true).with_source_name(name));
         niu.start().unwrap();
 
@@ -366,8 +378,8 @@ mod tests {
         let destination_name = Name::default()
             .with_identity_number(0x6789)
             .with_manufacturer_code(0x321);
-        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockAll));
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::PassSpecific));
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.add_filter(
             FilterRule::new(PGN_REQUEST, ForwardPolicy::Allow, true)
                 .with_destination_name(destination_name),
@@ -541,7 +553,7 @@ mod tests {
 
         let before = niu.policy_snapshot();
         assert_eq!(before.name, "audit-niu");
-        assert_eq!(before.filter_mode, NiuFilterMode::PassAll);
+        assert_eq!(before.filter_mode, NiuFilterMode::BlockSpecific);
         assert!(!before.forward_global_by_default);
         assert!(before.forward_specific_by_default);
         assert_eq!(before.loop_guard_window_ms, 750);
@@ -587,7 +599,7 @@ mod tests {
     #[test]
     fn niu_msg_round_trips_through_encode_decode() {
         let msg = NiuNetworkMsg {
-            function: NiuFunction::PortStatsResponse,
+            function: NiuFunction::GeneralParametricsResponse,
             port_number: 1,
             msgs_forwarded: 0xCAFE,
             msgs_blocked: 0xBEEF,
@@ -595,7 +607,7 @@ mod tests {
         };
         let bytes = msg.encode().unwrap();
         let decoded = NiuNetworkMsg::decode(&bytes).unwrap();
-        assert_eq!(decoded.function, NiuFunction::PortStatsResponse);
+        assert_eq!(decoded.function, NiuFunction::GeneralParametricsResponse);
         assert_eq!(decoded.port_number, 1);
         assert_eq!(decoded.msgs_forwarded, 0xCAFE);
         assert_eq!(decoded.msgs_blocked, 0xBEEF);
@@ -613,7 +625,7 @@ mod tests {
         assert!(err.message.contains("PGN"));
 
         let stats = NiuNetworkMsg {
-            function: NiuFunction::PortStatsResponse,
+            function: NiuFunction::GeneralParametricsResponse,
             msgs_forwarded: u32::MAX,
             msgs_blocked: u32::from(u16::MAX) + 1,
             ..Default::default()
@@ -664,7 +676,9 @@ mod tests {
         .to_vec();
         // Pad to make a valid Message (the function only inspects the first 5 bytes here).
         payload.resize(8, 0xFF);
-        let msg = Message::new(PGN_NIU_NETWORK_MSG, payload.clone(), 0x10);
+        // ISO 11783-4: PGN 60672 is "CF to NIU, Destination-Specific", so a
+        // globally addressed configuration command is not one this NIU acts on.
+        let msg = niu_command(payload.clone(), 0x10, 0x20);
         niu.handle_niu_message(&Message::new(PGN_HEARTBEAT, payload.clone(), 0x10));
         assert!(
             niu.filters().is_empty(),
@@ -674,6 +688,184 @@ mod tests {
         niu.handle_niu_message(&msg);
         assert_eq!(niu.filters().len(), 1);
         assert_eq!(niu.filters()[0].pgn, PGN_HEARTBEAT);
+    }
+
+    /// H74 — `FilterRule` documents PGN 0 as the "any PGN" wildcard. In
+    /// block-specific mode a remote AddFilterEntry naming PGN 0 installed a
+    /// block-everything rule: one message turned the bridge into a blackhole.
+    #[test]
+    fn a_wildcard_filter_entry_from_the_bus_is_refused() {
+        let mut niu = Niu::new(NiuConfig::default().mode(NiuFilterMode::BlockSpecific));
+        niu.set_filter_mode(NiuFilterMode::BlockSpecific);
+        niu.start().unwrap();
+
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: 0,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+
+        assert!(
+            niu.filters().is_empty(),
+            "a wildcard block is an operator decision, not a peer's to assert"
+        );
+        // The bridge still forwards.
+        let f = make_frame(PGN_HEARTBEAT, 0x10, 0xFF);
+        assert!(niu.process_frame(f, Side::Tractor, 0).is_some());
+    }
+
+    /// H12 — a remote clear wiped the whole database, taking persistent
+    /// (configured-policy) rules with it. `clear_filters` already honours the
+    /// flag; the message handler bypassed it with a raw `Vec::clear`.
+    #[test]
+    fn a_remote_clear_keeps_persistent_filter_rules() {
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+
+        let mut permanent = FilterRule::new(PGN_DM1, ForwardPolicy::Block, true);
+        permanent.persistent = true;
+        niu.add_filter(permanent);
+        niu.add_filter(FilterRule::new(PGN_HEARTBEAT, ForwardPolicy::Block, true));
+        assert_eq!(niu.filters().len(), 2);
+
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::ClearFilterEntry,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+
+        assert_eq!(niu.filters().len(), 1, "the persistent rule survives");
+        assert_eq!(niu.filters()[0].pgn, PGN_DM1);
+    }
+
+    /// ISO 11783-4 lists PGN 60672 as "CF to NIU, Destination-Specific". A
+    /// globally addressed command let any CF reconfigure every NIU listening.
+    #[test]
+    fn a_globally_addressed_niu_command_is_ignored() {
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: PGN_HEARTBEAT,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+
+        niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload.clone(), 0x10));
+        assert!(niu.filters().is_empty(), "global destination is refused");
+
+        niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
+        assert_eq!(niu.filters().len(), 1, "an addressed command is honoured");
+    }
+
+    /// H15/H13 — §6.6.2.3.2 makes N.MFDB_Response variable length: byte 2 the
+    /// port pair, byte 3 the filter mode, bytes 4..n the PGN entries. It was
+    /// encoded through the 8-byte AddFilterEntry layout, which put a single PGN
+    /// where the port pair and mode belong and could not carry a second entry.
+    #[test]
+    fn mfdb_response_round_trips_its_variable_length_layout() {
+        let response = NiuFilterDbResponse {
+            from_port: 1,
+            to_port: 2,
+            filter_mode: 0x01,
+            entries: vec![PGN_HEARTBEAT, PGN_DM1, PGN_REQUEST],
+        };
+        let bytes = response.encode().unwrap();
+
+        assert_eq!(bytes[0], NiuFunction::FilterDbResponse as u8);
+        assert_eq!(bytes[1] >> 4, 1, "bits 7-4 are the From port");
+        assert_eq!(bytes[1] & 0x0F, 2, "bits 3-0 are the To port");
+        assert_eq!(bytes[2], 0x01, "byte 3 is the filter mode");
+        assert_eq!(
+            bytes.len(),
+            3 + 3 * 3,
+            "three PGN entries at three bytes each"
+        );
+        assert_eq!(NiuFilterDbResponse::decode(&bytes), Some(response));
+
+        // An empty database is a valid response.
+        let empty = NiuFilterDbResponse {
+            from_port: 0,
+            to_port: 1,
+            filter_mode: 0,
+            entries: Vec::new(),
+        };
+        assert_eq!(
+            NiuFilterDbResponse::decode(&empty.encode().unwrap()),
+            Some(empty)
+        );
+
+        // A truncated entry region is refused rather than silently dropped.
+        assert_eq!(NiuFilterDbResponse::decode(&bytes[..bytes.len() - 1]), None);
+        assert_eq!(NiuFilterDbResponse::decode(&[]), None);
+    }
+
+    /// H14 — ISO 11783-4 §6.6.2.3 says of each filter-database command that
+    /// "Acknowledgment of the command is provided with the Acknowledgment
+    /// Message (PGN 59392)". Nothing was ever emitted, so a configuring CF
+    /// could not tell an applied command from a dropped one.
+    #[test]
+    fn niu_commands_are_acknowledged_to_their_sender() {
+        use crate::j1939::acknowledgment::{AckControl, Acknowledgment};
+        use crate::net::pgn_defs::PGN_ACKNOWLEDGMENT;
+
+        let mut niu = Niu::new(NiuConfig::default());
+        niu.start().unwrap();
+        let mut payload = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: PGN_HEARTBEAT,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        payload.resize(8, 0xFF);
+
+        let reply = niu
+            .handle_niu_message(&niu_command(payload.clone(), 0x44, 0x20))
+            .expect("a command is acknowledged");
+        assert_eq!(reply.pgn, PGN_ACKNOWLEDGMENT);
+        assert_eq!(reply.destination, 0x44, "addressed back to the commander");
+        assert_eq!(reply.source, 0x20);
+        let decoded = Acknowledgment::decode(&reply.data).expect("a well-formed ACK");
+        assert_eq!(decoded.control, AckControl::PositiveAck);
+        assert_eq!(decoded.acknowledged_pgn, PGN_NIU_NETWORK_MSG);
+
+        // A refused command is NACKed, not silently dropped.
+        let mut wildcard = NiuNetworkMsg {
+            function: NiuFunction::AddFilterEntry,
+            filter_pgn: 0,
+            ..Default::default()
+        }
+        .encode()
+        .unwrap()
+        .to_vec();
+        wildcard.resize(8, 0xFF);
+        let refusal = niu
+            .handle_niu_message(&niu_command(wildcard, 0x44, 0x20))
+            .expect("a refusal is still answered");
+        assert_eq!(
+            Acknowledgment::decode(&refusal.data).unwrap().control,
+            AckControl::NegativeAck
+        );
+
+        // A globally addressed command is not this NIU's to answer at all.
+        assert!(
+            niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload, 0x44))
+                .is_none()
+        );
     }
 
     #[test]
@@ -693,12 +885,12 @@ mod tests {
             vec![0x06, 0x01, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
             vec![0x99, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
         ] {
-            niu.handle_niu_message(&Message::new(PGN_NIU_NETWORK_MSG, payload, 0x10));
+            let _ = niu.handle_niu_message(&niu_command(payload, 0x10, 0x20));
         }
 
         assert!(niu.filters().is_empty());
         assert!(captured.borrow().is_empty());
-        assert_eq!(niu.filter_mode(), NiuFilterMode::PassAll);
+        assert_eq!(niu.filter_mode(), NiuFilterMode::BlockSpecific);
     }
 
     #[test]
@@ -744,6 +936,29 @@ mod tests {
         let out = router.process_frame(f, Side::Tractor, 0).expect("forwards");
         assert_eq!(out.source(), 0x20);
         assert_eq!(out.destination(), 0x52);
+    }
+
+    /// C7 — source and destination translate independently. When only the
+    /// source had no mapping the frame was forwarded untouched, carrying the
+    /// *untranslated* destination: a destination-specific command reached
+    /// whichever CF held that address on the far segment while the intended
+    /// recipient heard nothing. If the command was a stop, the stop was lost.
+    #[test]
+    fn router_translates_destination_even_when_the_source_does_not() {
+        let mut router = Router::new(NiuConfig::default());
+        router.niu_mut().start().unwrap();
+        // Only the destination CF is known to the translation database.
+        let dest_name = Name::default().with_identity_number(0x200);
+        router.add_translation(dest_name, 0x42, 0x52).unwrap();
+
+        let f = make_frame(PGN_REQUEST, 0x10, 0x42);
+        let out = router.process_frame(f, Side::Tractor, 0).expect("forwards");
+        assert_eq!(
+            out.destination(),
+            0x52,
+            "the destination's mapping applies regardless of the source's"
+        );
+        assert_eq!(out.source(), 0x10, "an unmapped source passes through");
     }
 
     #[test]
@@ -839,7 +1054,7 @@ mod tests {
         let mut router = Router::new(
             NiuConfig::default()
                 .name("audit-router")
-                .mode(NiuFilterMode::BlockAll)
+                .mode(NiuFilterMode::PassSpecific)
                 .global_default(false)
                 .specific_default(false)
                 .loop_guard_window_ms(900)
@@ -854,7 +1069,7 @@ mod tests {
 
         let snapshot = router.policy_snapshot();
         assert_eq!(snapshot.niu.name, "audit-router");
-        assert_eq!(snapshot.niu.filter_mode, NiuFilterMode::BlockAll);
+        assert_eq!(snapshot.niu.filter_mode, NiuFilterMode::PassSpecific);
         assert!(!snapshot.niu.forward_global_by_default);
         assert!(!snapshot.niu.forward_specific_by_default);
         assert_eq!(snapshot.niu.loop_guard_window_ms, 900);

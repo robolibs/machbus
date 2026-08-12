@@ -1700,6 +1700,7 @@ fn fixture_tp_cmdt_missing_eoma_timeout_emits_golden_abort() {
 
 #[test]
 fn fixture_tp_cmdt_receive_timeout_emits_golden_abort() {
+    use machbus::net::constants::TP_TIMEOUT_T2_MS;
     let rts_id = Identifier::encode(Priority::Default, PGN_TP_CM, 0x80, 0x90);
     let rts = Frame::new(rts_id, *TP_RTS_20B_PGN_EF00, 8);
 
@@ -1708,7 +1709,7 @@ fn fixture_tp_cmdt_receive_timeout_emits_golden_abort() {
     assert_eq!(cts.len(), 1);
     assert_eq!(cts[0].data, *TP_CTS_20B_PGN_EF00);
 
-    let abort = rx.update(TP_TIMEOUT_T1_MS + 1);
+    let abort = rx.update(TP_TIMEOUT_T2_MS + 1);
     assert_eq!(abort.len(), 1);
     assert_eq!(abort[0].pgn(), PGN_TP_CM);
     assert_eq!(abort[0].source(), 0x90);

@@ -4,17 +4,34 @@
 # Classic fixed-size command/status payloads are padded with 0xFF where the
 # implementation emits reserved bytes.
 
-vt_status_vt5_no_active_ws=FEFE00FE00000500
+# Annex H.1: byte 7 is the VT busy-codes bitfield (0 = idle) and byte 8 the VT
+# function code of the command being executed, FF16 when none is. This
+# previously read ...0500, putting the VT *version* in the busy-codes byte —
+# the client then stored it as the version it advertised back.
+# Annex G.2: bytes 3-4 are the visible Data/Alarm Mask Object ID and bytes 5-6
+# the visible Soft Key Mask, "or FFFF16 if no Working Set owns the VT". These
+# four bytes used to carry the working set's source address instead, so a VT
+# with the active set at SA 0x26 announced visible-mask Object ID 0x2600.
+vt_status_vt5_no_active_ws=FEFEFFFFFFFF00FF
 working_set_master_one_member=01FFFFFFFFFFFFFF
-get_memory_valid_ws_datamask=C018000000FFFFFF
-get_memory_response_success=C00000FFFFFFFFFF
+get_memory_valid_ws_datamask=C0FF18000000FFFF
+# Annex D.3: byte 2 is the VT's ISO 11783-6 version (5 = Third Edition, the
+# server default), byte 3 the status (0 = there can be enough memory). This
+# previously read C00000..., which claimed version 0 — the 2001 Agritechnica
+# limited feature set — and matched a client that read the status out of the
+# version byte.
+get_memory_response_success=C00500FFFFFFFFFF
 object_pool_transfer_valid_ws_datamask=110100000000000001000002000000000002000100ffff0000
 object_pool_transfer_empty=11
 object_pool_transfer_partial_header=110100
 object_pool_transfer_unknown_type=110100FE0000
 end_of_object_pool_request=12FFFFFFFFFFFFFF
 end_of_object_pool_success=1200FFFFFFFF00FF
-end_of_object_pool_pool_error=1201FFFFFFFF02FF
+# C.2.5 byte 7: bit 1 = the pool references an object it does not contain,
+# bit 2 = any other error, bit 3 = the VT deleted the rejected pool. This case
+# is End of Object Pool with nothing transferred, so it is bit 2 (+ bit 3), not
+# a missing reference — which is what the old vector claimed for every failure.
+end_of_object_pool_no_pool_error=1201FFFFFFFF0CFF
 unsupported_graphics_context=FDB8FFFFFFFFFFFF
 
 client_select_input_object_1234_option02=A2341202FFFFFFFF
@@ -36,9 +53,12 @@ extended_get_versions_response_empty=D3FE00FFFFFFFFFF
 extended_get_versions_response_one_v1=D3FE015631202020202020202020202020202020202020202020202020202020202020
 extended_get_versions_response_empty_bad_tail=D3FE0000FFFFFFFF
 extended_get_versions_response_one_truncated=D3FE015631202020
-extended_store_response_success=D400FFFFFFFFFFFF
+# Annex E.13/E.15: bytes 2-5 reserved FF, byte 6 the error code (0 = success),
+# bytes 7-8 reserved FF. These vectors put the status in byte 2, which is the
+# layout the client was reading rather than the one a conformant VT sends.
+extended_store_response_success=D4FFFFFFFF00FFFF
 extended_store_response_short=D400
-extended_load_response_success=D500FFFFFFFFFFFF
+extended_load_response_success=D5FFFFFFFF00FFFF
 extended_load_response_short=D500
 
 server_button_activation_pressed_cafe_beef_key7=0101FECAEFBE07FF

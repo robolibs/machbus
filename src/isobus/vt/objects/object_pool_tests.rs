@@ -2,6 +2,63 @@
 mod tests {
     use super::*;
 
+    /// E7 — ISO 11783-6 §4.6.22.3, VT version 5 and later: "in addition to the
+    /// 8-bit Macro Object IDs, [VTs] shall support Macros with an Object ID in
+    /// the range of 0 to 65534 ... An Event ID of 255 in the first byte of the
+    /// Macro reference indicates that two groupings shall be concatenated to a
+    /// single grouping with a 16-bit Macro Object ID reference."
+    ///
+    /// The clause's own Example 2 is a Container referencing macro 7000
+    /// (0x1B58) on-hide, encoded `FF 58 04 1B`. Read as two 8-bit references it
+    /// registered two bogus triggers — event 0xFF on macro 0x58, and event 0x04
+    /// on macro 0x1B — so hiding the container executed macro 27.
+    #[test]
+    fn sixteen_bit_macro_references_round_trip() {
+        let mut container = create_container(
+            2,
+            &ContainerBody {
+                width: 20,
+                height: 10,
+                hidden: false,
+            },
+        );
+        container.add_macro(0x04, 7000);
+        let pool = ObjectPool::default().with_object(container);
+        let encoded = pool.serialize().unwrap();
+
+        // The count is in two-byte groupings, and a 16-bit reference is two.
+        assert!(
+            encoded
+                .windows(4)
+                .any(|w| w == [0xFF, 0x58, 0x04, 0x1B]),
+            "the 16-bit form is FF, low, event, high"
+        );
+
+        let decoded = ObjectPool::deserialize(&encoded).expect("round trips");
+        assert_eq!(
+            decoded.find(2u16).expect("the container").macros,
+            vec![MacroRef::new(0x04, 7000)],
+            "one reference, not two"
+        );
+
+        // An 8-bit ID still uses the compact two-byte form.
+        let mut small = create_container(
+            3,
+            &ContainerBody {
+                width: 1,
+                height: 1,
+                hidden: false,
+            },
+        );
+        small.add_macro(0x02, 0x1B);
+        let encoded = ObjectPool::default().with_object(small).serialize().unwrap();
+        let decoded = ObjectPool::deserialize(&encoded).expect("round trips");
+        assert_eq!(
+            decoded.find(3u16).expect("the container").macros,
+            vec![MacroRef::new(0x02, 0x1B)]
+        );
+    }
+
     #[test]
     fn object_id_checked_constructors_reject_unencodable_values() {
         assert_eq!(ObjectID::try_new_i32(0), Some(ObjectID(0)));

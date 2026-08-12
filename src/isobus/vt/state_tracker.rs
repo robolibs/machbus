@@ -417,39 +417,62 @@ impl VTClientStateTracker {
         true
     }
 
+    /// F.3 Hide/Show *response*: `{0xA0, id_lo, id_hi, hide_show, error, FF x3}`.
+    ///
+    /// `handle_vt_message` only accepts `PGN_VT_TO_ECU`, so what arrives here is
+    /// never the command — it is the VT's answer, whose byte 5 is the Annex F
+    /// error bitfield, not part of the reserved tail. Requiring `FF` from index
+    /// 4 therefore rejected every *successful* response the crate's own server
+    /// sends (error byte 0), so `VTClientUpdateHelper::set_visibility` never saw
+    /// a show recorded and deduped a later `hide` away, leaving an alarm overlay
+    /// on screen.
     fn handle_hide_show(&mut self, msg: &Message) -> bool {
-        if msg.data.len() != 8 || !is_canonical_bool(msg.data[3]) || !has_ff_tail(&msg.data, 4) {
+        let Some((id, flag)) = response_object_flag(msg) else {
             return false;
-        }
-        let id = ObjectID(u16_le(&msg.data[1..]));
-        let visible = msg.data[3] != 0;
-        self.visibility.insert(id, visible);
-        self.on_visibility_changed.emit(&(id, visible));
+        };
+        self.visibility.insert(id, flag);
+        self.on_visibility_changed.emit(&(id, flag));
         true
     }
 
+    /// F.5 Enable/Disable response, same shape as F.3.
     fn handle_enable_disable(&mut self, msg: &Message) -> bool {
-        if msg.data.len() != 8 || !is_canonical_bool(msg.data[3]) || !has_ff_tail(&msg.data, 4) {
+        let Some((id, flag)) = response_object_flag(msg) else {
             return false;
-        }
-        let id = ObjectID(u16_le(&msg.data[1..]));
-        let enabled = msg.data[3] != 0;
-        self.enable_state.insert(id, enabled);
-        self.on_enable_state_changed.emit(&(id, enabled));
+        };
+        self.enable_state.insert(id, flag);
+        self.on_enable_state_changed.emit(&(id, flag));
         true
     }
 
+    /// F.35 Change Active Mask *response*: `{0xAD, ws_lo, ws_hi, error, FF x4}`.
+    ///
+    /// The echoed pair is the Working Set Object ID, not the new mask, so this
+    /// response cannot tell the tracker which mask is now active. Reading bytes
+    /// 4-5 as a mask meant every successful change set `active_data_mask` to
+    /// `0xFF00` — with the error byte as its low half — and fired
+    /// `on_active_mask_changed` with it, until the next VT Status corrected it a
+    /// second later: a per-command oscillation on a public accessor. The
+    /// authoritative active mask arrives in that VT Status (Annex G.2), which
+    /// this tracker already decodes, so acknowledge the response and change
+    /// nothing.
     fn handle_change_active_mask(&mut self, msg: &Message) -> bool {
-        if msg.data.len() != 8 || !has_ff_tail(&msg.data, 5) {
-            return false;
-        }
-        let new_mask = ObjectID(u16_le(&msg.data[3..]));
-        if new_mask != self.active_data_mask {
-            self.active_data_mask = new_mask;
-            self.on_active_mask_changed.emit(&self.active_data_mask);
-        }
-        true
+        msg.data.len() == 8 && msg.data[3] == 0 && has_ff_tail(&msg.data, 4)
     }
+}
+
+/// Decode an Annex F response that echoes an Object ID and one flag byte, with
+/// the error bitfield in byte 5. `None` when the shape is wrong or the VT
+/// reported an error — a refused command must not update cached state.
+fn response_object_flag(msg: &Message) -> Option<(ObjectID, bool)> {
+    if msg.data.len() != 8
+        || !is_canonical_bool(msg.data[3])
+        || msg.data[4] != 0
+        || !has_ff_tail(&msg.data, 5)
+    {
+        return None;
+    }
+    Some((ObjectID(u16_le(&msg.data[1..])), msg.data[3] != 0))
 }
 
 #[inline]
@@ -621,25 +644,37 @@ mod tests {
         assert_eq!(t.active_alarm_mask(), 2);
     }
 
+    /// C4 — these are VT→ECU **responses** (F.3 / F.5), so byte 5 is the error
+    /// bitfield and only bytes 6-8 are the reserved tail. The old fixtures were
+    /// built in the *command* shape with `FF` at byte 5, which is exactly the
+    /// frame the crate's own server never sends: on success it puts 0 there.
     #[test]
     fn hide_show_and_enable_disable_round_trip() {
         let mut t = VTClientStateTracker::new();
         let mut hide = vec![cmd::HIDE_SHOW];
-        hide.extend_from_slice(&[0x10, 0x00, 0x01]);
-        hide.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        hide.extend_from_slice(&[0x10, 0x00, 0x01, 0x00]);
+        hide.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
         t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, hide, 0x10));
         assert_eq!(t.is_visible(0x10), Some(true));
 
         let mut en = vec![cmd::ENABLE_DISABLE];
-        en.extend_from_slice(&[0x20, 0x00, 0x00]);
-        en.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        en.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]);
+        en.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
         t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, en, 0x10));
         assert_eq!(t.is_enabled(0x20), Some(false));
 
-        let mut malformed_hide = vec![cmd::HIDE_SHOW];
-        malformed_hide.extend_from_slice(&[0x11, 0x00, 0x01, 0x00, 0xFF, 0xFF, 0xFF]);
-        t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, malformed_hide, 0x10));
+        // A response the VT refused: the error byte is set, so the cache must
+        // not record the change the command asked for.
+        let mut refused = vec![cmd::HIDE_SHOW];
+        refused.extend_from_slice(&[0x11, 0x00, 0x01, 0x02]);
+        refused.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
+        t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, refused, 0x10));
         assert_eq!(t.is_visible(0x11), None);
+
+        let mut malformed_hide = vec![cmd::HIDE_SHOW];
+        malformed_hide.extend_from_slice(&[0x12, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xFF]);
+        t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, malformed_hide, 0x10));
+        assert_eq!(t.is_visible(0x12), None);
     }
 
     #[test]
@@ -651,18 +686,56 @@ mod tests {
         assert_eq!(t.vt_address(), 0x10);
 
         let mut bad_hide = vec![cmd::HIDE_SHOW];
-        bad_hide.extend_from_slice(&[0x10, 0x00, 0x02]);
-        bad_hide.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        bad_hide.extend_from_slice(&[0x10, 0x00, 0x02, 0x00]);
+        bad_hide.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
         t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, bad_hide, 0x20));
         assert_eq!(t.is_visible(0x10), Some(true));
         assert_eq!(t.vt_address(), 0x10);
 
         let mut bad_enable = vec![cmd::ENABLE_DISABLE];
-        bad_enable.extend_from_slice(&[0x20, 0x00, 0x7F]);
-        bad_enable.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        bad_enable.extend_from_slice(&[0x20, 0x00, 0x7F, 0x00]);
+        bad_enable.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
         t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, bad_enable, 0x30));
         assert_eq!(t.is_enabled(0x20), Some(false));
         assert_eq!(t.vt_address(), 0x10);
+    }
+
+    /// C4 — a successful F.35 response echoes the *Working Set* Object ID and
+    /// puts the error bitfield in byte 4. Reading bytes 4-5 as the new mask set
+    /// `active_data_mask` to `0xFF00` after every successful change and fired
+    /// `on_active_mask_changed` with it, until the next VT Status corrected it a
+    /// second later.
+    #[test]
+    fn a_change_active_mask_response_does_not_move_the_active_mask() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut t = VTClientStateTracker::new();
+        t.handle_vt_message(&vt_status(0x0064, 0x00C8, 0));
+        assert_eq!(t.active_data_mask(), 0x0064);
+
+        let seen: Rc<RefCell<Vec<ObjectID>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        t.on_active_mask_changed
+            .subscribe(move |&mask| log.borrow_mut().push(mask));
+
+        // Working Set 0x0001 echoed, error byte 0: the change succeeded.
+        let mut ok = vec![cmd::CHANGE_ACTIVE_MASK];
+        ok.extend_from_slice(&[0x01, 0x00, 0x00]);
+        ok.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        t.handle_vt_message(&Message::new(PGN_VT_TO_ECU, ok, 0x26));
+
+        assert_eq!(
+            t.active_data_mask(),
+            0x0064,
+            "the response carries no mask; the VT Status is authoritative"
+        );
+        assert!(
+            seen.borrow().is_empty(),
+            "no mask change happened, so no event should fire, got {:?}",
+            seen.borrow()
+        );
+        assert_eq!(t.vt_address(), 0x26, "the response is still accepted");
     }
 
     #[test]

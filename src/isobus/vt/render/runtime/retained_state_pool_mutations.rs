@@ -1090,7 +1090,11 @@ fn generic_attribute_update_is_valid(
             reference != ObjectID::NULL
                 && pool_reference_has_type(pool, reference, ObjectType::FontAttributes)
         }
-        (ObjectType::OutputString, 5) => value <= 0x03,
+        // Same three option bits as Input String AID 6: transparent
+        // background, auto-wrap, wrap on hyphen (VT4+). Refusing bit 2 here
+        // while accepting it on Input String is the same contradiction the
+        // codec carried.
+        (ObjectType::OutputString, 5) => value <= 0x07,
         (ObjectType::OutputString, 6) | (ObjectType::InputString, 7) => {
             pool_reference_has_type(pool, reference, ObjectType::StringVariable)
         }
@@ -1169,7 +1173,9 @@ fn generic_attribute_update_is_valid(
         (ObjectType::Ellipse, 5 | 6)
         | (ObjectType::Meter, 7 | 8)
         | (ObjectType::ArchedBarGraph, 6 | 7) => value <= 180,
-        (ObjectType::Meter, 5) => value <= 0x01,
+        // Meter options are bits 0-3, matching the sibling gauges; the
+        // single-bit gate refused a runtime border/tick change outright.
+        (ObjectType::Meter, 5) => value <= 0x0F,
         (ObjectType::Meter, 9 | 10) => value <= u32::from(u16::MAX),
         (ObjectType::LinearBarGraph, 5) => value <= 0x3F,
         (ObjectType::LinearBarGraph, 7 | 8) => value <= u32::from(u16::MAX),

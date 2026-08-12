@@ -1676,3 +1676,121 @@ fn vt_object_pool_validation_checks_fill_attribute_pattern_reference_type_and_ro
         "FillAttributes fill pattern references must point at PictureGraphic objects or NULL"
     );
 }
+
+/// I2 — Output String (Type 11) carries the same three option bits as Input
+/// String (Type 8): bit 0 transparent background, bit 1 auto-wrap, bit 2 wrap
+/// on hyphen (VT4+). The crate documented and accepted bit 2 on Input String
+/// and stopped at bit 1 on Output String, so any VT4+ working set that set
+/// wrap-on-hyphen on an Output String — a long designator in a narrow field,
+/// exactly what the bit exists for — uploaded a pool that deserialized and then
+/// failed `validate()`. `handle_end_of_pool` maps that to `Malformed`: the
+/// whole pool is deleted and End of Object Pool NAKed, with a diagnostic naming
+/// the wrong cause. The encoder refused the bit too, so a machbus-built pool
+/// could not express on an Output String what it could on an Input String.
+#[test]
+fn output_string_accepts_the_wrap_on_hyphen_option_bit() {
+    for options in 0..=0x07u8 {
+        let body = OutputStringBody {
+            width: 100,
+            height: 20,
+            options,
+            value: b"a-long-designator".to_vec(),
+            ..OutputStringBody::default()
+        };
+        let encoded = body.encode().unwrap_or_else(|e| {
+            panic!("Output String options {options:#04X} must encode: {e:?}")
+        });
+        assert_eq!(
+            OutputStringBody::decode(&encoded).expect("round trips"),
+            body
+        );
+
+        // And the object survives the pool validation that gates End of Pool.
+        let pool = ObjectPool::default()
+            .with_object(create_working_set(1, &WorkingSetBody::default()).with_children([2u16]))
+            .with_object(create_data_mask(2, &DataMaskBody::default()).with_children([31u16]))
+            .with_object(create_output_string(31, &body).unwrap());
+        assert!(
+            pool.validate().is_ok(),
+            "Output String options {options:#04X} must not delete the whole pool"
+        );
+    }
+
+    // Bits 3-7 are still reserved.
+    let reserved = OutputStringBody {
+        options: 0x08,
+        ..OutputStringBody::default()
+    };
+    assert!(reserved.encode().is_err());
+}
+
+/// I1 — a Meter with any option bit above bit 0 deserialized (the walker is
+/// length-driven) and then failed `validate()`, which `handle_end_of_pool` maps
+/// to `Malformed`: the client's pool is reset, End of Object Pool is NAKed and
+/// the operator gets no interface at all from that implement. Both sibling
+/// gauges in the same family carry multi-bit masks — Linear Bar Graph `0x3F`,
+/// Arched Bar Graph `0x1F` — so a single-bit Meter was the odd one out.
+#[test]
+fn a_meter_with_option_bits_does_not_destroy_the_pool() {
+    for options in 0..=0x0Fu8 {
+        let body = MeterBody {
+            width: 60,
+            number_of_ticks: 5,
+            options,
+            max_value: 100,
+            ..MeterBody::default()
+        };
+        let encoded = body
+            .encode()
+            .unwrap_or_else(|e| panic!("Meter options {options:#04X} must encode: {e:?}"));
+        assert_eq!(MeterBody::decode(&encoded).expect("round trips"), body);
+
+        let pool = ObjectPool::default()
+            .with_object(create_working_set(1, &WorkingSetBody::default()).with_children([2u16]))
+            .with_object(create_data_mask(2, &DataMaskBody::default()).with_children([29u16]))
+            .with_object(create_meter(29, &body).unwrap());
+        assert!(
+            pool.validate().is_ok(),
+            "Meter options {options:#04X} must not delete the whole pool"
+        );
+    }
+
+    // Bits 4-7 are still reserved.
+    let reserved = MeterBody {
+        options: 0x10,
+        ..MeterBody::default()
+    };
+    assert!(reserved.encode().is_err());
+}
+
+/// I3 — §4.6.22.3: "An Event ID of 255 in the first byte of the Macro reference
+/// indicates that two groupings shall be concatenated to a single grouping with
+/// a 16-bit Macro Object ID reference." The count field counts groupings, so a
+/// 16-bit reference costs two. Clamping the count to 255 made the header lie:
+/// 130 references above ID 255 declared 255 groupings (510 bytes) and then
+/// wrote 520, so every receiver — including this crate's own
+/// `object_body_total_len` — resumed parsing ten bytes early and the rest of
+/// the pool decoded as garbage.
+#[test]
+fn an_object_whose_macro_groupings_overflow_the_count_field_is_refused() {
+    let mut object = create_output_rectangle(60, &OutputRectangleBody::default()).unwrap();
+    for i in 0..130u16 {
+        object.add_macro(1, 300 + i);
+    }
+    assert!(
+        object.serialize().is_err(),
+        "260 groupings cannot be described by a one-byte count"
+    );
+
+    // 127 sixteen-bit references are 254 groupings, which still fits, and the
+    // declared count must match the bytes written.
+    let mut fits = create_output_rectangle(61, &OutputRectangleBody::default()).unwrap();
+    for i in 0..127u16 {
+        fits.add_macro(1, 300 + i);
+    }
+    let bytes = fits.serialize().expect("254 groupings fit");
+    let declared = *bytes.last_chunk::<{ 254 * 2 + 1 }>().expect("macro tail")
+        .first()
+        .expect("count byte");
+    assert_eq!(declared, 254, "the count field describes groupings");
+}

@@ -2,20 +2,32 @@
 # The object-pool transfer payload is the TC Object Pool Transfer command byte
 # followed by the DDOP byte stream from tc_ddop.hex.
 
-object_pool_transfer_sprayer_one_section=61000100075370726179657203312E3007534E2D313233340102030405060708090A0B0C0D0E010200040253310500010002000A001400020A00341205FFFF03504431031400CDABD6FFFFFFFFFF0550726F7031041E00640000006F12833A03016D
+# Derived: the Object Pool Transfer command byte followed by the DDOP in
+# tc_ddop.hex, which moved its DeviceObject to ObjectId 0 and gained the
+# A.3 device-type root element.
+object_pool_transfer_sprayer_one_section=614456430000075370726179657203312E30000000000000000007534E2D313233340102030405060708090A0B0C0D0E44455401000107537072617965720000000000004445540200040253310500010002000A0014004450440A003412000503504431FFFF4450541400CDABD6FFFFFF0550726F7031FFFF4456501E00640000006F12833A03016D
 malformed_version_response_short=1004FF0000
 malformed_version_response_bad_padding=1004FF00FF010803
 object_pool_response_success=7100FFFFFFFFFFFF
 object_pool_response_error=7104FFFFFFFFFFFF
 malformed_object_pool_response_short=7100
-malformed_object_pool_response_bad_padding=710000FFFFFFFFFF
+# B.6.9 Object-pool Transfer Response: byte 2 error code, bytes 3-6 received
+# data size, bytes 7-8 reserved FF16. Byte 7 is zeroed here, which is the only
+# padding this message actually constrains. This previously zeroed byte 3 —
+# part of the size field — and so pinned a guard that rejected every conformant
+# TC response.
+malformed_object_pool_response_bad_padding=710000FFFFFF00FF
 activate_pool_request=81FFFFFFFFFFFFFF
 malformed_activate_pool_short=81
 malformed_activate_pool_bad_padding=81FFFFFF00FFFFFF
 activate_pool_response_success=9100FFFFFFFFFFFF
 activate_pool_response_ddop_error=9101FFFFFFFFFFFF
 malformed_activate_response_short=9100
-malformed_activate_response_bad_padding=910000FFFFFFFFFF
+# B.6.11 Object-pool Activate/Deactivate Response: byte 2 error codes, bytes
+# 3-4 parent object ID of the faulty object, bytes 5-6 the faulty object ID,
+# byte 7 object-pool error codes, byte 8 "Reserved, transmit as FF16". Byte 8
+# is zeroed here — the only padding this message constrains.
+malformed_activate_response_bad_padding=910000FFFFFFFF00
 deactivate_pool_request=8100FFFFFFFFFFFF
 malformed_deactivate_pool_short=8100
 malformed_deactivate_pool_bad_padding=8100FFFF00FFFFFF

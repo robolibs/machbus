@@ -295,12 +295,14 @@ bool machbus_session_fs_client_write(MachbusSession *h,
                                      uint8_t *out_tan);
 
 /**
- * Seek an open file handle to `position`. Writes the request TAN into
+ * Move an open file handle's pointer by a signed `offset` relative to `mode`
+ * (0 start, 1 current, 2 end; ISO 11783-13 B.17). Writes the request TAN into
  * `out_tan`. Requires FS client.
  */
 bool machbus_session_fs_client_seek(MachbusSession *h,
                                     uint8_t file_handle,
-                                    uint32_t position,
+                                    uint8_t mode,
+                                    int32_t offset,
                                     uint8_t *out_tan);
 
 /**
@@ -922,9 +924,16 @@ MachbusDdop *machbus_ddop_new(void);
 void machbus_ddop_free(MachbusDdop *h);
 
 /**
- * Add a Device object. `id` 0 = auto-assign; `designator` is required
- * (non-empty ASCII). `software_version` / `serial_number` may be NULL.
- * Returns the assigned ObjectID, or -1 on error.
+ * Add the DDOP's single Device object. `id` is ignored: ISO 11783-10 Annex A.7
+ * Figure A.1 labels the DeviceObject node `ObjectId = 0`, and `validate()`
+ * enforces it, so the id is not the caller's to choose. Returns 0, or -1 on
+ * error.
+ *
+ * `id` used to feed the shared auto-assign path, where 0 means "pick one", so
+ * a caller who added a value presentation or process-data object first — the
+ * natural order, since process data references presentations — put the device
+ * on ObjectId 1 and got an opaque "DDOP validation failed" from
+ * `machbus_session_tc_connect`.
  */
 int32_t machbus_ddop_add_device(MachbusDdop *h,
                                 uint16_t id,

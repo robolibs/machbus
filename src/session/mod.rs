@@ -49,17 +49,19 @@ pub use plugin::{Plugin, PluginCtx};
 // The public event surface — `session` is the single facade, so the unified
 // event enum and every subsystem event type are re-exported here.
 pub use sys::{
-    AuxiliaryEvent, BusEvent, ClaimEvent, DiagEvent, DmMemoryEvent, Event, EventQueue, FsEvent,
-    FsServerEvent, GnssEvent, GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent,
-    LanguageCommandEvent, MaintainPowerEvent, OverflowPolicy, PowertrainEvent, PowertrainSnapshot,
-    Pto, ScEvent, ShortcutButtonEvent, TcEvent, TcServerEvent, TimEvent, VtEvent, VtServerEvent,
+    AutodriveRefusal, AutomationStatus, AuxiliaryEvent, BusEvent, ClaimEvent, DiagEvent,
+    DmMemoryEvent, DriveCommand, Event, EventQueue, FsEvent, FsServerEvent, GnssEvent,
+    GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent, LanguageCommandEvent, MaintainPowerEvent,
+    OverflowPolicy, PowertrainEvent, PowertrainSnapshot, Pto, SafeStopTrigger, ScEvent,
+    ShortcutButtonEvent, StopLatch, TcEvent, TcServerEvent, TimEvent, VtEvent, VtServerEvent,
 };
 
 use plugin::{CtxAction, SendCmd};
 
 use crate::net::can_adapter;
 use crate::net::{
-    Address, ClaimState, Error, Frame, IsoNet, Message, NULL_ADDRESS, Name, NetworkConfig, Result,
+    Address, ClaimState, Error, Frame, IsoNet, Message, NULL_ADDRESS, Name, NetworkConfig, Pgn,
+    Result,
 };
 use crate::time::Instant;
 use alloc::{boxed::Box, collections::VecDeque, rc::Rc, vec::Vec};
@@ -88,15 +90,31 @@ impl can_adapter::Link for NullLink {
     }
 }
 
+/// How many times [`Session::dispatch_events`] re-runs to deliver events a
+/// plugin emitted while reacting to another event.
+const MAX_EVENT_DISPATCH_ROUNDS: usize = 8;
+
 /// The sans-IO protocol core. See the [module docs](self).
 pub struct Session {
     net: IsoNet<NullLink>,
     cf: crate::net::InternalCfHandle,
     plugins: Vec<Box<dyn Plugin>>,
     inbox: Rc<RefCell<VecDeque<Message>>>,
+    /// Source addresses seen violating our claim, queued by the network layer.
+    violations: Rc<RefCell<Vec<Address>>>,
     events: VecDeque<Event>,
+    /// Events observed but not yet shown to the plugins. Everything the session
+    /// produces lands here first so a subsystem can react before the
+    /// application sees it; [`Session::dispatch_events`] drains it into
+    /// `events`.
+    pending: VecDeque<Event>,
     last_tick: Option<Instant>,
     last_claim: ClaimState,
+    /// Address held while `last_claim` was `Claimed`, so a later loss can
+    /// report which address went away.
+    last_claimed_address: Address,
+    /// Earliest wake-up any plugin asked for on the last [`Session::tick`].
+    next_deadline: Option<Instant>,
 }
 
 impl Session {
@@ -141,6 +159,7 @@ impl Session {
         self.net.feed(frame, port);
         self.route_inbox(now);
         self.detect_claim();
+        self.dispatch_events(now);
     }
 
     /// Advance timers to `now` without new input.
@@ -151,16 +170,61 @@ impl Session {
         // Drive plugin cadences.
         let addr = self.address();
         let name = self.local_name();
+        let claimed = self.is_claimed();
         let mut sends = Vec::new();
         let mut actions = Vec::new();
+        let mut deadline: Option<Instant> = None;
         for plugin in &mut self.plugins {
-            let mut ctx =
-                PluginCtx::new(addr, name, now, &mut sends, &mut self.events, &mut actions);
-            plugin.on_tick(&mut ctx);
+            let mut ctx = PluginCtx::new(
+                addr,
+                name,
+                now,
+                claimed,
+                &mut sends,
+                &mut self.pending,
+                &mut actions,
+            );
+            if let Some(at) = plugin.on_tick(&mut ctx) {
+                deadline = Some(deadline.map_or(at, |cur: Instant| cur.min(at)));
+            }
         }
+        self.next_deadline = deadline;
         self.flush(sends);
         self.apply_actions(actions);
+        self.raise_address_violation_dtcs();
         self.detect_claim();
+        self.dispatch_events(now);
+    }
+
+    /// Turn queued address violations into active DTCs so they appear in the
+    /// next DM1, per ISO 11783-5 §4.4.4.3.
+    fn raise_address_violation_dtcs(&mut self) {
+        let pending: Vec<Address> = core::mem::take(&mut *self.violations.borrow_mut());
+        if pending.is_empty() {
+            return;
+        }
+        for source in pending {
+            let dtc = crate::j1939::diagnostic::Dtc::address_violation(source);
+            if let Some(diagnostics) = self.get_mut::<plugins::Diagnostics>() {
+                diagnostics.raise(dtc);
+            } else {
+                // No diagnostics plugged: still surface it, so the violation is
+                // not silently lost.
+                self.pending
+                    .push_back(Event::Diag(sys::DiagEvent::Raised(dtc)));
+            }
+        }
+    }
+
+    /// Earliest instant a plugged subsystem asked to be ticked again, as of the
+    /// last [`Self::tick`].
+    ///
+    /// This is **advisory**: a host loop may sleep until this instant to avoid
+    /// spinning, but ticking more often is always safe and ticking later only
+    /// makes cadences late. `None` means no subsystem has pending work.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.next_deadline
     }
 
     // ── outputs ──
@@ -168,6 +232,53 @@ impl Session {
     /// Next `(port, frame)` the core wants to transmit, or `None` when drained.
     pub fn poll_transmit(&mut self) -> Option<(u8, Frame)> {
         self.net.take_outbound()
+    }
+
+    /// Queue an event from outside the plugin set (the driver uses this for
+    /// bus-level conditions it observes on the transport, such as bus-off).
+    pub(crate) fn push_event(&mut self, event: Event) {
+        self.pending.push_back(event);
+    }
+
+    /// Show every newly observed event to the plugins, then hand it to the
+    /// application queue.
+    ///
+    /// A plugin may emit while reacting, so this runs in rounds; the cap stops
+    /// two plugins echoing each other forever. Whatever is still queued when the
+    /// cap is reached is delivered to the application undispatched rather than
+    /// dropped — losing a safety event is worse than delivering it late.
+    fn dispatch_events(&mut self, now: Instant) {
+        let addr = self.address();
+        let name = self.local_name();
+        let claimed = self.is_claimed();
+        for _ in 0..MAX_EVENT_DISPATCH_ROUNDS {
+            if self.pending.is_empty() {
+                break;
+            }
+            let round: Vec<Event> = self.pending.drain(..).collect();
+            let mut sends = Vec::new();
+            let mut actions = Vec::new();
+            for event in round {
+                for plugin in &mut self.plugins {
+                    let mut ctx = PluginCtx::new(
+                        addr,
+                        name,
+                        now,
+                        claimed,
+                        &mut sends,
+                        &mut self.pending,
+                        &mut actions,
+                    );
+                    plugin.on_event(&event, &mut ctx);
+                }
+                self.events.push_back(event);
+            }
+            self.flush(sends);
+            self.apply_actions(actions);
+        }
+        while let Some(event) = self.pending.pop_front() {
+            self.events.push_back(event);
+        }
     }
 
     /// Next application event, or `None` when drained.
@@ -237,13 +348,33 @@ impl Session {
     }
 
     fn advance_time(&mut self, now: Instant) {
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        // Always drive the network on the first call (to kick off timers) and
-        // whenever wall time advanced.
-        if self.last_tick.is_none() || elapsed > 0 {
-            self.net.update(elapsed);
+        let Some(last) = self.last_tick else {
+            // First call: kick off timers without consuming any time.
+            self.net.update(0);
+            self.last_tick = Some(now);
+            return;
+        };
+
+        // A non-monotonic clock would otherwise saturate to a 0 ms delta and
+        // stall every timer silently. Surface it and resynchronise instead.
+        if now.as_micros() < last.as_micros() {
+            self.pending
+                .push_back(Event::Bus(BusEvent::ClockWentBackwards {
+                    by_micros: last.as_micros() - now.as_micros(),
+                }));
+            self.last_tick = Some(now);
+            return;
         }
-        self.last_tick = Some(now);
+
+        let elapsed = now.millis_since(last);
+        if elapsed > 0 {
+            self.net.update(elapsed);
+            // Advance only by the milliseconds actually consumed so the
+            // sub-millisecond remainder survives into the next call. Setting
+            // `last_tick = now` here would discard it, and a pump faster than
+            // 1 kHz would then never accumulate a whole millisecond.
+            self.last_tick = Some(last.add_millis(u64::from(elapsed)));
+        }
     }
 
     fn route_inbox(&mut self, now: Instant) {
@@ -253,12 +384,20 @@ impl Session {
             };
             let addr = self.address();
             let name = self.local_name();
+            let claimed = self.is_claimed();
             let mut sends = Vec::new();
             let mut actions = Vec::new();
             for plugin in &mut self.plugins {
                 if plugin.interests().contains(&msg.pgn) {
-                    let mut ctx =
-                        PluginCtx::new(addr, name, now, &mut sends, &mut self.events, &mut actions);
+                    let mut ctx = PluginCtx::new(
+                        addr,
+                        name,
+                        now,
+                        claimed,
+                        &mut sends,
+                        &mut self.pending,
+                        &mut actions,
+                    );
                     plugin.on_frame(&msg, &mut ctx);
                 }
             }
@@ -269,9 +408,20 @@ impl Session {
 
     fn flush(&mut self, sends: Vec<SendCmd>) {
         for cmd in sends {
-            let _ = self
+            // A send refused because the CF has not claimed an address used to
+            // vanish here. Safety-relevant subsystems queue commands through
+            // this path, so a silent drop lets an application believe it is
+            // steering while nothing reaches the bus.
+            if self
                 .net
-                .send(cmd.pgn, &cmd.data, self.cf, cmd.dst, cmd.prio);
+                .send(cmd.pgn, &cmd.data, self.cf, cmd.dst, cmd.prio)
+                .is_err()
+            {
+                self.pending.push_back(Event::Bus(BusEvent::SendFailed {
+                    pgn: cmd.pgn,
+                    dst: cmd.dst,
+                }));
+            }
         }
     }
 
@@ -296,15 +446,35 @@ impl Session {
 
     fn detect_claim(&mut self) {
         let state = self.claim_state();
-        if state != self.last_claim {
-            if state == ClaimState::Claimed {
-                self.events
+        if state == self.last_claim {
+            return;
+        }
+
+        match state {
+            ClaimState::Claimed => {
+                self.pending
                     .push_back(Event::AddressClaim(ClaimEvent::Claimed {
                         address: self.address(),
                     }));
             }
-            self.last_claim = state;
+            // Leaving Claimed means arbitration was lost or the CF went off
+            // the bus. Either way anything queued from here on is dropped by
+            // `flush`, so the application has to know.
+            _ if self.last_claim == ClaimState::Claimed => {
+                self.pending.push_back(Event::AddressClaim(match state {
+                    ClaimState::None => ClaimEvent::Disconnected,
+                    _ => ClaimEvent::Lost {
+                        previous_address: self.last_claimed_address,
+                    },
+                }));
+            }
+            _ => {}
         }
+
+        if state == ClaimState::Claimed {
+            self.last_claimed_address = self.address();
+        }
+        self.last_claim = state;
     }
 }
 
@@ -365,6 +535,25 @@ impl SessionBuilder {
             seen.push(tid);
         }
 
+        // Two authors of one command PGN from a single source address means a
+        // safe stop commanded by one is overwritten by the other. Rejecting the
+        // combination is the only way to make that unassemblable; checking only
+        // for duplicate types let `Guidance` and `AutoDrive` both drive 0xAD00.
+        let mut claimed: Vec<(Pgn, &'static str)> = Vec::new();
+        for plugin in &self.plugins {
+            for &pgn in plugin.transmits() {
+                if let Some((_, other)) = claimed.iter().find(|(p, _)| *p == pgn) {
+                    return Err(Error::invalid_state(alloc::format!(
+                        "plugins '{}' and '{}' both transmit PGN 0x{pgn:04X}: \
+                         one command PGN may have only one author",
+                        other,
+                        plugin.name(),
+                    )));
+                }
+                claimed.push((pgn, plugin.name()));
+            }
+        }
+
         let mut net = IsoNet::<NullLink>::new(self.config);
         net.set_capture_outbound(true);
         let cf = net.create_internal(self.name, 0, self.preferred)?;
@@ -384,14 +573,29 @@ impl SessionBuilder {
                 .subscribe(move |m| q.borrow_mut().push_back(m.clone()));
         }
 
+        // ISO 11783-5 §4.4.4.3 requires an address violation to activate a DTC
+        // (SPN 2000 + SA, FMI 31). The network layer detected violations and
+        // emitted an event that nothing consumed, and `Dtc::address_violation`
+        // had no callers at all.
+        let violations: Rc<RefCell<Vec<Address>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let q = violations.clone();
+            net.on_address_violation
+                .subscribe(move |sa| q.borrow_mut().push(*sa));
+        }
+
         Ok(Session {
             net,
             cf,
             plugins: self.plugins,
             inbox,
+            violations,
             events: VecDeque::new(),
+            pending: VecDeque::new(),
             last_tick: None,
             last_claim: ClaimState::None,
+            last_claimed_address: crate::net::NULL_ADDRESS,
+            next_deadline: None,
         })
     }
 }
@@ -408,6 +612,796 @@ mod tests {
             .with_identity_number(identity)
             .with_function_code(0x80)
             .with_self_configurable(true)
+    }
+
+    /// F0.3 — `flush` used to swallow the send error, so an application could
+    /// command steering before the address claim completed and observe nothing
+    /// at all: no error, no event, and no frame on the bus.
+    #[test]
+    fn send_refused_before_claim_is_reported() {
+        use super::plugins::AutoDrive;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        let mut session = Session::builder(test_name(23), 0x80)
+            .plug(AutoDrive::new())
+            .build()
+            .unwrap();
+        // Deliberately not claimed: no `start()`, no ticks to completion.
+        // The command is refused before it can be queued (no link, not active),
+        // which is itself the point: nothing reaches the bus.
+        let _ = session
+            .get_mut::<AutoDrive>()
+            .unwrap()
+            .command(DriveCommand::steer(20.0));
+        session.tick(Instant::from_millis(10));
+
+        assert!(
+            !session.is_claimed(),
+            "precondition: the CF has not claimed an address"
+        );
+        // The controller must not queue a frame it knows cannot reach the bus.
+        // It used to queue one, have it refused, and still clear `dirty` and
+        // advance the cadence — so the first real command was delayed by up to
+        // MAX_TX_INTERVAL_MS after the claim finally completed.
+        let refused = std::iter::from_fn(|| session.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Bus(BusEvent::SendFailed { pgn, .. }) if pgn == PGN_GUIDANCE_SYSTEM_CMD
+            )
+        });
+        assert!(
+            !refused,
+            "a guidance command must not be queued before the claim completes"
+        );
+
+        // The raw escape hatch has no such gate, and must refuse rather than
+        // silently drop: this is the path an application drives directly.
+        assert!(
+            session
+                .send_raw(
+                    PGN_GUIDANCE_SYSTEM_CMD,
+                    &[0u8; 8],
+                    crate::net::BROADCAST_ADDRESS,
+                    crate::net::Priority::Normal,
+                )
+                .is_err(),
+            "a raw send without an address must report the refusal to its caller"
+        );
+    }
+
+    /// P1.8 — the fix-quality signal was decoded and reached no consumer, so a
+    /// receiver reporting no usable fix left the autonomy path free to steer.
+    /// Here nothing has yet reported a method, which is exactly the state a
+    /// machine must not drive in.
+    #[test]
+    fn an_unusable_gnss_fix_stops_the_autonomy_path() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::geo::Wgs;
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_RAPID;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+        use crate::session::sys::GnssEvent;
+
+        let mut session = Session::builder(test_name(29), 0x80)
+            .plug(AutoDrive::new())
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let pos = GNSSPosition {
+            wgs: Wgs::new(52.0, 5.0, 0.0),
+            ..Default::default()
+        };
+        let frame = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_GNSS_POSITION_RAPID,
+                0x1C,
+                BROADCAST_ADDRESS,
+            ),
+            {
+                let mut d = [0xFFu8; 8];
+                d.copy_from_slice(&NMEAInterface::build_position(&pos));
+                d
+            },
+            8,
+        );
+
+        let mut now = Instant::from_millis(10_000);
+        session.feed(0, &frame, now);
+        while session.poll_event().is_some() {}
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(|g| !g.is_position_stale()),
+            "precondition: a fresh position is not stale"
+        );
+
+        // No 129029 has reported a method, so the cached fix is `NoFix`.
+        assert!(
+            session.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "a position with no reported method is not steerable"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "fix quality must reach the autonomy path, not just the event queue"
+        );
+
+        // And the receiver going quiet is reported in its own right.
+        let mut saw_stale = false;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while let Some(ev) = session.poll_event() {
+                if matches!(ev, Event::Gnss(GnssEvent::PositionStale { .. })) {
+                    saw_stale = true;
+                }
+            }
+        }
+        assert!(saw_stale, "a silent receiver must be reported as stale");
+        assert!(session.get::<Gnss>().is_some_and(Gnss::is_position_stale));
+    }
+
+    /// J2/J3 — the fix *quality* signal only exists in PGN 129029, which
+    /// broadcasts at 1 Hz. PGN 129025 arrives at 10 Hz with coordinates and
+    /// nothing else, and the decoder carries the previous quality forward, so
+    /// a stale `RTKFixed` was re-asserted ten times a second and kept feeding
+    /// the position watchdog. DD209 integrity was decoded and then dropped
+    /// entirely, so RTK Fixed + Caution looked exactly like a healthy fix.
+    #[test]
+    fn stale_or_flagged_gnss_quality_stops_the_autonomy_path() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::geo::Wgs;
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::{PGN_GNSS_POSITION_DATA, PGN_GNSS_POSITION_RAPID};
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+
+        // 129029 is a 43-byte fast packet, so it reaches the plugin as a
+        // reassembled message built from a run of single frames.
+        fn detail_frames(integrity_byte: u8) -> Vec<Frame> {
+            let mut fp = FastPacketProtocol::new();
+            fp.send(PGN_GNSS_POSITION_DATA, &detail_frame(integrity_byte), 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        fn detail_frame(integrity_byte: u8) -> Vec<u8> {
+            let mut detail = vec![0xFFu8; 43];
+            let lat_raw = (52.0_f64 * 1e16) as i64;
+            let lon_raw = (5.0_f64 * 1e16) as i64;
+            detail[7..15].copy_from_slice(&lat_raw.to_le_bytes());
+            detail[15..23].copy_from_slice(&lon_raw.to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = integrity_byte;
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            detail
+        }
+
+        fn rapid_frame() -> Frame {
+            let pos = GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            };
+            Frame::new(
+                Identifier::encode(
+                    Priority::Default,
+                    PGN_GNSS_POSITION_RAPID,
+                    0x1C,
+                    BROADCAST_ADDRESS,
+                ),
+                NMEAInterface::build_position(&pos),
+                8,
+            )
+        }
+
+        let build = || {
+            // 129029 only reaches a plugin once fast-packet reassembly is on.
+            let mut session = Session::builder(test_name(41), 0x80)
+                .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+                .plug(AutoDrive::new())
+                .plug(
+                    Gnss::new(NMEAConfig::default().with_all(true)).with_fix_quality_stale_ms(3000),
+                )
+                .build()
+                .unwrap();
+            session.start().unwrap();
+            session
+        };
+
+        // A healthy RTK Fixed with integrity Safe is steerable.
+        let mut session = build();
+        claim(&mut session);
+        let mut now = Instant::from_millis(10_000);
+        for frame in detail_frames(0xFD) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        let healthy = session
+            .get::<Gnss>()
+            .and_then(super::plugins::Gnss::latest_position)
+            .expect("the detailed fix reaches the plugin");
+        assert_eq!(healthy.fix_type, crate::nmea::GNSSFixType::RTKFixed);
+        assert_eq!(healthy.integrity, crate::nmea::GNSSIntegrity::Safe);
+        assert!(
+            session.get::<Gnss>().is_some_and(|g| !g.is_fix_degraded()),
+            "RTK Fixed reported Safe must be steerable"
+        );
+
+        // The same fix reported Caution must not be.
+        let mut flagged = build();
+        claim(&mut flagged);
+        for frame in detail_frames(0xFE) {
+            flagged.feed(0, &frame, now);
+        }
+        while flagged.poll_event().is_some() {}
+        let cautioned = flagged
+            .get::<Gnss>()
+            .and_then(super::plugins::Gnss::latest_position)
+            .expect("the detailed fix reaches the plugin");
+        assert_eq!(cautioned.integrity, crate::nmea::GNSSIntegrity::Caution);
+        assert!(
+            flagged.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "DD209 Caution must degrade the fix even at RTK Fixed"
+        );
+        assert_eq!(
+            flagged
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+        );
+
+        // Back to the healthy session: 129029 stops, 129025 keeps arriving.
+        // The position watchdog stays fed, so only a quality watchdog catches
+        // this — the whole point of the finding.
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.feed(0, &rapid_frame(), now);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(|g| !g.is_position_stale()),
+            "129025 at 10 Hz keeps the position watchdog fed"
+        );
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(Gnss::is_fix_quality_stale),
+            "a fix method nobody has re-confirmed for 4 s is stale"
+        );
+        assert!(
+            session.get::<Gnss>().is_some_and(Gnss::is_fix_degraded),
+            "stale quality must degrade the fix"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "stale fix quality must reach the autonomy path"
+        );
+    }
+
+    /// A3 / G9 — the C3 guard was tested by building a `GnssHazards` on the
+    /// side, poking its private field and assigning the struct into the
+    /// plugin. That proves `clear_stop` reads a field; it never exercises
+    /// `on_event`, so deleting `self.gnss.observe(event)` from either
+    /// controller kept it green and silently reverted C3. This drives the
+    /// whole path through `Session` and asserts the machine-visible outcome.
+    #[test]
+    fn clear_stop_is_refused_through_the_session_while_the_receiver_is_stale() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_DATA;
+        use crate::nmea::NMEAConfig;
+
+        // A healthy RTK Fixed with DD209 Safe, so the fix is steerable and the
+        // watchdog that fires first is the position one.
+        fn healthy_fix() -> Vec<crate::net::Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&((52.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[15..23].copy_from_slice(&((5.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = 0xFD; // reserved ones + DD209 Safe
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        let gnss = || Gnss::new(NMEAConfig::default().with_all(true));
+        let net_config = || crate::net::NetworkConfig::default().fast_packet(true);
+
+        // AutoDrive first.
+        let mut session = Session::builder(test_name(42), 0x80)
+            .network_config(net_config())
+            .plug(AutoDrive::new())
+            .plug(gnss())
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for frame in healthy_fix() {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        assert!(
+            session
+                .get::<AutoDrive>()
+                .is_some_and(|a| a.stop_reason().is_none()),
+            "precondition: a healthy RTK Fixed is steerable"
+        );
+
+        // The cable is cut. Nothing else arrives. The position watchdog
+        // (1.5 s) fires before the quality watchdog (3 s).
+        for _ in 0..18 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::PositionStale),
+            "a receiver that stops reporting must stop the autonomy path"
+        );
+
+        // The operator presses "clear stop". The receiver is still silent, and
+        // because the trigger is edge-emitted no second PositionStale is
+        // coming — so clearing here would disarm the net permanently.
+        assert_eq!(
+            session.get_mut::<AutoDrive>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::PositionStale),
+            "clear_stop must be refused while the receiver is still stale"
+        );
+
+        // And the refusal is machine-visible, not just internal state.
+        now = now.add_millis(100);
+        session.tick(now);
+        assert!(
+            !session
+                .get::<AutoDrive>()
+                .is_some_and(super::plugins::AutoDrive::is_engaged),
+            "a refused clear must leave the controller disengaged"
+        );
+
+        // A position arriving is what actually resolves it.
+        now = now.add_millis(100);
+        for frame in healthy_fix() {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        session.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "once the receiver reports again the operator can clear"
+        );
+
+    }
+
+    /// B5 — round 5 filed the DD209 change as converting a previously-working
+    /// receiver into a "permanent stop ... with no operator recovery". Half of
+    /// that is right and half is not, and the difference matters:
+    ///
+    /// - Under the reserved-as-ones rule an all-0xFF integrity byte *is*
+    ///   `0xFC | 3` = Unsafe. There is no distinct "not reported" encoding for
+    ///   a 2-bit field whose reserved neighbours are required to be ones, so a
+    ///   receiver sending 0xFF is asserting Unsafe and refusing to steer on it
+    ///   is correct, not a regression. Changing the mapping would need the
+    ///   DD209 table (G2), and would be wrong on this evidence.
+    /// - The stop is **not** permanent. As soon as the receiver reports any
+    ///   non-degraded integrity the plugin emits `FixRestored`, the hazard
+    ///   clears, and the operator's `clear_stop()` is accepted.
+    ///
+    /// What is genuinely true is that a receiver which *always* sends 0xFF can
+    /// never be autosteered — which is the intended reading of "this fix is
+    /// unsafe", and is the release-note item rather than a code change.
+    #[test]
+    fn an_unsafe_dd209_stops_autonomy_and_a_safe_one_lets_the_operator_clear() {
+        use super::plugins::{AutoDrive, Gnss};
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::PGN_GNSS_POSITION_DATA;
+        use crate::nmea::{GNSSIntegrity, NMEAConfig};
+
+        fn fix(integrity_byte: u8) -> Vec<crate::net::Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&((52.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[15..23].copy_from_slice(&((5.0_f64 * 1e16) as i64).to_le_bytes());
+            detail[23..31].copy_from_slice(&0i64.to_le_bytes());
+            detail[31] = 0x40; // RTK Fixed
+            detail[32] = integrity_byte;
+            detail[33] = 12;
+            detail[34..36].copy_from_slice(&100u16.to_le_bytes());
+            detail[36..38].copy_from_slice(&150u16.to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        let mut session = Session::builder(test_name(44), 0x80)
+            .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+            .plug(AutoDrive::new())
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        // An all-0xFF fill decodes as Unsafe, and stops the machine.
+        let now = Instant::from_millis(10_000);
+        for frame in fix(0xFF) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        assert_eq!(
+            session
+                .get::<Gnss>()
+                .and_then(super::plugins::Gnss::latest_position)
+                .map(|p| p.integrity),
+            Some(GNSSIntegrity::Unsafe),
+            "0xFF is 0xFC | 3 under the reserved-as-ones rule"
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded)
+        );
+
+        // Clearing is refused while the receiver still says Unsafe.
+        assert_eq!(
+            session.get_mut::<AutoDrive>().unwrap().clear_stop(),
+            Err(AutodriveRefusal::StopConditionLive)
+        );
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::FixDegraded),
+            "an Unsafe fix is not something the operator can dismiss"
+        );
+
+        // The receiver reports Safe. That is what makes the stop clearable —
+        // the lockout is not permanent.
+        let now = now.add_millis(100);
+        for frame in fix(0xFD) {
+            session.feed(0, &frame, now);
+        }
+        while session.poll_event().is_some() {}
+        session.get_mut::<AutoDrive>().unwrap().clear_stop().unwrap();
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "once the receiver reports Safe the operator can clear the stop"
+        );
+    }
+
+    /// B2 / G3 — the §8 heartbeat receiver used to require an all-0xFF tail,
+    /// and it returned *before* `receiver_for(source)`. A peer whose padding
+    /// differed was therefore never registered as a tracked peer at all: the
+    /// §8.3.4 loss-of-communication window never ran for it, and when it died
+    /// `SafeStopTrigger::HeartbeatError` was never produced. Fail-open on a
+    /// watchdog, which is the shape this rule exists to prevent.
+    #[test]
+    fn a_zero_padded_heartbeat_peer_is_still_supervised() {
+        use super::plugins::{AutoDrive, Heartbeat};
+        use crate::j1939::HB_COMM_ERROR_TIMEOUT_MS;
+        use crate::net::pgn_defs::PGN_HEARTBEAT;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+
+        // Byte 1 is the sequence; bytes 2-8 are undefined and zero-filled here,
+        // which is how plenty of stacks build a frame.
+        let beat = |sequence: u8| {
+            let mut data = [0x00u8; 8];
+            data[0] = sequence;
+            Frame::new(
+                Identifier::encode(Priority::Default, PGN_HEARTBEAT, 0x33, BROADCAST_ADDRESS),
+                data,
+                8,
+            )
+        };
+
+        let mut session = Session::builder(test_name(45), 0x80)
+            .plug(AutoDrive::new())
+            .plug(Heartbeat::every(100))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for sequence in 1..=3u8 {
+            session.feed(0, &beat(sequence), now);
+            while session.poll_event().is_some() {}
+            now = now.add_millis(100);
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            None,
+            "precondition: a healthy peer does not stop anything"
+        );
+
+        // The peer dies. Being supervised is exactly what makes that a stop.
+        for _ in 0..((HB_COMM_ERROR_TIMEOUT_MS / 100) + 4) {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+        assert_eq!(
+            session
+                .get::<AutoDrive>()
+                .and_then(super::plugins::AutoDrive::stop_reason),
+            Some(SafeStopTrigger::HeartbeatError),
+            "a zero-padded peer must be tracked, so its death stops the machine"
+        );
+    }
+
+    /// P1.9 — `build()` rejected only duplicate types, so nothing stopped a
+    /// caller plugging both controllers. Both author PGN 0xAD00 from the same
+    /// source address, so a safe stop commanded by one is overwritten by the
+    /// other on the next tick and the steering ECU sees intent-to-steer
+    /// chatter that makes autosteer engage and drop repeatedly.
+    #[test]
+    fn two_authors_of_one_command_pgn_cannot_be_assembled() {
+        use super::plugin::{Plugin, PluginCtx};
+        use super::plugins::AutoDrive;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        /// A second author of 0xAD00. `Guidance` used to play this part; with it
+        /// deleted, `AutoDrive` is the only in-tree plugin that declares a
+        /// command PGN, so the rule needs a stand-in or it would go untested
+        /// and silently rot.
+        struct RivalSteerer;
+        impl Plugin for RivalSteerer {
+            fn name(&self) -> &'static str {
+                "RivalSteerer"
+            }
+            fn transmits(&self) -> &'static [Pgn] {
+                &[PGN_GUIDANCE_SYSTEM_CMD]
+            }
+            fn on_tick(&mut self, _ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+                None
+            }
+            fn as_any(&self) -> &dyn core::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+                self
+            }
+        }
+
+        let outcome = Session::builder(test_name(25), 0x80)
+            .plug(RivalSteerer)
+            .plug(AutoDrive::new())
+            .build();
+        let Err(err) = outcome else {
+            panic!("two authors of 0xAD00 must be refused");
+        };
+        let text = alloc::format!("{err}");
+        assert!(
+            text.contains("AD00") && text.contains("one author"),
+            "the error must name the conflicting PGN, got: {text}"
+        );
+
+        // Either alone is fine.
+        assert!(
+            Session::builder(test_name(26), 0x80)
+                .plug(AutoDrive::new())
+                .build()
+                .is_ok()
+        );
+        assert!(
+            Session::builder(test_name(27), 0x80)
+                .plug(RivalSteerer)
+                .build()
+                .is_ok()
+        );
+    }
+
+    /// P1.5 — the measured consequence of clearing `dirty` on a refused send was
+    /// that the first Guidance System Command reached the bus 2000 ms after
+    /// power-up. It must arrive as soon as the claim allows.
+    #[test]
+    fn first_guidance_command_follows_the_claim_promptly() {
+        use super::plugins::AutoDrive;
+        use crate::net::pgn_defs::PGN_GUIDANCE_SYSTEM_CMD;
+
+        let mut session = Session::builder(test_name(24), 0x80)
+            .plug(AutoDrive::new())
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        // Refused before the claim (no link, not active) — the point is that
+        // the plugin still transmits its safe setpoint as soon as the claim
+        // allows, rather than waiting out the 2000 ms idle cadence.
+        let _ = session
+            .get_mut::<AutoDrive>()
+            .unwrap()
+            .command(DriveCommand::steer(5.0));
+
+        let mut now = Instant::ZERO;
+        let mut claimed_at: Option<Instant> = None;
+        let mut first_cmd_at: Option<Instant> = None;
+        for _ in 0..200 {
+            now = now.add_millis(10);
+            session.tick(now);
+            while let Some((_, frame)) = session.poll_transmit() {
+                if frame.id.pgn() == PGN_GUIDANCE_SYSTEM_CMD && first_cmd_at.is_none() {
+                    first_cmd_at = Some(now);
+                }
+            }
+            if claimed_at.is_none() && session.is_claimed() {
+                claimed_at = Some(now);
+            }
+            if first_cmd_at.is_some() {
+                break;
+            }
+        }
+
+        let claimed_at = claimed_at.expect("the CF should claim with no contention");
+        let first = first_cmd_at.expect("a guidance command should reach the bus");
+        // One guidance cadence period (Guidance::MIN_TX_INTERVAL_MS).
+        let delay = first.millis_since(claimed_at);
+        assert!(
+            delay <= 100,
+            "first command must follow the claim within one cadence, took {delay} ms"
+        );
+    }
+
+    /// F0.1 — a pump faster than 1 kHz used to freeze every timer: each call
+    /// saw a 0 ms delta and `last_tick` was still advanced to `now`, so the
+    /// sub-millisecond remainder was discarded and never accumulated.
+    #[test]
+    fn sub_millisecond_pump_still_advances_timers() {
+        let mut session = Session::builder(test_name(20), 0x80).build().unwrap();
+        session.start().unwrap();
+
+        // 100 µs steps: every individual step is a 0 ms delta.
+        let mut now = Instant::ZERO;
+        for _ in 0..20_000 {
+            now = now.add_micros(100);
+            session.tick(now);
+            if session.is_claimed() {
+                break;
+            }
+        }
+
+        assert!(
+            session.is_claimed(),
+            "address claiming must complete under a >1 kHz pump (2 s simulated)"
+        );
+    }
+
+    /// P3.1 — the round-1 residue fix landed only in `Session::advance_time`;
+    /// every plugin watchdog still did `elapsed = now - last; last = now` and
+    /// froze under a fast pump. A frozen heartbeat watchdog reports a dead
+    /// safety-critical ECU as alive.
+    #[test]
+    fn plugin_watchdogs_survive_a_sub_millisecond_pump() {
+        use super::plugins::Heartbeat;
+        use crate::net::pgn_defs::PGN_HEARTBEAT;
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::session::sys::HeartbeatEvent;
+
+        let mut session = Session::builder(test_name(28), 0x80)
+            .plug(Heartbeat::every(100))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+
+        // Claim, then let one peer heartbeat arrive so it is tracked.
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            session.tick(now);
+            while session.poll_transmit().is_some() {}
+            if session.is_claimed() {
+                break;
+            }
+        }
+        assert!(session.is_claimed());
+
+        let hb = Frame::new(
+            Identifier::encode(Priority::Default, PGN_HEARTBEAT, 0x26, BROADCAST_ADDRESS),
+            [0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            8,
+        );
+        session.feed(0, &hb, now);
+        while session.poll_event().is_some() {}
+
+        // The peer goes silent while the host pumps at 10 kHz. Every individual
+        // step is a 0 ms delta, so a truncating watchdog never times out.
+        for _ in 0..10_000 {
+            now = now.add_micros(100);
+            session.tick(now);
+            while session.poll_transmit().is_some() {}
+        }
+
+        let saw_comm_error = core::iter::from_fn(|| session.poll_event())
+            .any(|e| matches!(e, Event::Heartbeat(HeartbeatEvent::CommError { .. })));
+        assert!(
+            saw_comm_error,
+            "the §8.3.4 300 ms window must expire under a >1 kHz pump (1 s simulated)"
+        );
+    }
+
+    /// F0.1 — the residue must survive across calls, not be rounded away.
+    #[test]
+    fn sub_millisecond_residue_accumulates_into_whole_milliseconds() {
+        let mut session = Session::builder(test_name(21), 0x80).build().unwrap();
+        session.start().unwrap();
+
+        // The first tick only establishes the baseline; the ten 100 µs steps
+        // after it are the one millisecond under test.
+        let mut now = Instant::ZERO;
+        session.tick(now);
+        for _ in 0..10 {
+            now = now.add_micros(100);
+            session.tick(now);
+        }
+
+        assert_eq!(
+            session.last_tick,
+            Some(Instant::ZERO.add_millis(1)),
+            "ten 100 µs steps must consume exactly 1 ms, leaving no residue"
+        );
+    }
+
+    /// F0.1 — a backwards clock previously saturated to a 0 ms delta and
+    /// stalled every watchdog silently.
+    #[test]
+    fn backwards_clock_is_reported_and_resynchronises() {
+        let mut session = Session::builder(test_name(22), 0x80).build().unwrap();
+        session.start().unwrap();
+        session.tick(Instant::from_millis(1_000));
+        while session.poll_event().is_some() {}
+
+        session.tick(Instant::from_millis(400));
+
+        let reported = std::iter::from_fn(|| session.poll_event()).any(|e| {
+            matches!(
+                e,
+                Event::Bus(BusEvent::ClockWentBackwards { by_micros }) if by_micros == 600_000
+            )
+        });
+        assert!(reported, "a backwards clock must surface as a bus event");
+        assert_eq!(
+            session.last_tick,
+            Some(Instant::from_millis(400)),
+            "timers resynchronise to the new instant rather than stalling"
+        );
     }
 
     fn claim(session: &mut Session) {
@@ -466,6 +1460,7 @@ mod tests {
                 spn: 1234,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             });
 
         // Advance past the broadcast interval; expect a DM1 frame on the wire.
@@ -725,6 +1720,7 @@ mod tests {
                 spn,
                 fmi,
                 occurrence_count: 1,
+                conversion_method: false,
             }],
         };
         let v = list.encode();
@@ -732,5 +1728,112 @@ mod tests {
         let n = v.len().min(8);
         out[..n].copy_from_slice(&v[..n]);
         out
+    }
+
+    /// 6B — ISO 11783-5 §4.4.4.3 requires an address violation to activate a
+    /// DTC (SPN 2000 + SA, FMI 31). The network layer detected violations and
+    /// emitted an event nothing consumed; `Dtc::address_violation` had no
+    /// callers anywhere in the crate.
+    #[test]
+    fn address_violation_activates_a_dtc() {
+        use super::plugins::Diagnostics;
+        use crate::net::pgn_defs::PGN_TIME_DATE;
+        use crate::net::{Frame, Identifier, Priority};
+
+        let mut session = Session::builder(test_name(24), 0x80)
+            .plug(Diagnostics::every(1000))
+            .build()
+            .unwrap();
+        claim(&mut session);
+        let our_address = session.address();
+
+        // Another CF transmits from the address we hold.
+        let intruder = Frame::new(
+            Identifier::encode(
+                Priority::Default,
+                PGN_TIME_DATE,
+                our_address,
+                crate::net::BROADCAST_ADDRESS,
+            ),
+            [0xFF; 8],
+            8,
+        );
+        session.feed(0, &intruder, Instant::from_millis(9_000));
+        session.tick(Instant::from_millis(9_010));
+
+        let expected = crate::j1939::diagnostic::Dtc::address_violation(our_address);
+        let active = session.get::<Diagnostics>().unwrap().active();
+        assert!(
+            active.iter().any(|d| d.spn == expected.spn),
+            "the violation must become an active DTC so it reaches the next DM1"
+        );
+    }
+
+    /// B4 — arming the fix-quality watchdog on PGN arrival, not on a decoded
+    /// quality. `handle_position_detail` has eight early returns; a receiver
+    /// emitting 129029 that never decodes kept the watchdog fed while 129025
+    /// re-emitted the frozen quality at 10 Hz.
+    #[test]
+    fn a_stream_of_undecodable_129029_still_lets_the_quality_watchdog_fire() {
+        use super::plugins::Gnss;
+        use crate::net::fast_packet::FastPacketProtocol;
+        use crate::net::pgn_defs::{PGN_GNSS_POSITION_DATA, PGN_GNSS_POSITION_RAPID};
+        use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Priority};
+        use crate::nmea::{GNSSPosition, NMEAConfig, NMEAInterface};
+        use crate::geo::Wgs;
+
+        fn undecodable_detail() -> Vec<Frame> {
+            let mut detail = vec![0xFFu8; 43];
+            detail[7..15].copy_from_slice(&(i64::MAX - 1).to_le_bytes());
+            detail[42] = 0;
+            FastPacketProtocol::new()
+                .send(PGN_GNSS_POSITION_DATA, &detail, 0x1C)
+                .expect("a 43-byte fast packet encodes")
+        }
+
+        fn rapid_frame() -> Frame {
+            let pos = GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            };
+            Frame::new(
+                Identifier::encode(
+                    Priority::Default,
+                    PGN_GNSS_POSITION_RAPID,
+                    0x1C,
+                    BROADCAST_ADDRESS,
+                ),
+                NMEAInterface::build_position(&pos),
+                8,
+            )
+        }
+
+        let mut session = Session::builder(test_name(43), 0x80)
+            .network_config(crate::net::NetworkConfig::default().fast_packet(true))
+            .plug(Gnss::new(NMEAConfig::default().with_all(true)))
+            .build()
+            .unwrap();
+        session.start().unwrap();
+        claim(&mut session);
+
+        let mut now = Instant::from_millis(10_000);
+        for step in 0..40 {
+            now = now.add_millis(100);
+            if step % 2 == 0 {
+                for frame in undecodable_detail() {
+                    session.feed(0, &frame, now);
+                }
+            }
+            session.feed(0, &rapid_frame(), now);
+            session.tick(now);
+            while session.poll_event().is_some() {}
+        }
+
+        assert!(
+            session
+                .get::<Gnss>()
+                .is_some_and(super::plugins::Gnss::is_fix_quality_stale),
+            "a receiver whose 129029 never decodes has no fresh fix quality"
+        );
     }
 }

@@ -22,6 +22,8 @@ pub const SC_STATUS_TIMEOUT_READY_MS: u32 = 3000;
 pub const SC_STATUS_MIN_SPACING_MS: u32 = 100;
 /// 5 Hz cadence during active states.
 pub const SC_STATUS_ACTIVE_RATE_MS: u32 = 200;
+/// 1 Hz cadence while Ready or disabled.
+pub const SC_STATUS_IDLE_RATE_MS: u32 = 1000;
 /// Maximum Sequence Control step id that can be represented on the wire.
 ///
 /// The SC status payload carries a selected sequence number in byte 3. Values
@@ -150,6 +152,13 @@ pub enum SCSequenceState {
     RecordingCompletion = 3,
     PlayBack = 4,
     Abort = 5,
+    /// F.2/F.3 byte 4: "FF16 When byte 2 is set to inactive" (master) or "to
+    /// disabled or initialization" (client).
+    ///
+    /// This used to be folded into `Reserved` (0x00), so an inactive peer both
+    /// transmitted 0x00 where the standard requires 0xFF and rejected a
+    /// conformant peer's 0xFF outright.
+    NotApplicable = 0xFF,
 }
 
 impl SCSequenceState {
@@ -161,6 +170,7 @@ impl SCSequenceState {
             3 => Self::RecordingCompletion,
             4 => Self::PlayBack,
             5 => Self::Abort,
+            0xFF => Self::NotApplicable,
             _ => Self::Reserved,
         }
     }
@@ -174,6 +184,7 @@ impl SCSequenceState {
             3 => Some(Self::RecordingCompletion),
             4 => Some(Self::PlayBack),
             5 => Some(Self::Abort),
+            0xFF => Some(Self::NotApplicable),
             _ => None,
         }
     }
@@ -208,29 +219,41 @@ pub(crate) const fn sc_status_sequence_number_is_valid(
 pub(crate) const fn sc_status_sequence_state_is_supported(sequence_state: SCSequenceState) -> bool {
     match sequence_state {
         SCSequenceState::Ready | SCSequenceState::PlayBack | SCSequenceState::Abort => true,
+        // NotApplicable is the inactive/disabled sentinel, checked separately by
+        // `sc_inactive_status_sequence_fields_are_valid`, and Recording is not
+        // implemented by this crate.
         SCSequenceState::Reserved
         | SCSequenceState::Recording
-        | SCSequenceState::RecordingCompletion => false,
+        | SCSequenceState::RecordingCompletion
+        | SCSequenceState::NotApplicable => false,
     }
 }
 
 #[must_use]
+/// G4 — F.2 byte 4: "FF16 When byte 2 is set to inactive"; F.3 byte 4: "FF16
+/// When byte 2 is set to disabled or initialization".
+///
+/// The sequence state had to be `Reserved` (0x00), which is what this crate
+/// transmitted and therefore what it accepted — so a conformant disabled SCC
+/// sending 0xFF was rejected twice over and the master never saw it at all.
 pub(crate) const fn sc_inactive_status_sequence_fields_are_valid(
     sequence_state: SCSequenceState,
     sequence_number: u8,
 ) -> bool {
-    matches!(sequence_state, SCSequenceState::Reserved)
+    matches!(sequence_state, SCSequenceState::NotApplicable)
         && sequence_number == SC_SEQUENCE_NUMBER_NOT_AVAILABLE
 }
 
+/// G3 — reserved bits are transmitted as 1 and **ignored on receive**. Both of
+/// the predicates this replaces ran before any state update and rejected the
+/// whole frame: a master status identical to `master_ready()` except for byte 5
+/// carrying its six reserved bits as 1 — which is what G3 requires an encoder
+/// to do — left the client Idle forever, and a client status with a zero-padded
+/// reserved tail left the master in Ready. machbus could not join a sequence
+/// with any conformant peer that differed in a bit neither side uses.
 #[must_use]
-pub(crate) const fn sc_master_busy_flags_are_valid(flags: u8) -> bool {
-    flags & !0x03 == 0
-}
-
-#[must_use]
-pub(crate) fn sc_status_reserved_tail_is_valid(data: &[u8]) -> bool {
-    data.len() == SC_STATUS_PAYLOAD_LEN && data[5..].iter().all(|&byte| byte == 0xFF)
+pub(crate) fn sc_status_payload_len_is_canonical(data: &[u8]) -> bool {
+    data.len() == SC_STATUS_PAYLOAD_LEN
 }
 
 // ─── ISO 11783-14 byte 5 of SCClientStatus ─────────────────────────────
@@ -247,6 +270,8 @@ pub enum SCClientFuncError {
     Changed = 2,
     /// Operator confirmation required.
     NeedsConfirm = 3,
+    /// F.3 byte 5: "FF16 When byte 2 is set to disabled".
+    NotApplicable = 0xFF,
 }
 
 impl SCClientFuncError {
@@ -256,6 +281,7 @@ impl SCClientFuncError {
             1 => Self::NoChange,
             2 => Self::Changed,
             3 => Self::NeedsConfirm,
+            0xFF => Self::NotApplicable,
             _ => Self::NoErrors,
         }
     }
@@ -267,6 +293,7 @@ impl SCClientFuncError {
             1 => Some(Self::NoChange),
             2 => Some(Self::Changed),
             3 => Some(Self::NeedsConfirm),
+            0xFF => Some(Self::NotApplicable),
             _ => None,
         }
     }
@@ -338,6 +365,23 @@ impl Default for SCMasterConfig {
 }
 
 impl SCMasterConfig {
+    /// The F.3 reception timeout that applies to a client reporting `state`.
+    ///
+    /// "A timeout of 600 ms for the SCClientStatus message shall be applied in
+    /// the 'Recording', 'Play Back' or 'Abort' state. A timeout of 3 s shall be
+    /// applied in the 'Ready' state." A disabled client transmits on the Ready
+    /// cadence, so it gets the Ready limit; it is `NotApplicable` on the wire.
+    #[must_use]
+    pub const fn limit_for(&self, state: SCSequenceState) -> u32 {
+        match state {
+            SCSequenceState::Recording
+            | SCSequenceState::RecordingCompletion
+            | SCSequenceState::PlayBack
+            | SCSequenceState::Abort => self.active_timeout_ms,
+            _ => self.ready_timeout_ms,
+        }
+    }
+
     #[must_use]
     pub const fn with_ready_timeout(mut self, ms: u32) -> Self {
         self.ready_timeout_ms = ms;
@@ -378,6 +422,18 @@ impl SCMasterConfig {
 pub struct SCClientConfig {
     pub min_status_spacing_ms: u32,
     pub busy_pause_timeout_ms: u32,
+    /// Cadence while Recording / PlayBack / Abort (F.3: "5 messages per
+    /// second"). The client used to emit a status only on change, so a
+    /// conformant SCM's 600 ms timeout expired the moment nothing was
+    /// happening — which is most of a play back.
+    pub active_status_interval_ms: u32,
+    /// Cadence while Ready or disabled (F.3: "once per second").
+    pub idle_status_interval_ms: u32,
+    /// F.2 reception timeout on `SCMasterStatus` while Recording / Recording
+    /// Completion / Play Back / Abort.
+    pub master_timeout_active_ms: u32,
+    /// F.2 reception timeout on `SCMasterStatus` while Ready.
+    pub master_timeout_ready_ms: u32,
 }
 
 impl Default for SCClientConfig {
@@ -385,6 +441,10 @@ impl Default for SCClientConfig {
         Self {
             min_status_spacing_ms: SC_STATUS_MIN_SPACING_MS,
             busy_pause_timeout_ms: SC_STATUS_TIMEOUT_ACTIVE_MS,
+            active_status_interval_ms: SC_STATUS_ACTIVE_RATE_MS,
+            idle_status_interval_ms: SC_STATUS_IDLE_RATE_MS,
+            master_timeout_active_ms: SC_STATUS_TIMEOUT_ACTIVE_MS,
+            master_timeout_ready_ms: SC_STATUS_TIMEOUT_READY_MS,
         }
     }
 }
@@ -439,10 +499,18 @@ mod tests {
             SCSequenceState::RecordingCompletion,
             SCSequenceState::PlayBack,
             SCSequenceState::Abort,
+            SCSequenceState::NotApplicable,
         ] {
             assert_eq!(SCSequenceState::from_u8(s.as_u8()), s);
         }
-        assert_eq!(SCSequenceState::from_u8(0xFF), SCSequenceState::Reserved);
+        // G4 — F.2/F.3 byte 4: "FF16 When byte 2 is set to inactive". This used
+        // to collapse into Reserved (0x00), so an inactive peer transmitted the
+        // wrong value and rejected a conformant peer's correct one.
+        assert_eq!(
+            SCSequenceState::from_u8(0xFF),
+            SCSequenceState::NotApplicable
+        );
+        assert_eq!(SCSequenceState::from_u8(0x42), SCSequenceState::Reserved);
     }
 
     #[test]

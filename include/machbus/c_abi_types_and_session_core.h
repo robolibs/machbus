@@ -79,7 +79,44 @@ typedef enum {
   MACHBUS_EVENT_KIND_POWERTRAIN = 89,
   MACHBUS_EVENT_KIND_TC_SERVER_PEER_CONTROL_ASSIGNMENT = 75,
   MACHBUS_EVENT_KIND_GUIDANCE_MACHINE_INFO = 90,
+  /**
+   * Steering ECU went silent; the controller was forced to the safe state.
+   */
+  MACHBUS_EVENT_KIND_GUIDANCE_LINK_LOST = 91,
+  /**
+   * Machine Info resumed after a link loss.
+   */
+  MACHBUS_EVENT_KIND_GUIDANCE_LINK_RESTORED = 92,
+  /**
+   * Operator ISB stop latched; the controller is in the safe state.
+   * Combined autodrive controller changed automation state.
+   */
+  MACHBUS_EVENT_KIND_AUTODRIVE_STATE_CHANGED = 94,
+  /**
+   * Combined autodrive controller entered the safe state.
+   */
+  MACHBUS_EVENT_KIND_AUTODRIVE_SAFE_STOP = 95,
+  /**
+   * No GNSS position inside the staleness window; `u0` is how long it has
+   * been silent, in milliseconds.
+   */
+  MACHBUS_EVENT_KIND_GNSS_POSITION_STALE = 96,
+  /**
+   * The receiver reported a method that cannot be steered on; `fmi_or_sub`
+   * is the NMEA fix type.
+   */
+  MACHBUS_EVENT_KIND_GNSS_FIX_DEGRADED = 97,
+  /**
+   * A steerable fix returned; `fmi_or_sub` is the NMEA fix type.
+   */
+  MACHBUS_EVENT_KIND_GNSS_FIX_RESTORED = 98,
   MACHBUS_EVENT_KIND_OTHER = 99,
+  /**
+   * ISO 11783-10 §6.6.3 — six seconds without a Client Task, so the TC
+   * assumed an uncontrolled shutdown and dropped the client's DDOP.
+   * `source` is the client address.
+   */
+  MACHBUS_EVENT_KIND_TC_SERVER_CLIENT_DISCONNECTED = 100,
 } MachbusEventKind;
 
 typedef enum {
@@ -113,6 +150,99 @@ typedef enum {
   MACHBUS_VALVE_COMMAND_FLOAT = 3,
   MACHBUS_VALVE_COMMAND_BLOCK = 4,
 } MachbusValveCommand;
+
+/**
+ * Why an autonomous controller latched a safe stop, mirroring
+ * `SafeStopTrigger::as_code`.
+ *
+ * The two stop-reason entry points returned a bare `uint32_t` and their doc
+ * comments named this type, which did not exist: a C HMI telling the operator
+ * why autonomy dropped had to hardcode 1, 4, 5, … read out of `src/safety.rs`.
+ * That became dangerous when codes 2 and 3 were retired — the retirement was
+ * recorded only in a Rust comment and enforced only by a Rust test, so a C
+ * integrator had no way to learn they are permanently reserved and would reuse
+ * them. Python was never exposed to this because it reads the string form.
+ */
+typedef enum {
+  /**
+   * No stop is latched.
+   */
+  MACHBUS_SAFE_STOP_TRIGGER_NONE = 0,
+  MACHBUS_SAFE_STOP_TRIGGER_GUIDANCE_LINK_TIMEOUT = 1,
+  MACHBUS_SAFE_STOP_TRIGGER_HEARTBEAT_ERROR = 4,
+  MACHBUS_SAFE_STOP_TRIGGER_ISB_STOP = 5,
+  MACHBUS_SAFE_STOP_TRIGGER_BUS_OFF = 6,
+  MACHBUS_SAFE_STOP_TRIGGER_ADDRESS_CLAIM_LOST = 7,
+  MACHBUS_SAFE_STOP_TRIGGER_OPERATOR_OVERRIDE = 8,
+  MACHBUS_SAFE_STOP_TRIGGER_COMMAND_STALE = 9,
+  MACHBUS_SAFE_STOP_TRIGGER_CLOCK_WENT_BACKWARDS = 10,
+  /**
+   * A queued safety command was refused by the network layer.
+   */
+  MACHBUS_SAFE_STOP_TRIGGER_SEND_FAILED = 11,
+  MACHBUS_SAFE_STOP_TRIGGER_POSITION_STALE = 12,
+  MACHBUS_SAFE_STOP_TRIGGER_FIX_DEGRADED = 13,
+  MACHBUS_SAFE_STOP_TRIGGER_KEY_SWITCH_OFF = 14,
+} MachbusSafeStopTrigger;
+
+/**
+ * ISO 11783-13:2022 B.15 Attributes.
+ *
+ * Bits 0 and 1 describe the entry; bits 2 and 5-7 describe the volume it
+ * lives on; bits 3 and 4 say what kind of entry it is.
+ *
+ * These used to carry DOS/FAT meanings, and only read-only, hidden and
+ * directory happened to line up. `Volume` sat at bit 6, which B.15 defines as
+ * "volume is not removable", so every entry on fixed media was classified as
+ * a volume while a real volume entry (bit 3) was invisible — a client walking
+ * the volume list saw none. `System` at bit 2 is really "volume supports the
+ * hidden attribute" and `Archive` at bit 5 is really "volume supports long
+ * filenames", both of which Set File Attributes let a client claim.
+ */
+enum FileAttributes
+#ifdef __cplusplus
+  : uint8_t
+#endif // __cplusplus
+ {
+  FILE_ATTRIBUTES_NONE = 0,
+  /**
+   * Bit 0 — the entry's read-only attribute is set.
+   */
+  FILE_ATTRIBUTES_READ_ONLY = 1,
+  /**
+   * Bit 1 — the entry's hidden attribute is set.
+   */
+  FILE_ATTRIBUTES_HIDDEN = 2,
+  /**
+   * Bit 2 — the volume supports the hidden attribute.
+   */
+  FILE_ATTRIBUTES_VOLUME_SUPPORTS_HIDDEN = 4,
+  /**
+   * Bit 3 — the entry specifies a volume.
+   */
+  FILE_ATTRIBUTES_IS_VOLUME = 8,
+  /**
+   * Bit 4 — the entry specifies a directory.
+   */
+  FILE_ATTRIBUTES_DIRECTORY = 16,
+  /**
+   * Bit 5 — the volume supports long filenames.
+   */
+  FILE_ATTRIBUTES_VOLUME_SUPPORTS_LONG_FILENAMES = 32,
+  /**
+   * Bit 6 — the volume is *not* removable.
+   */
+  FILE_ATTRIBUTES_VOLUME_NOT_REMOVABLE = 64,
+  /**
+   * Bit 7 — the volume is case-sensitive. A client that cannot read this
+   * has no way to know whether `Task.xml` and `TASK.XML` are one file,
+   * which A.2.2.1 warns about.
+   */
+  FILE_ATTRIBUTES_VOLUME_CASE_SENSITIVE = 128,
+};
+#ifndef __cplusplus
+typedef uint8_t FileAttributes;
+#endif // __cplusplus
 
 /**
  * Process-data trigger methods. Bitmask, OR multiple together.
@@ -153,6 +283,17 @@ enum ServerOptions
 #ifndef __cplusplus
 typedef uint8_t ServerOptions;
 #endif // __cplusplus
+
+/**
+ * A monotonic timestamp in microseconds since a driver-chosen origin.
+ *
+ * This is intentionally a plain `u64` micros newtype with no dependency on
+ * `std::time` or any embedded time crate, so the core compiles unchanged on
+ * hosted and bare-metal targets. Convert at the driver boundary with
+ * [`Instant::from_micros`] / [`Instant::as_micros`] (and the provided `From`
+ * impls).
+ */
+typedef struct Instant Instant;
 
 /**
  * Owned, opaque decoded [`machbus::j1939::ComponentIdentification`].
@@ -243,21 +384,22 @@ typedef struct MachbusTransferMsg MachbusTransferMsg;
  */
 typedef struct MachbusVtPool MachbusVtPool;
 
-/**
- * A monotonic timestamp in microseconds since a driver-chosen origin.
- *
- * This is intentionally a plain `u64` micros newtype with no dependency on
- * `std::time` or any embedded time crate, so the core compiles unchanged on
- * hosted and bare-metal targets. Convert at the driver boundary with
- * [`Instant::from_micros`] / [`Instant::as_micros`] (and the provided `From`
- * impls).
- */
-typedef struct Instant Instant;
+typedef struct MakeDef MakeDef;
 
 /**
  * What the crate claims for the powertrain area.
  */
 typedef struct PowertrainClaim PowertrainClaim;
+
+/**
+ * The special-value layout a TIM function uses above its scaled band.
+ */
+typedef struct SlotShape SlotShape;
+
+/**
+ * Scale and offset for one TIM function's value SLOT.
+ */
+typedef struct TimSlot TimSlot;
 
 /**
  * Result of [`machbus_session_validate_can_bus_config`].
@@ -388,9 +530,11 @@ typedef struct {
    */
   bool enable_tim;
   /**
-   * Plug a [`Guidance`] subsystem (ISO 11783-7 curvature-based autosteer).
+   * Plug an [`AutoDrive`] subsystem: ISO 11783-7 curvature steering and
+   * speed behind one engage lifecycle, one stop latch and one set of
+   * preconditions.
    */
-  bool enable_guidance;
+  bool enable_autodrive;
 } MachbusConfig;
 
 /**
@@ -438,6 +582,12 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec1`].
+ * EEC1 as flat C doubles.
+ *
+ * A parameter the engine reports as *error* or *not available* is `NaN` here
+ * — the whole PG is no longer discarded when one sub-signal is absent (G4),
+ * so a caller must check. Use the Rust `Signal` API when the distinction
+ * between "faulted" and "not provided" matters.
  */
 typedef struct {
   double engine_torque_percent;
@@ -450,26 +600,32 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec2`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
-  uint8_t accel_pedal_position;
+  double accel_pedal_position;
   double engine_load_percent;
   uint8_t accel_pedal_low_idle;
   uint8_t accel_pedal_kickdown;
-  uint8_t road_speed_limit;
+  double road_speed_limit;
 } MachbusEec2;
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Eec3`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double nominal_friction_percent;
   double desired_operating_speed_rpm;
-  uint8_t operating_speed_asymmetry;
+  double operating_speed_asymmetry;
 } MachbusEec3;
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp1`].
+ *
+ * A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double coolant_temp_c;
@@ -481,6 +637,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineTemp2`].
+ *
+ * A temperature the engine does not instrument is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double engine_oil_temp_c;
@@ -491,18 +649,22 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineFluidLp`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double oil_pressure_kpa;
   double coolant_pressure_kpa;
-  uint8_t oil_level_percent;
-  uint8_t coolant_level_percent;
+  double oil_level_percent;
+  double coolant_level_percent;
   double fuel_delivery_pressure_kpa;
   double crankcase_pressure_kpa;
 } MachbusEngineFluidLp;
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::EngineHours`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double total_hours;
@@ -511,6 +673,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::FuelEconomy`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double fuel_rate_lph;
@@ -531,6 +695,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Vep1`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double battery_voltage_v;
@@ -541,6 +707,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::AmbientConditions`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double barometric_pressure_kpa;
@@ -551,10 +719,12 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::DashDisplay`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
-  uint8_t fuel_level_percent;
-  uint8_t washer_fluid_level;
+  double fuel_level_percent;
+  double washer_fluid_level;
   double fuel_filter_diff_kpa;
   double oil_filter_diff_kpa;
   double cargo_ambient_temp_c;
@@ -562,6 +732,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::VehiclePosition`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double latitude_deg;
@@ -570,6 +742,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::FuelConsumption`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double trip_fuel_l;
@@ -578,6 +752,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment1`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double def_tank_level;
@@ -589,6 +765,8 @@ typedef struct {
 
 /**
  * `#[repr(C)]` mirror of [`machbus::j1939::Aftertreatment2`].
+ *
+ * A parameter the ECU does not report is `NaN` — see [`signal_to_c`].
  */
 typedef struct {
   double dpf_differential_pressure_kpa;
@@ -914,11 +1092,6 @@ typedef struct {
   bool implement_ready;
 } MachbusTimInterlocks;
 
-/**
- * Data Dictionary Identifier (ISO 11783-11).
- */
-typedef uint16_t DDI;
-
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -976,6 +1149,17 @@ bool machbus_session_start_address_claim(MachbusSession *h);
  * frames produced are then available via [`machbus_session_poll_transmit`].
  */
 bool machbus_session_tick(MachbusSession *h, uint32_t dt_ms);
+
+/**
+ * Advance the virtual clock by `dt_us` **microseconds** and run
+ * cadences/timers.
+ *
+ * [`machbus_session_tick`] takes whole milliseconds, so a control loop running
+ * faster than 1 kHz passes `0` on every call and the clock never moves — every
+ * protocol timer freezes and no watchdog ever expires. Use this entry point
+ * for any loop that can tick more often than once a millisecond.
+ */
+bool machbus_session_tick_us(MachbusSession *h, uint64_t dt_us);
 
 /**
  * Feed one received CAN frame (extended 29-bit `raw_id`, up to 8 data bytes).
@@ -1099,47 +1283,54 @@ bool machbus_session_implement_command_aux_valve(MachbusSession *h,
                                                  uint16_t flow_rate);
 
 /**
- * Command the steering system to follow a path **curvature** in 1/km
- * (`0.0` = straight; sign follows the ISO 11783-7 wire convention). Broadcast
- * on the next tick as a Guidance System Command (PGN 0xAD00). Requires the
- * guidance subsystem.
+ * Move AutoDrive to *ready to enable*: the machine is answering and nothing
+ * is blocking, but no setpoint is being commanded yet. Returns `false` and
+ * sets the last error to the first unmet precondition.
  */
-bool machbus_session_guidance_command_curvature(MachbusSession *h, double curvature_per_km);
+bool machbus_session_autodrive_arm(MachbusSession *h);
 
 /**
- * Command a turn of the given **radius in metres** (curvature = 1000 / radius;
- * a zero or non-finite radius commands straight ahead). Requires the guidance
- * subsystem.
+ * Begin commanding. The setpoint reaches the bus on the next tick.
  */
-bool machbus_session_guidance_command_radius(MachbusSession *h, double radius_m);
+bool machbus_session_autodrive_engage(MachbusSession *h);
 
 /**
- * Command with a robotics-style twist: linear velocity `linear_mps` (m/s,
- * forward positive) and angular/yaw velocity `angular_rad_s` (rad/s, left
- * positive). Sends both the steering curvature (`κ = ω / v`, PGN 0xAD00) and
- * the target speed (PGN 0xFD43). Requires the guidance subsystem.
+ * Stop commanding and fall back to the safe state. Never refused.
  */
-bool machbus_session_guidance_command_velocity(MachbusSession *h,
-                                               double linear_mps,
-                                               double angular_rad_s);
+bool machbus_session_autodrive_disengage(MachbusSession *h);
 
 /**
- * Command straight-ahead (zero curvature). Requires the guidance subsystem.
+ * Replace the setpoint: `curvature_km_inv` (right-positive, AEF D.7.2.1) and
+ * `speed_mps`. Pass a non-finite value for either to leave that axis
+ * uncommanded. Returns `false` with the refusal in the last error.
  */
-bool machbus_session_guidance_command_straight(MachbusSession *h);
+bool machbus_session_autodrive_command(MachbusSession *h,
+                                       double curvature_km_inv,
+                                       double speed_mps);
 
 /**
- * Write the steering system's last estimated curvature (1/km) into `out`.
- * Returns `false` (without setting an error) when no machine info has arrived
- * yet, or when the guidance subsystem is not plugged.
+ * Release a latched safe stop. Refused, with `false` and a last-error string,
+ * while the operator is still holding the Auxiliary Shortcut Button or a GNSS
+ * hazard is live.
  */
-bool machbus_session_guidance_estimated_curvature(const MachbusSession *h, double *out);
+bool machbus_session_autodrive_clear_stop(MachbusSession *h);
 
 /**
- * Whether the steering system last reported it is ready/engaged to steer.
- * Returns `false` if no machine info has arrived or the subsystem is unplugged.
+ * Why AutoDrive stopped, or [`MachbusSafeStopTrigger::None`] when no stop is
+ * latched.
  */
-bool machbus_session_guidance_is_steering_ready(const MachbusSession *h);
+MachbusSafeStopTrigger machbus_session_autodrive_stop_reason(const MachbusSession *h);
+
+/**
+ * Whether AutoDrive is actively commanding the machine.
+ */
+bool machbus_session_autodrive_is_engaged(const MachbusSession *h);
+
+/**
+ * The AutoDrive automation status as its raw ISO 11783-7 Table 45 value, or
+ * `0xFF` when the subsystem is not plugged.
+ */
+uint8_t machbus_session_autodrive_status(const MachbusSession *h);
 
 /**
  * Connect the VT client to a server address. Requires the VT client subsystem.
@@ -1790,4 +1981,3 @@ uintptr_t machbus_ecu_identification_hardware_id_into(const MachbusEcuIdentifica
  * Free an ECU Identification handle. Accepts `NULL`.
  */
 void machbus_ecu_identification_free(MachbusEcuIdentification *h);
-

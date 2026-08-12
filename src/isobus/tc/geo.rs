@@ -32,15 +32,16 @@ const TC_GEO_LON_MIN_RAW: i32 = -1_800_000_000;
 const TC_GEO_LON_MAX_RAW: i32 = 1_800_000_000;
 const TC_GEO_NOT_AVAILABLE_RAW: i32 = 0x7FFF_FFFF;
 
-/// TC-GEO DDIs (ISO 11783-10).
-pub mod geo_ddi {
-    use super::DDI;
-    pub const ACTUAL_LATITUDE: DDI = DDI(0x0087);
-    pub const ACTUAL_LONGITUDE: DDI = DDI(0x0088);
-    pub const ACTUAL_ALTITUDE: DDI = DDI(0x0089);
-    pub const SETPOINT_LATITUDE: DDI = DDI(0x008A);
-    pub const SETPOINT_LONGITUDE: DDI = DDI(0x008B);
-}
+// The `geo_ddi` module and `position_process_data_payloads` used to live here.
+// They transmitted latitude and longitude as Process Data under DDI 0x0087 and
+// 0x0088, which the ISO 11783-11 data dictionary assigns to Device Element
+// Offset Y and Device Element Offset Z — both in millimetres. Any conformant
+// TC decoded a latitude of 52.0 degrees as a device element sitting 520 km off
+// the datum. There is no TC-GEO position DDI to substitute (G5: no constant
+// without a citation); the TC already receives position from
+// `PGN_GNSS_POSITION` via [`TCGEOInterface::try_handle_gnss_position`]. A
+// product that genuinely needs its own channel must define it in the
+// proprietary range 0xE000-0xFFFE and document it as non-interoperable.
 
 /// Timestamped WGS84 position.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -149,20 +150,6 @@ impl TCGEOInterface {
         Ok(())
     }
 
-    /// Build the two `PGN_ECU_TO_TC` payloads (latitude then
-    /// longitude) the caller should send to the TC. Returns
-    /// `Err(InvalidState)` if no position is recorded yet.
-    pub fn position_process_data_payloads(&self) -> Result<[[u8; 8]; 2]> {
-        let pos = self
-            .current_position
-            .ok_or_else(|| Error::invalid_state("no position available"))?;
-        let lat_fixed = encode_lat_raw(pos.position.latitude)?;
-        let lon_fixed = encode_lon_raw(pos.position.longitude)?;
-        let lat = encode_value_pd(geo_ddi::ACTUAL_LATITUDE, lat_fixed);
-        let lon = encode_value_pd(geo_ddi::ACTUAL_LONGITUDE, lon_fixed);
-        Ok([lat, lon])
-    }
-
     pub fn add_prescription_map(&mut self, map: PrescriptionMap) {
         self.on_prescription_map_received.emit(&map);
         self.maps.push(map);
@@ -265,7 +252,7 @@ pub fn prescription_rate_from_engineering(ddi: DDI, engineering_value: f64) -> R
         return Err(Error::invalid_data("rate DDI has invalid resolution"));
     }
     let raw = round_f64(engineering_value / resolution);
-    if raw < f64::from(min_value) || raw > f64::from(max_value) {
+    if raw < f64::from(min_value) || raw > max_value as f64 {
         return Err(Error::invalid_data(format!(
             "prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -277,7 +264,7 @@ pub fn prescription_rate_from_engineering(ddi: DDI, engineering_value: f64) -> R
 /// defined by a known ISO 11783 rate DDI.
 pub fn prescription_rate_to_engineering(ddi: DDI, raw_value: i32) -> Result<f64> {
     let (ddi_raw, _resolution, min_value, max_value) = validate_rate_ddi(ddi)?;
-    if raw_value < min_value || raw_value > max_value {
+    if i64::from(raw_value) < i64::from(min_value) || i64::from(raw_value) > max_value {
         return Err(Error::invalid_data(format!(
             "raw prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -289,7 +276,7 @@ pub fn prescription_rate_to_engineering(ddi: DDI, raw_value: i32) -> Result<f64>
 /// payload for a known ISO 11783 rate DDI.
 pub fn prescription_rate_process_data_payload(ddi: DDI, raw_value: i32) -> Result<[u8; 8]> {
     let (ddi_raw, _resolution, min_value, max_value) = validate_rate_ddi(ddi)?;
-    if raw_value < min_value || raw_value > max_value {
+    if i64::from(raw_value) < i64::from(min_value) || i64::from(raw_value) > max_value {
         return Err(Error::invalid_data(format!(
             "raw prescription rate out of range for DDI 0x{ddi_raw:04X}"
         )));
@@ -297,7 +284,7 @@ pub fn prescription_rate_process_data_payload(ddi: DDI, raw_value: i32) -> Resul
     Ok(encode_value_pd(ddi, raw_value))
 }
 
-fn validate_rate_ddi(ddi: DDI) -> Result<(u16, f64, i32, i32)> {
+fn validate_rate_ddi(ddi: DDI) -> Result<(u16, f64, i32, i64)> {
     let ddi_raw: u16 = ddi.into();
     let Some(definition) = ddi_lookup(ddi_raw) else {
         return Err(Error::invalid_data(format!(
@@ -315,30 +302,6 @@ fn validate_rate_ddi(ddi: DDI) -> Result<(u16, f64, i32, i32)> {
         definition.min_value,
         definition.max_value,
     ))
-}
-
-fn encode_lat_raw(latitude: f64) -> Result<i32> {
-    encode_geo_raw(latitude, TC_GEO_LAT_MIN_RAW, TC_GEO_LAT_MAX_RAW, "latitude")
-}
-
-fn encode_lon_raw(longitude: f64) -> Result<i32> {
-    encode_geo_raw(
-        longitude,
-        TC_GEO_LON_MIN_RAW,
-        TC_GEO_LON_MAX_RAW,
-        "longitude",
-    )
-}
-
-fn encode_geo_raw(value: f64, min_raw: i32, max_raw: i32, field: &str) -> Result<i32> {
-    if !value.is_finite() {
-        return Err(Error::invalid_data(format!("{field} must be finite")));
-    }
-    let raw = round_f64(value * 1e7);
-    if raw < f64::from(min_raw) || raw > f64::from(max_raw) {
-        return Err(Error::invalid_data(format!("{field} out of range")));
-    }
-    Ok(raw as i32)
 }
 
 fn round_f64(value: f64) -> f64 {
@@ -381,8 +344,12 @@ pub fn point_in_polygon(point: Wgs, polygon: &[Wgs]) -> bool {
         let yi = a.latitude;
         let xj = b.longitude;
         let yj = b.latitude;
+        let denom = yj - yi;
+        if denom.abs() < 1e-9 {
+            continue;
+        }
         let intersect = (yi > point.latitude) != (yj > point.latitude)
-            && point.longitude < (xj - xi) * (point.latitude - yi) / (yj - yi) + xi;
+            && point.longitude < (xj - xi) * (point.latitude - yi) / denom + xi;
         if intersect {
             inside = !inside;
         }
@@ -594,48 +561,28 @@ mod tests {
         assert!(tc.current_position().is_none());
     }
 
+    /// L1 — the position payloads went out under DDI 0x0087/0x0088, which the
+    /// ISO 11783-11 dictionary assigns to Device Element Offset Y and Z in
+    /// millimetres. A conformant TC read a latitude of 52 degrees as an offset
+    /// of 520 km. The channel is gone; position reaches the TC over
+    /// `PGN_GNSS_POSITION`, which is where the standard puts it.
     #[test]
-    fn position_payloads_no_position_errors() {
-        let tc = TCGEOInterface::new();
-        assert!(tc.position_process_data_payloads().is_err());
-    }
-
-    #[test]
-    fn position_payloads_round_trip_ddis() {
+    fn position_reaches_the_tc_over_pgn_gnss_position_only() {
         let mut tc = TCGEOInterface::new();
-        tc.set_position(GeoPoint {
-            position: wgs(52.123, 5.456),
-            timestamp_us: 0,
-        });
-        let [lat, lon] = tc.position_process_data_payloads().unwrap();
-        let lat_ddi = (lat[2] as u16) | ((lat[3] as u16) << 8);
-        let lon_ddi = (lon[2] as u16) | ((lon[3] as u16) << 8);
-        assert_eq!(lat_ddi, geo_ddi::ACTUAL_LATITUDE);
-        assert_eq!(lon_ddi, geo_ddi::ACTUAL_LONGITUDE);
-        let lat_val = i32::from_le_bytes(lat[4..8].try_into().unwrap());
-        assert_eq!(lat_val, 521_230_000);
-    }
+        assert!(tc.current_position().is_none());
 
-    #[test]
-    fn position_payloads_reject_non_finite_or_out_of_range_coordinates() {
-        let mut tc = TCGEOInterface::new();
-        tc.set_position(GeoPoint {
-            position: wgs(f64::NAN, 5.0),
-            timestamp_us: 0,
-        });
-        assert!(tc.position_process_data_payloads().is_err());
+        let mut data = 521_230_000i32.to_le_bytes().to_vec();
+        data.extend_from_slice(&54_560_000i32.to_le_bytes());
+        let msg = Message::new(PGN_GNSS_POSITION, data, 0x10);
+        tc.try_handle_gnss_position(&msg)
+            .expect("a well-formed position is accepted");
+        let got = tc.current_position().expect("position recorded");
+        assert!((got.position.latitude - 52.123).abs() < 1e-6);
+        assert!((got.position.longitude - 5.456).abs() < 1e-6);
 
-        tc.set_position(GeoPoint {
-            position: wgs(90.000_000_1, 5.0),
-            timestamp_us: 0,
-        });
-        assert!(tc.position_process_data_payloads().is_err());
-
-        tc.set_position(GeoPoint {
-            position: wgs(52.0, -180.000_000_1),
-            timestamp_us: 0,
-        });
-        assert!(tc.position_process_data_payloads().is_err());
+        // Any process-data payload the interface still builds is a rate, and
+        // rates are refused for a DDI that is not one.
+        assert!(prescription_rate_from_engineering(DDI(0x0087), 1.0).is_err());
     }
 
     #[test]
@@ -714,7 +661,7 @@ mod tests {
 
     #[test]
     fn prescription_rate_rejects_unknown_non_rate_and_out_of_range_ddis() {
-        assert!(prescription_rate_from_engineering(geo_ddi::ACTUAL_LATITUDE, 1.0).is_err());
+        assert!(prescription_rate_from_engineering(DDI(0x0087), 1.0).is_err());
         assert!(prescription_rate_from_engineering(DDI(0xFFFF), 1.0).is_err());
         assert!(
             prescription_rate_from_engineering(
@@ -767,7 +714,7 @@ mod tests {
             None
         );
         assert!(
-            tc.rate_process_data_payload_at_position(wgs(0.5, 0.5), geo_ddi::ACTUAL_LATITUDE)
+            tc.rate_process_data_payload_at_position(wgs(0.5, 0.5), DDI(0x0087))
                 .is_err()
         );
     }
@@ -832,7 +779,6 @@ mod tests {
         assert_eq!(tc.get_rate_at_position(wgs(1.0, 1.0)), Some(200));
         assert_eq!(tc.get_rate_at_position(wgs(0.9, 0.9)), None);
         assert_eq!(tc.get_rate_at_position(wgs(5.0, 5.0)), None);
-        assert!(tc.position_process_data_payloads().is_err());
     }
 
     proptest! {

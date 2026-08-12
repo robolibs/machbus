@@ -341,7 +341,7 @@ impl TransportProtocol {
             // Timeout per state.
             let timed_out = match self.sessions[i].state {
                 SessionState::WaitingForCTS => self.sessions[i].timer_ms >= TP_TIMEOUT_T3_MS,
-                SessionState::WaitingForData => self.sessions[i].timer_ms >= TP_TIMEOUT_T1_MS,
+                SessionState::WaitingForData => self.sessions[i].timer_ms >= TP_TIMEOUT_T2_MS,
                 SessionState::WaitingForEndOfMsg => self.sessions[i].timer_ms >= TP_TIMEOUT_T3_MS,
                 SessionState::ReceivingData => self.sessions[i].timer_ms >= TP_TIMEOUT_T1_MS,
                 _ => false,
@@ -445,6 +445,36 @@ impl TransportProtocol {
             }
         }
         Ok(emitted)
+    }
+
+    /// Drop every session on `port` that uses `address` at either end, and
+    /// return the Conn_Abort frames announcing it.
+    ///
+    /// ISO 11783-5 §4.5.3 says a CF that loses arbitration "shall discontinue
+    /// using the address". New sends are already refused once the CF is
+    /// offline, but sessions that were already open kept running — and a BAM
+    /// needs no peer cooperation at all, so it carried on emitting DT frames
+    /// from an address now owned by somebody else.
+    ///
+    /// Nothing is transmitted. Every frame such an abort could carry would
+    /// have SA = the address the CF was just told to stop using — for a
+    /// transmit session that *is* `source_address`, and for a receive session
+    /// it is `destination_address` — and §4.4.2.4 restricts a CF that cannot
+    /// claim to Cannot Claim and Request for Address Claimed. A Conn_Abort is
+    /// neither. Sending one also lands on the CF that just legitimately won the
+    /// address, whose `check_address_violation` answers it with an unsolicited
+    /// Address Claimed: spurious duplicate-address noise from the node the fix
+    /// was meant to protect. The peer closes its half on T2/T3 within 1250 ms,
+    /// which is the same reasoning already applied to a BAM.
+    pub fn abort_sessions_for_address(&mut self, port: u8, address: Address) -> Vec<Frame> {
+        self.sessions.retain(|session| {
+            session.can_port != port
+                || (session.source_address != address && session.destination_address != address)
+        });
+        self.timer_sessions.retain(|session| {
+            session.port != port || (session.source != address && session.destination != address)
+        });
+        Vec::new()
     }
 
     #[inline]
@@ -707,15 +737,6 @@ impl TransportProtocol {
         let src = frame.source();
         let dst = frame.destination();
         let cm_pgn = pgn_from_cm_bytes(&frame.data);
-        if !tp_cm_reserved_bytes_are_canonical(control_byte, &frame.data) {
-            tracing::warn!(
-                target: "machbus.transport.tp",
-                control_byte,
-                "dropping TP CM frame with non-canonical reserved bytes"
-            );
-            self.note_dropped_frame();
-            return responses;
-        }
         if !pgn_is_valid(cm_pgn) {
             tracing::warn!(
                 target: "machbus.transport.tp",
@@ -761,7 +782,27 @@ impl TransportProtocol {
                     return responses;
                 }
 
-                if self.receive_dt_path_is_active(src, dst, port) {
+                // §5.10.4.2: "If multiple RTS are received from the same SA for
+                // the same PGN, then the most recent RTS shall be acted on and
+                // the previous RTS abandoned. No abort message shall be sent for
+                // the abandoned RTS in this specific case." Answering with
+                // Conn_Abort instead meant a peer retrying its RTS — after a
+                // lost CTS, say — could never open the connection.
+                if let Some(existing) = self.receive_session_for(src, dst, port, cm_pgn) {
+                    tracing::debug!(
+                        target: "machbus.transport.tp",
+                        source = %format_args!("0x{src:02X}"),
+                        pgn = %format_args!("0x{cm_pgn:04X}"),
+                        "replacing an in-flight receive session on a repeated RTS",
+                    );
+                    self.sessions.swap_remove(existing);
+                } else if self.receive_path_is_active(src, dst, port) {
+                    // A *different* PGN on the same source/destination pair is
+                    // genuinely ambiguous: TP.DT frames carry only a sequence
+                    // number, so an arriving packet could belong to either
+                    // session. That one is refused. A BAM from the same node is
+                    // not a conflict — its DT frames are broadcast, so the two
+                    // paths stay distinguishable.
                     let tmp = TransportSession {
                         source_address: dst,
                         destination_address: src,
@@ -1016,14 +1057,20 @@ impl TransportProtocol {
                 let msg_size = frame.data[1] as u32 | ((frame.data[2] as u32) << 8);
                 let total_packets = frame.data[3];
                 let over_receive_cap = msg_size > self.max_receive_bytes;
-                if self.receive_dt_path_is_active(src, BROADCAST_ADDRESS, port) {
-                    tracing::warn!(
+                // BAM is connectionless — there is no abort to send and no
+                // handshake to retry — so a repeated BAM for the same PGN can
+                // only mean "start again". Dropping it left the receiver stuck
+                // on the abandoned first attempt until it timed out.
+                if let Some(existing) =
+                    self.receive_session_for(src, BROADCAST_ADDRESS, port, cm_pgn)
+                {
+                    tracing::debug!(
                         target: "machbus.transport.tp",
-                        source = src,
-                        "dropping BAM because TP DT endpoint path is already active",
+                        source = %format_args!("0x{src:02X}"),
+                        pgn = %format_args!("0x{cm_pgn:04X}"),
+                        "restarting a broadcast session on a repeated BAM",
                     );
-                    self.note_dropped_frame();
-                    return responses;
+                    self.sessions.swap_remove(existing);
                 }
                 if !frame.is_broadcast()
                     || !valid_tp_payload_shape(msg_size, total_packets)
@@ -1095,10 +1142,11 @@ impl TransportProtocol {
             }
 
             tp_cm::ABORT => {
-                let Some(reason) = TransportAbortReason::try_from_u8(frame.data[1]) else {
-                    self.note_dropped_frame();
-                    return responses;
-                };
+                // A reason this build does not recognise is still an abort:
+                // the peer has torn the connection down. Dropping the frame
+                // left our half of the session open forever.
+                let reason = TransportAbortReason::try_from_u8(frame.data[1])
+                    .unwrap_or(TransportAbortReason::Other);
                 if let Some(idx) = self.session_position(|s| {
                     s.pgn == cm_pgn
                         && s.can_port == port
@@ -1138,7 +1186,12 @@ impl TransportProtocol {
                 && s.can_port == port
                 && (s.state == SessionState::WaitingForData
                     || s.state == SessionState::ReceivingData)
-                && (s.is_broadcast() || s.destination_address == dst)
+                // Exact destination match. A BAM's TP.DT frames go to the
+                // global address and a connection-mode session's to the
+                // specific one, so the two are distinguishable on the wire —
+                // but `is_broadcast()` matching *any* destination let an
+                // in-flight BAM swallow a destination-specific data packet.
+                && s.destination_address == dst
         }) else {
             self.note_dropped_frame();
             return responses;
@@ -1284,14 +1337,38 @@ impl TransportProtocol {
         responses
     }
 
-    fn receive_dt_path_is_active(&self, source: Address, destination: Address, port: u8) -> bool {
+    /// Index of an existing receive session for exactly this
+    /// (source, destination, port, PGN), if one is open.
+    ///
+    /// §5.10.4.2 scopes the rule to "multiple RTS ... from the same SA for the
+    /// same PGN". Matching on the source alone — and treating a broadcast
+    /// destination as matching everything — meant a BAM already in flight
+    /// blocked an unrelated destination-specific RTS from the same node, and a
+    /// second RTS for a *different* PGN was refused outright.
+    /// Whether any receive session already occupies this exact source →
+    /// destination DT path, regardless of PGN.
+    fn receive_path_is_active(&self, source: Address, destination: Address, port: u8) -> bool {
         self.sessions.iter().any(|s| {
             s.direction == TransportDirection::Receive
                 && s.source_address == source
                 && s.can_port == port
-                && (s.destination_address == BROADCAST_ADDRESS
-                    || destination == BROADCAST_ADDRESS
-                    || s.destination_address == destination)
+                && s.destination_address == destination
+        })
+    }
+
+    fn receive_session_for(
+        &self,
+        source: Address,
+        destination: Address,
+        port: u8,
+        pgn: Pgn,
+    ) -> Option<usize> {
+        self.sessions.iter().position(|s| {
+            s.direction == TransportDirection::Receive
+                && s.source_address == source
+                && s.can_port == port
+                && s.destination_address == destination
+                && s.pgn == pgn
         })
     }
 }
@@ -1304,15 +1381,6 @@ fn valid_tp_payload_shape(total_bytes: u32, total_packets: u8) -> bool {
         && total_bytes <= TP_MAX_DATA_LENGTH
         && total_packets != 0
         && total_packets as u32 == total_bytes.div_ceil(TP_BYTES_PER_FRAME)
-}
-
-fn tp_cm_reserved_bytes_are_canonical(control_byte: u8, data: &[u8; 8]) -> bool {
-    match control_byte {
-        tp_cm::CTS => data[3] == 0xFF && data[4] == 0xFF,
-        tp_cm::EOMA | tp_cm::BAM => data[4] == 0xFF,
-        tp_cm::ABORT => data[2..5].iter().all(|&byte| byte == 0xFF),
-        _ => true,
-    }
 }
 
 fn rx_buffer(

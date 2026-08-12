@@ -19,8 +19,8 @@ use super::types::{
     SC_MSG_CODE_CLIENT, SC_MSG_CODE_MASTER, SC_SEQUENCE_NUMBER_NOT_AVAILABLE,
     SC_STATUS_PAYLOAD_LEN, SCClientConfig, SCClientFuncError, SCClientState, SCMasterState,
     SCSequenceState, SCState, sc_inactive_status_sequence_fields_are_valid,
-    sc_master_busy_flags_are_valid, sc_master_state_byte_is_valid, sc_sequence_state_byte_is_valid,
-    sc_status_reserved_tail_is_valid, sc_status_sequence_number_is_valid,
+    sc_master_state_byte_is_valid, sc_sequence_state_byte_is_valid,
+    sc_status_payload_len_is_canonical, sc_status_sequence_number_is_valid,
     sc_status_sequence_state_is_supported,
 };
 use crate::net::error::{Error, Result};
@@ -39,6 +39,16 @@ pub struct SCClient {
 
     time_since_last_status_ms: u32,
     status_pending: bool,
+    /// Milliseconds since the last accepted `SCMasterStatus`.
+    ///
+    /// G2 — ISO 11783-14 F.2 applies a 600 ms timeout in Recording / Recording
+    /// Completion / Play Back / Abort, and 3 s in Ready.
+    /// `time_since_last_status_ms` measures this client's own *transmit*
+    /// spacing, so there was no inbound timer at all: if the active SCM stopped
+    /// transmitting — power cycle, bus-off, address-claim loss — the client
+    /// stayed Active with `current_step_id` set and kept commanding its
+    /// function, which is the opposite of §3.10's safe state.
+    master_status_age_ms: u32,
 
     current_step_id: u16,
 
@@ -60,6 +70,7 @@ impl SCClient {
             busy_timer_ms: 0,
             time_since_last_status_ms: u32::MAX, // first send not throttled
             status_pending: false,
+            master_status_age_ms: 0,
             current_step_id: 0,
             on_state_change: Event::new(),
             on_sequence_start: Event::new(),
@@ -112,6 +123,28 @@ impl SCClient {
     pub fn update(&mut self, elapsed_ms: u32) -> Option<[u8; 8]> {
         self.time_since_last_status_ms = self.time_since_last_status_ms.saturating_add(elapsed_ms);
 
+        // G2 — F.2: "A timeout of 600 ms for the SCMasterStatus message shall be
+        // applied in the 'Recording', 'Recording Completion', 'Play Back' or
+        // 'Abort' state. A timeout of 3 s shall be applied in the 'Ready'
+        // state." Losing the master is a communication error (§4.5.2), and
+        // §3.10 requires the client to reach its safe state rather than keep
+        // driving the last commanded step.
+        if !self.state_machine.is(SCState::Idle) {
+            self.master_status_age_ms = self.master_status_age_ms.saturating_add(elapsed_ms);
+            let limit = if self.state_machine.is(SCState::Ready) {
+                self.config.master_timeout_ready_ms
+            } else {
+                self.config.master_timeout_active_ms
+            };
+            if self.master_status_age_ms >= limit && !self.state_machine.is(SCState::Error) {
+                self.transition(SCState::Error);
+                self.on_abort.emit(&());
+                self.clear_sequence_session();
+                self.status_pending = false;
+                return Some(self.encode_client_status_now());
+            }
+        }
+
         if self.busy
             && (self.state_machine.is(SCState::Active) || self.state_machine.is(SCState::Paused))
         {
@@ -128,6 +161,23 @@ impl SCClient {
             && self.time_since_last_status_ms >= self.config.min_status_spacing_ms
         {
             self.status_pending = false;
+            return Some(self.encode_client_status_now());
+        }
+
+        // B8 — ISO 11783-14 F.3: the status is sent "once per second during the
+        // 'Ready' state or if SCC is disabled, and 5 messages per second during
+        // the active 'Recording', 'Recording Completion', 'Play Back' or
+        // 'Abort' states". Emitting only on change left the client silent
+        // whenever nothing was happening, so the master's 600 ms F.3 timeout
+        // expired and it declared the client dead mid-play-back. `SCMaster`
+        // already runs this cadence; the client never did.
+        let interval = match self.iso_sequence_state() {
+            SCSequenceState::PlayBack | SCSequenceState::Recording | SCSequenceState::Abort => {
+                self.config.active_status_interval_ms
+            }
+            _ => self.config.idle_status_interval_ms,
+        };
+        if self.time_since_last_status_ms >= interval {
             return Some(self.encode_client_status_now());
         }
         None
@@ -188,10 +238,8 @@ impl SCClient {
                 "SC master status has wrong message code",
             ));
         }
-        if !sc_status_reserved_tail_is_valid(&msg.data) {
-            return Err(Error::invalid_data(
-                "SC master status has non-0xFF reserved tail bytes",
-            ));
+        if !sc_status_payload_len_is_canonical(&msg.data) {
+            return Err(Error::invalid_data("SC master status has a wrong payload length"));
         }
         let master_state_raw = msg.get_u8(1);
         if !sc_master_state_byte_is_valid(master_state_raw) {
@@ -205,11 +253,6 @@ impl SCClient {
         ) {
             return Err(Error::invalid_data(
                 "SC master initialization state is not supported",
-            ));
-        }
-        if !sc_master_busy_flags_are_valid(msg.get_u8(4)) {
-            return Err(Error::invalid_data(
-                "SC master status has reserved busy flags",
             ));
         }
         let master_ms =
@@ -243,6 +286,9 @@ impl SCClient {
             ));
         }
 
+        // Every accepted status re-arms the F.2 reception watchdog.
+        self.master_status_age_ms = 0;
+
         let master_state = if matches!(master_ms, SCMasterState::Active) {
             match seq_state {
                 SCSequenceState::Ready => {
@@ -271,7 +317,19 @@ impl SCClient {
         let mut to_send: Option<[u8; 8]> = None;
         match master_state {
             SCState::Ready => {
-                if self.state_machine.is(SCState::Idle) {
+                // D4 — §4.4.7.3 ends an abort with a return to Ready once every
+                // enabled SCC has confirmed. The master half of that landed in
+                // 27f1c4a; this half did not, so `SCState::Error` was reachable
+                // from four states and left by exactly one — an Inactive master
+                // status. Combined with D3 (the master never transmitted one)
+                // that made a single abort latch the client for the life of the
+                // object: out of service until power cycle, still occupying
+                // PGN_SC_CLIENT_STATUS at 5 Hz, with no operator recovery.
+                if matches!(
+                    self.state_machine.state(),
+                    SCState::Idle | SCState::Error | SCState::Complete
+                ) {
+                    self.clear_sequence_session();
                     self.transition(SCState::Ready);
                     self.on_sequence_start.emit(&());
                     to_send = self.request_status_send_inline();
@@ -380,8 +438,20 @@ impl SCClient {
         } else {
             (self.current_step_id & 0xFF) as u8
         };
-        data[3] = seq.as_u8();
-        data[4] = SCClientFuncError::NoErrors.as_u8();
+        // G4 — F.3 byte 4: "FF16 When byte 2 is set to disabled or
+        // initialization"; byte 5 likewise "FF16 When byte 2 is set to
+        // disabled". These transmitted 0x00, which a conformant SCM rejects.
+        let disabled = matches!(cs, SCClientState::Disabled);
+        data[3] = if disabled {
+            SCSequenceState::NotApplicable.as_u8()
+        } else {
+            seq.as_u8()
+        };
+        data[4] = if disabled {
+            SCClientFuncError::NotApplicable.as_u8()
+        } else {
+            SCClientFuncError::NoErrors.as_u8()
+        };
         self.time_since_last_status_ms = 0;
         data
     }
@@ -594,19 +664,32 @@ mod tests {
         assert!(ready_client.is(SCState::Active));
     }
 
+    /// G3 — reserved bits are transmitted as 1 and ignored on receive. Both of
+    /// these frames used to be rejected outright before any state update, so a
+    /// master whose byte 5 carried its six unallocated bits as 1 — exactly what
+    /// G3 requires an encoder to do — left this client Idle forever.
     #[test]
-    fn master_status_rejects_reserved_busy_bits_and_tail_bytes() {
-        let mut ready_client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
+    fn undefined_bits_in_a_master_status_do_not_reject_the_frame() {
+        let mut client = SCClient::new(SCClientConfig::default().with_min_spacing(0));
 
-        let mut bad_busy = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
-        bad_busy.data[4] = 0x80;
-        assert!(ready_client.handle_master_status(&bad_busy).is_none());
-        assert!(ready_client.is(SCState::Idle));
+        let mut reserved_busy_bits =
+            master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
+        reserved_busy_bits.data[4] = 0xFC;
+        client.handle_master_status(&reserved_busy_bits);
+        assert!(
+            client.is(SCState::Ready),
+            "byte 5 bits 3-8 are unallocated; only bits 1-2 are the busy flags"
+        );
 
-        let mut bad_tail = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
-        bad_tail.data[7] = 0;
-        assert!(ready_client.handle_master_status(&bad_tail).is_none());
-        assert!(ready_client.is(SCState::Idle));
+        let mut zero_padded_tail =
+            SCClient::new(SCClientConfig::default().with_min_spacing(0));
+        let mut zeroed = master_status(SCMasterState::Active, SCSequenceState::Ready, 0xFF);
+        zeroed.data[7] = 0;
+        zero_padded_tail.handle_master_status(&zeroed);
+        assert!(
+            zero_padded_tail.is(SCState::Ready),
+            "a peer that zero-pads its reserved tail is still understood"
+        );
     }
 
     #[test]

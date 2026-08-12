@@ -7,17 +7,20 @@ use crate::isobus::implement::tractor_commands::{
     HitchCommand, HitchCommandMsg, PtoCommand, PtoCommandMsg,
 };
 use crate::isobus::tim::{
-    AuxValveCommand, HitchState, PtoState, TimAuthority, TimCommand, TimInterlocks, TimOptionSet,
-    TimValidationError,
+    AuxValveCommand, HitchState, PtoState, TIM_UPDATE_INTERVAL_MS, TimAuthority, TimCommand,
+    TimInterlocks, TimOptionSet, TimValidationError,
 };
+use crate::j1939::PowerState;
 use crate::net::pgn_defs::{
     PGN_AUX_VALVE_0_7, PGN_AUX_VALVE_8_15, PGN_AUX_VALVE_16_23, PGN_AUX_VALVE_24_31,
     PGN_FRONT_HITCH, PGN_FRONT_HITCH_CMD, PGN_FRONT_PTO, PGN_FRONT_PTO_CMD, PGN_REAR_HITCH,
     PGN_REAR_HITCH_CMD, PGN_REAR_PTO, PGN_REAR_PTO_CMD,
 };
 use crate::net::{Address, BROADCAST_ADDRESS, Error, Message, Pgn, Priority, Result};
+use crate::safety::SafeStopTrigger;
+use crate::safety::{SafeModeTrigger, TecuSafeMode};
 use crate::session::plugin::{Plugin, PluginCtx};
-use crate::session::sys::{Event, Hitch, Pto, TimEvent};
+use crate::session::sys::{Event, Hitch, MaintainPowerEvent, Pto, TimEvent};
 use crate::time::Instant;
 use core::any::Any;
 
@@ -46,6 +49,11 @@ pub struct Tim {
     last_aux: Option<AuxValveCommand>,
     pending_events: Vec<TimEvent>,
     pending_tx: Vec<(Pgn, Vec<u8>, Address)>,
+    /// Previous tick instant, so the authority watchdog can be advanced by the
+    /// elapsed time rather than by tick count.
+    last_tick: Option<Instant>,
+    /// ISO 11783-9 §4.7 safe-mode guard.
+    safe_mode: TecuSafeMode,
 }
 
 impl Tim {
@@ -61,7 +69,26 @@ impl Tim {
             last_aux: None,
             pending_events: Vec::new(),
             pending_tx: Vec::new(),
+            last_tick: None,
+            safe_mode: TecuSafeMode::new(),
         }
+    }
+
+    /// Enter ISO 11783-9 §4.7 safe mode. Engage commands are refused until it
+    /// is explicitly cleared; stops always pass.
+    pub const fn enter_safe_mode(&mut self, trigger: SafeModeTrigger) {
+        self.safe_mode.enter(trigger);
+    }
+
+    /// Leave safe mode — the operator override of §4.7. Deliberately explicit.
+    pub const fn clear_safe_mode(&mut self) {
+        self.safe_mode.clear();
+    }
+
+    /// Whether safe mode is currently blocking engage commands.
+    #[must_use]
+    pub const fn is_safe_mode_active(&self) -> bool {
+        self.safe_mode.is_active()
     }
 
     /// Current local authority/interlock guard.
@@ -209,6 +236,18 @@ impl Tim {
     }
 
     fn guarded(&mut self, guard: TimCommand, pgn: Pgn, bytes: Vec<u8>) -> Result<()> {
+        // ISO 11783-9 §4.7: no unexpected start, but always allow a stop.
+        // `TecuSafeMode` implemented exactly this and was consulted nowhere —
+        // the third of three safety abstractions the crate had that could not
+        // actually stop anything.
+        if !self.safe_mode.allows(guard.safe_mode_kind()) {
+            let error = TimValidationError::SafeModeActive;
+            self.pending_events.push(TimEvent::CommandBlocked {
+                command: guard,
+                error,
+            });
+            return Err(tim_error(error));
+        }
         match self.authority.ensure_command(guard) {
             Ok(()) => {
                 self.pending_tx.push((pgn, bytes, BROADCAST_ADDRESS));
@@ -253,6 +292,13 @@ impl Plugin for Tim {
         if !msg.has_usable_envelope_for_pgn(pgn) {
             return;
         }
+        // Any well-formed frame from a subscribed TIM PGN is evidence the peer
+        // is still there. `TimAuthority::keepalive` existed with no caller
+        // anywhere in the crate, so the AEF communication watchdog revoked
+        // every grant 300 ms after it was made: guarded hitch and PTO commands
+        // stopped reaching the bus while the implement held its last commanded
+        // position, with nothing to say why.
+        self.authority.keepalive();
         match pgn {
             PGN_FRONT_PTO | PGN_REAR_PTO => {
                 if let Some(state) = PtoState::decode(msg) {
@@ -334,9 +380,57 @@ impl Plugin for Tim {
         self.drain_pending(ctx);
     }
 
+    /// C4/C5 — ISO 11783-9 §4.7.1: "Upon loss of power or communication with
+    /// the tractor, the implement shall assume a condition of fail-safe
+    /// operation."
+    ///
+    /// `TecuSafeMode` is the crate's implementation of that obligation and it
+    /// gates every guarded hitch / PTO / aux engage command — but nothing
+    /// entered it: the only caller of `enter_safe_mode` was a unit test. The
+    /// session already detects all three conditions §4.7.1 names; this is the
+    /// wire between them.
+    fn on_event(&mut self, event: &Event, ctx: &mut PluginCtx<'_>) {
+        let trigger = match event {
+            Event::MaintainPower(
+                MaintainPowerEvent::PowerOff
+                | MaintainPowerEvent::StateChanged(PowerState::PowerOff),
+            ) => Some(SafeModeTrigger::EcuPowerLoss),
+            // Reuse the mapping the stop latch already agrees on rather than
+            // writing a second one that can drift from it.
+            _ => match SafeStopTrigger::from_event(event) {
+                Some(SafeStopTrigger::BusOff) => Some(SafeModeTrigger::CanBusFail),
+                Some(SafeStopTrigger::AddressClaimLost | SafeStopTrigger::HeartbeatError) => {
+                    Some(SafeModeTrigger::TecuCommLoss)
+                }
+                Some(SafeStopTrigger::KeySwitchOff) => Some(SafeModeTrigger::PowerLoss),
+                _ => None,
+            },
+        };
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if !self.safe_mode.is_active() {
+            self.safe_mode.enter(trigger);
+            self.pending_events.push(TimEvent::SafeModeEntered(trigger));
+            self.drain_pending(ctx);
+        }
+    }
+
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
+        let now = ctx.now();
+
+        // Advance the loss-of-communication watchdog. `TimAuthority` has always
+        // had one, with a documented AEF safe-stop revoke — but nothing called
+        // `tick`, so a granted authority survived indefinitely after the peer
+        // stopped sending keepalives.
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
+        if elapsed > 0 && self.authority.tick(elapsed) {
+            self.pending_events
+                .push(TimEvent::AuthorityStateChanged(self.authority.state()));
+        }
+
         self.drain_pending(ctx);
-        None
+        Some(now.add_millis(u64::from(TIM_UPDATE_INTERVAL_MS)))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -366,4 +460,199 @@ fn tim_error(err: TimValidationError) -> Error {
     Error::invalid_state(format!(
         "TIM authority/interlock guard rejected command: {err:?}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isobus::tim::{TimAuthorityState, TimOption};
+    use crate::net::{BROADCAST_ADDRESS, Frame, Identifier, Name, Priority};
+    use crate::session::Session;
+
+    fn node() -> Session {
+        let name = Name::default()
+            .with_identity_number(0x77)
+            .with_function_code(0x80)
+            .with_self_configurable(true);
+        let mut s = Session::builder(name, 0x80)
+            .plug(Tim::new(TimAuthority::new(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+                TimOption::FrontPtoDisengagementIsSupported,
+            ]))))
+            .build()
+            .unwrap();
+        s.start().unwrap();
+        let mut now = Instant::ZERO;
+        for _ in 0..40 {
+            now = now.add_millis(100);
+            s.tick(now);
+            while s.poll_transmit().is_some() {}
+            if s.is_claimed() {
+                break;
+            }
+        }
+        s
+    }
+
+    fn feed_pto_status(s: &mut Session, at: Instant) {
+        let frame = Frame::new(
+            Identifier::encode(Priority::Default, PGN_FRONT_PTO, 0xF0, BROADCAST_ADDRESS),
+            [0xFFu8; 8],
+            8,
+        );
+        s.feed(0, &frame, at);
+    }
+
+    /// H59 — `TecuSafeMode` implemented the ISO 11783-9 §4.7 obligations ("no
+    /// unexpected start", "must allow stop") in full and was consulted by
+    /// nothing outside its own unit test. Wiring it into the guarded-command
+    /// path is what makes it able to stop anything.
+    /// C4/C5 — ISO 11783-9 §4.7.1 safe mode must be reachable in production.
+    ///
+    /// `TecuSafeMode` gates every guarded engage command, but the only caller of
+    /// `enter_safe_mode` was a unit test: an implement that lost the CAN bus,
+    /// its address claim, or ECU power kept accepting engage commands. This is
+    /// a G9 test — it drives the real `Session` and asserts the machine-visible
+    /// outcome, not the component's internals.
+    #[test]
+    fn losing_the_bus_arms_iso_11783_9_safe_mode() {
+        use crate::net::fault_confinement::FaultConfinementAction;
+        use crate::session::sys::BusEvent;
+
+        let mut s = node();
+        assert!(
+            !s.get::<Tim>().unwrap().is_safe_mode_active(),
+            "a healthy node is not in safe mode"
+        );
+
+        // The CAN controller reaches bus-off — §4.7.1's "loss of communication".
+        s.push_event(Event::Bus(BusEvent::ConfinementChanged {
+            port: 0,
+            action: FaultConfinementAction::FailSafe,
+        }));
+        s.tick(Instant::from_millis(10_000));
+
+        let tim = s.get::<Tim>().unwrap();
+        assert!(
+            tim.is_safe_mode_active(),
+            "loss of communication must arm §4.7 safe mode"
+        );
+        assert!(
+            !tim.safe_mode.allows(crate::safety::TecuCommandKind::Engage),
+            "an engage command must be refused in safe mode"
+        );
+        assert!(
+            tim.safe_mode
+                .allows(crate::safety::TecuCommandKind::Disengage),
+            "§4.7 must never block a stop"
+        );
+    }
+
+    #[test]
+    fn safe_mode_blocks_engagement_but_never_a_stop() {
+        let mut s = node();
+        let now = Instant::from_millis(10_000);
+        s.tick(now);
+        feed_pto_status(&mut s, now);
+        s.get_mut::<Tim>()
+            .unwrap()
+            .set_interlocks(TimInterlocks::all_clear());
+        s.get_mut::<Tim>()
+            .unwrap()
+            .request_authority(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+                TimOption::FrontPtoDisengagementIsSupported,
+            ]))
+            .unwrap();
+        s.get_mut::<Tim>().unwrap().grant_authority().unwrap();
+
+        // Engaging is allowed while safe mode is clear.
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_ok()
+        );
+
+        s.get_mut::<Tim>()
+            .unwrap()
+            .enter_safe_mode(SafeModeTrigger::TecuCommLoss);
+        assert!(s.get::<Tim>().unwrap().is_safe_mode_active());
+
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_err(),
+            "safe mode must refuse an unexpected start"
+        );
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_disengage(Pto::Front)
+                .is_ok(),
+            "a stop is never refused, whatever the safe-mode state"
+        );
+
+        // The exit is explicit, per the operator-override obligation.
+        s.get_mut::<Tim>().unwrap().clear_safe_mode();
+        assert!(
+            s.get_mut::<Tim>()
+                .unwrap()
+                .command_pto_engage(Pto::Front, true)
+                .is_ok()
+        );
+    }
+
+    /// C25 — `TimAuthority::keepalive` had no caller anywhere in the crate, so
+    /// the AEF communication watchdog revoked every grant 300 ms after it was
+    /// made. Guarded hitch and PTO commands stopped reaching the bus while the
+    /// implement held its last commanded position, with nothing to say why.
+    #[test]
+    fn a_talking_peer_keeps_the_tim_authority_alive() {
+        let mut s = node();
+        let mut now = Instant::from_millis(10_000);
+        // Sync the plugin's tick baseline before granting, so the watchdog is
+        // not carrying the idle gap left by the address-claim phase.
+        s.tick(now);
+        feed_pto_status(&mut s, now);
+
+        s.get_mut::<Tim>()
+            .unwrap()
+            .set_interlocks(TimInterlocks::all_clear());
+        s.get_mut::<Tim>()
+            .unwrap()
+            .request_authority(TimOptionSet::from_options(&[
+                TimOption::FrontPtoEngagementCwIsSupported,
+            ]))
+            .unwrap();
+        s.get_mut::<Tim>().unwrap().grant_authority().unwrap();
+        assert_eq!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted
+        );
+
+        // The peer keeps broadcasting well past the 300 ms window.
+        for _ in 0..20 {
+            now = now.add_millis(100);
+            feed_pto_status(&mut s, now);
+            s.tick(now);
+        }
+        assert_eq!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted,
+            "a peer that is still talking must not have its authority revoked"
+        );
+
+        // It goes quiet: the watchdog must then revoke.
+        for _ in 0..8 {
+            now = now.add_millis(100);
+            s.tick(now);
+        }
+        assert_ne!(
+            s.get::<Tim>().unwrap().authority().state(),
+            TimAuthorityState::Granted,
+            "loss of communication still revokes the grant"
+        );
+    }
 }

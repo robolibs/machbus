@@ -1,13 +1,12 @@
 use machbus::isobus::implement::{
     AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommandStatus, DriveStrategyCmd,
     DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue, GroundBasedSpeedDist,
-    GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, GuidanceSystemStatus,
-    HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState,
-    LightingState, LimitStatus, MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull,
-    MachineSelectedSpeedMsg, MachineSpeedCommandMsg, MechanicalLockout, PtoCommand, PtoCommandMsg,
-    PtoStatus, RequestResetCommandStatus, SpeedExitCode, SpeedSource, SteeringReadiness,
-    TractorControlModeMsg, TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState,
-    WheelBasedSpeedDist, estimated_flow_pgn, measured_flow_pgn,
+    GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg,
+    HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus, LightState, LightingState, LimitStatus,
+    MAX_AUX_VALVES, MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg,
+    MechanicalLockout, PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, Signal,
+    SpeedExitCode, SpeedSource, TractorControlModeMsg, TractorMode, ValveCommand, ValveFailSafe,
+    ValveLimitStatus, ValveState, WheelBasedSpeedDist, estimated_flow_pgn, measured_flow_pgn,
 };
 use machbus::j1939::shortcut_button::{self, ShortcutButtonState};
 use machbus::j1939::{
@@ -15,9 +14,8 @@ use machbus::j1939::{
     HeartbeatTracker, PGN_HEARTBEAT_REQUEST, SpeedAndDistance, heartbeat::hb_seq,
 };
 use machbus::net::pgn_defs::{
-    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD,
-    PGN_HEARTBEAT, PGN_MACHINE_SPEED, PGN_REAR_HITCH_ROLL_PITCH_CMD, PGN_SHORTCUT_BUTTON,
-    PGN_TIME_DATE, PGN_WHEEL_SPEED,
+    PGN_AUX_VALVE_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_HEARTBEAT, PGN_MACHINE_SPEED,
+    PGN_REAR_HITCH_ROLL_PITCH_CMD, PGN_SHORTCUT_BUTTON, PGN_TIME_DATE, PGN_WHEEL_SPEED,
 };
 use machbus::net::{BROADCAST_ADDRESS, Message, NULL_ADDRESS, Priority};
 use std::cell::RefCell;
@@ -235,9 +233,16 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     for packed_or_reserved in [0x04, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
         assert_eq!(LightState::try_from_u8(packed_or_reserved), None);
         assert_eq!(MachineDirection::try_from_u8(packed_or_reserved), None);
-        assert_eq!(SpeedSource::try_from_u8(packed_or_reserved), None);
         assert_eq!(SpeedExitCode::try_from_u8(packed_or_reserved), None);
         assert_eq!(LimitStatus::try_from_u8(packed_or_reserved), None);
+    }
+
+    // SpeedSource is a 3-bit field, so 4 (simulated) and 7 (not available) are
+    // real values rather than reserved ones. Only 5 and 6 are unassigned.
+    assert_eq!(SpeedSource::try_from_u8(4), Some(SpeedSource::Simulated));
+    assert_eq!(SpeedSource::try_from_u8(7), Some(SpeedSource::NotAvailable));
+    for reserved_or_packed in [5, 6, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
+        assert_eq!(SpeedSource::try_from_u8(reserved_or_packed), None);
     }
 
     let lighting = LightingState {
@@ -251,20 +256,9 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     };
     assert_eq!(LightingState::decode(&lighting.encode()), Some(lighting));
 
-    let selected = MachineSelectedSpeedMsg {
-        speed_raw: 3210,
-        direction: MachineDirection::Forward,
-        source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::OperatorLimited,
-    };
-    assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected.encode()),
-        Some(selected)
-    );
-
     let selected_full = MachineSelectedSpeedFull {
-        speed_mps: 4.2,
-        distance_m: 99.0,
+        speed_mps: 4.2.into(),
+        distance_m: 99.0.into(),
         direction: MachineDirection::Reverse,
         source: SpeedSource::NavigationBased,
         limit_status: 5,
@@ -276,8 +270,8 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     assert_eq!(decoded_selected_full.limit_status, 5);
 
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 1.25,
-        distance_m: 12.5,
+        speed_mps: 1.25.into(),
+        distance_m: 12.5.into(),
         direction: MachineDirection::Forward,
         key_switch_state: 1,
         implement_start_stop_operations_state: 2,
@@ -290,8 +284,8 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 1.25,
-        distance_m: 12.5,
+        speed_mps: 1.25.into(),
+        distance_m: 12.5.into(),
         direction: MachineDirection::Reverse,
     };
     assert_eq!(
@@ -300,11 +294,11 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let hitch = HitchStatus {
-        position_percent: 100,
+        position_percent: Signal::Value(40.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -10_000.0,
+        draft_force_n: Signal::Value(-10_000.0),
         is_rear: true,
     };
     assert_eq!(
@@ -313,7 +307,7 @@ fn implement_public_packed_status_decoders_reject_noncanonical_bytes() {
     );
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -360,25 +354,37 @@ fn implement_shortcut_button_rejects_wrong_pgn_invalid_source_and_noncanonical_p
         );
     }
 
-    let mut bad_reserved = payload;
-    bad_reserved[7] = 0x04;
+    // G3 / ISO 11783-7 §5.4 — the envelope is load-bearing, the undefined bits
+    // are not. Both of these used to be asserted as rejected; on the one
+    // decoder that actuates a stop, that discarded the operator's STOP and left
+    // the ISB silence watchdog unarmed, so `engage()` stayed happy.
+    let mut unassigned_bit = payload;
+    unassigned_bit[7] = 0x04 | ShortcutButtonState::StopImplementOperations.as_u8();
     assert_eq!(
         shortcut_button::decode_message(&Message::new(
             PGN_SHORTCUT_BUTTON,
-            bad_reserved.to_vec(),
+            unassigned_bit.to_vec(),
             0x74,
-        )),
-        None
+        ))
+        .map(|m| m.state),
+        Some(ShortcutButtonState::StopImplementOperations)
     );
 
-    let mut bad_tail = payload;
-    bad_tail[0] = 0x00;
+    let mut zero_filled = payload;
+    zero_filled[0] = 0x00;
     assert_eq!(
         shortcut_button::decode_message(&Message::new(
             PGN_SHORTCUT_BUTTON,
-            bad_tail.to_vec(),
+            zero_filled.to_vec(),
             0x74,
-        )),
+        ))
+        .map(|m| m.state),
+        Some(ShortcutButtonState::StopImplementOperations)
+    );
+
+    // Length still is: the state lives in byte 8.
+    assert_eq!(
+        shortcut_button::decode_message(&Message::new(PGN_SHORTCUT_BUTTON, vec![0xFFu8; 7], 0x74,)),
         None
     );
 }
@@ -473,21 +479,35 @@ fn implement_aux_valve_and_machine_speed_reject_reserved_payload_bits() {
     bad_aux_index[0] = 16;
     assert_eq!(AuxValveCommandMsg::decode(&bad_aux_index), None);
 
-    let selected = MachineSelectedSpeedMsg {
-        speed_raw: 1_234,
+    // K3 — PGN 0xF022 has exactly one layout, `MachineSelectedSpeedFull`.
+    // `MachineSelectedSpeedMsg` used to claim the same PGN with direction,
+    // source and limit status in byte 5 instead of byte 8 and a 2-bit speed
+    // source, so raw 4 (Simulated) aliased to WheelBased. It is deprecated and
+    // no longer re-exported.
+    let selected = MachineSelectedSpeedFull {
+        speed_mps: 1.234.into(),
         direction: MachineDirection::Forward,
-        source: SpeedSource::GroundBased,
-        limit_status: SpeedExitCode::NotLimited,
+        source: SpeedSource::Simulated,
+        ..MachineSelectedSpeedFull::default()
     };
     let selected_bytes = selected.encode();
     assert_eq!(
-        MachineSelectedSpeedMsg::decode(&selected_bytes),
+        MachineSelectedSpeedFull::decode(&selected_bytes),
         Some(selected)
     );
+    assert_eq!(
+        MachineSelectedSpeedFull::decode(&selected_bytes)
+            .expect("round trip")
+            .source,
+        SpeedSource::Simulated,
+        "a 3-bit speed source must not alias Simulated onto WheelBased"
+    );
 
-    let mut bad_reserved = selected_bytes;
-    bad_reserved[4] &= 0x3F;
-    assert_eq!(MachineSelectedSpeedMsg::decode(&bad_reserved), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = selected_bytes;
+    reserved_clear[6] &= 0x3F;
+    assert!(MachineSelectedSpeedFull::decode(&reserved_clear).is_some());
 
     let command = MachineSpeedCommandMsg::default()
         .with_speed_mps(2.5)
@@ -505,7 +525,11 @@ fn implement_machine_speed_command_rejects_noncanonical_shape_without_losing_sen
         .with_speed_mps(65.535)
         .with_direction(MachineDirection::Forward);
     let encoded = command.encode();
-    assert_eq!(command.target_speed_raw, 0xFFFE);
+    // Table 1, 2-byte row: valid is 0x0000..=0xFAFF and 0xFF00..=0xFFFF is
+    // not-available. 0xFFFE is inside that band, so the old clamp transmitted
+    // "not available" for any setpoint at or above 65.535 m/s — the test name
+    // stated the opposite of what the code did.
+    assert_eq!(command.target_speed_raw, 0xFAFF);
     assert_eq!(
         MachineSpeedCommandMsg::decode(&encoded),
         Some(command),
@@ -521,21 +545,23 @@ fn implement_machine_speed_command_rejects_noncanonical_shape_without_losing_sen
         MachineDirection::NotAvailable
     );
 
-    let mut bad_reserved_bits = encoded;
-    bad_reserved_bits[2] &= 0x03;
-    assert_eq!(MachineSpeedCommandMsg::decode(&bad_reserved_bits), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = encoded;
+    reserved_clear[2] &= 0x03;
+    assert!(MachineSpeedCommandMsg::decode(&reserved_clear).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(MachineSpeedCommandMsg::decode(&bad_tail), None);
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(MachineSpeedCommandMsg::decode(&future_tail).is_some());
 }
 
 #[test]
 fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
     let flow = AuxValveFlowMsg {
         valve_index: 3,
-        extend_flow_percent: 125,
-        retract_flow_percent: 250,
+        extend_flow: Signal::Value(50.0),
+        retract_flow: Signal::Value(100.0),
         state: ValveState::Extending,
         limit_status: ValveLimitStatus::SystemLimited,
         fail_safe: ValveFailSafe::Float,
@@ -550,14 +576,17 @@ fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
         assert_eq!(AuxValveFlowMsg::decode(&bad_limit, 3), None);
     }
 
-    let mut bad_reserved_bit = encoded;
-    bad_reserved_bit[2] &= 0x7F;
-    assert_eq!(AuxValveFlowMsg::decode(&bad_reserved_bit, 3), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut reserved_clear = encoded;
+    reserved_clear[2] &= 0x7F;
+    assert!(AuxValveFlowMsg::decode(&reserved_clear, 3).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[7] = 0x00;
-    assert_eq!(AuxValveFlowMsg::decode(&bad_tail, 3), None);
+    let mut future_tail = encoded;
+    future_tail[7] = 0x00;
+    assert!(AuxValveFlowMsg::decode(&future_tail, 3).is_some());
 
+    // The valve index is not on the wire, so it is still validated.
     assert_eq!(AuxValveFlowMsg::decode(&encoded, 16), None);
 }
 
@@ -565,8 +594,8 @@ fn implement_aux_valve_flow_rejects_reserved_limit_status_values() {
 fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
     let flow = AuxValveFlowMsg {
         valve_index: 0,
-        extend_flow_percent: 250,
-        retract_flow_percent: 0xFF,
+        extend_flow: Signal::Value(100.0),
+        retract_flow: Signal::NotAvailable,
         state: ValveState::Blocked,
         limit_status: ValveLimitStatus::NotAvailable,
         fail_safe: ValveFailSafe::Block,
@@ -574,7 +603,9 @@ fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
     let encoded = flow.encode();
     assert_eq!(AuxValveFlowMsg::decode(&encoded, 0), Some(flow));
 
-    for reserved_flow in 251..=254 {
+    // Table 1, 8-bit row: only 0xFB..=0xFD are reserved and a genuine decode
+    // failure.
+    for reserved_flow in 251..=253 {
         let mut bad_extend = encoded;
         bad_extend[0] = reserved_flow;
         assert_eq!(
@@ -591,6 +622,20 @@ fn implement_aux_valve_flow_rejects_reserved_flow_sentinel_band() {
             "reserved retract-flow value {reserved_flow} must not decode as a percentage"
         );
     }
+
+    // 0xFE is the *required* report of a failed flow transducer, and 0xFF is
+    // "valve not fitted". Rejecting them discarded `state`, `limit_status` and
+    // `fail_safe` — the fields that say the valve has gone to its fail-safe
+    // position — and reported a missing valve as zero flow.
+    let mut transducer_failed = encoded;
+    transducer_failed[0] = 0xFE;
+    let decoded =
+        AuxValveFlowMsg::decode(&transducer_failed, 0).expect("an error report still decodes");
+    assert_eq!(decoded.extend_flow, Signal::Error);
+    assert_eq!(decoded.retract_flow, Signal::NotAvailable);
+    assert_eq!(decoded.fail_safe, flow.fail_safe);
+    assert_eq!(decoded.limit_status, flow.limit_status);
+    assert_eq!(decoded.state, flow.state);
 }
 
 #[test]
@@ -622,8 +667,8 @@ fn implement_aux_valve_public_state_decoders_reject_noncanonical_bytes() {
 
     let flow = AuxValveFlowMsg {
         valve_index: 7,
-        extend_flow_percent: 80,
-        retract_flow_percent: 40,
+        extend_flow: Signal::Value(32.0),
+        retract_flow: Signal::Value(16.0),
         state: ValveState::Retracting,
         limit_status: ValveLimitStatus::Error,
         fail_safe: ValveFailSafe::Extend,
@@ -649,31 +694,33 @@ fn implement_drive_strategy_preserves_upper_edge_values_and_rejects_reserved_mod
         "reserved drive-strategy mode values must be rejected without changing field edges"
     );
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(
-        DriveStrategyCmd::decode(&bad_tail),
-        None,
-        "fixed-width Drive Strategy commands must keep unused bytes canonical"
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(
+        DriveStrategyCmd::decode(&future_tail).is_some(),
+        "a later revision may define the unused Drive Strategy bytes"
     );
 }
 
 #[test]
 fn implement_guidance_system_command_rejects_reserved_bits_and_curvature_sentinel_band() {
     let command = GuidanceSystemCmd {
-        commanded_curvature: 12.5,
+        commanded_curvature: Signal::Value(12.5),
         status: CurvatureCommandStatus::IntendedToSteer,
     };
     let encoded = command.encode();
     let decoded = GuidanceSystemCmd::decode(&encoded).unwrap();
     assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
-    assert!((decoded.commanded_curvature - 12.5).abs() < 0.25);
+    assert!((decoded.commanded_curvature.value().unwrap() - 12.5).abs() < 0.25);
 
     let low_edge = [0x00, 0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     assert!(
         (GuidanceSystemCmd::decode(&low_edge)
             .unwrap()
             .commanded_curvature
+            .value()
+            .unwrap()
             - -8032.0)
             .abs()
             < f64::EPSILON
@@ -684,28 +731,43 @@ fn implement_guidance_system_command_rejects_reserved_bits_and_curvature_sentine
         (GuidanceSystemCmd::decode(&high_edge)
             .unwrap()
             .commanded_curvature
+            .value()
+            .unwrap()
             - 8031.75)
             .abs()
             < f64::EPSILON
     );
 
-    for invalid_raw in [0xFB00_u16, 0xFFFE, 0xFFFF] {
-        let mut bad_curvature = encoded;
-        bad_curvature[0..2].copy_from_slice(&invalid_raw.to_le_bytes());
-        assert_eq!(
-            GuidanceSystemCmd::decode(&bad_curvature),
-            None,
-            "curvature raw value 0x{invalid_raw:04X} must stay outside the accepted range"
-        );
+    // B6 — the indicator bands are reported, not fatal. A peer that is not
+    // commanding a curvature legally sends the not-requested band, and dropping
+    // the frame took the Curvature Command Status with it: the one field that
+    // says whether that peer intends to steer at all (ISO 11783-7 Table 1, G4).
+    for (raw, expected) in [
+        (0xFE00_u16, Signal::Error),
+        (0xFFFE, Signal::NotAvailable),
+        (0xFFFF, Signal::NotAvailable),
+    ] {
+        let mut banded = encoded;
+        banded[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = GuidanceSystemCmd::decode(&banded)
+            .unwrap_or_else(|| panic!("curvature raw 0x{raw:04X} must not drop the PG"));
+        assert_eq!(decoded.commanded_curvature, expected);
+        assert_eq!(decoded.status, CurvatureCommandStatus::IntendedToSteer);
     }
 
-    let mut bad_reserved_status_bits = encoded;
-    bad_reserved_status_bits[2] &= 0x03;
-    assert_eq!(GuidanceSystemCmd::decode(&bad_reserved_status_bits), None);
+    // Only a reserved raw is a genuine decode failure.
+    let mut reserved_curvature = encoded;
+    reserved_curvature[0..2].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(GuidanceSystemCmd::decode(&reserved_curvature), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[3] = 0x00;
-    assert_eq!(GuidanceSystemCmd::decode(&bad_tail), None);
+    // Byte 2 bits 2..7 are undefined: don't care on receive (§5.4).
+    let mut reserved_status_bits = encoded;
+    reserved_status_bits[2] &= 0x03;
+    assert!(GuidanceSystemCmd::decode(&reserved_status_bits).is_some());
+
+    let mut future_tail = encoded;
+    future_tail[3] = 0x00;
+    assert!(GuidanceSystemCmd::decode(&future_tail).is_some());
 }
 
 #[test]
@@ -728,7 +790,7 @@ fn implement_guidance_command_public_status_decoder_rejects_noncanonical_bytes()
     }
 
     let command = GuidanceSystemCmd {
-        commanded_curvature: -1.0,
+        commanded_curvature: Signal::Value(-1.0),
         status: CurvatureCommandStatus::ErrorIndication,
     };
     assert_eq!(
@@ -738,7 +800,7 @@ fn implement_guidance_command_public_status_decoder_rejects_noncanonical_bytes()
 }
 
 #[test]
-fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls_and_padding() {
+fn implement_hitch_pto_combined_and_roll_pitch_commands_ignore_undefined_bits() {
     let combined = HitchPtoCombinedCmd {
         hitch_position: 40_000,
         pto_speed_raw: 4_320,
@@ -749,13 +811,26 @@ fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls
     assert_eq!(HitchPtoCombinedCmd::decode(&combined_bytes), Some(combined));
     assert!((combined.pto_speed_rpm() - 540.0).abs() < 0.125);
 
-    let mut bad_combined_controls = combined_bytes;
-    bad_combined_controls[4] |= 0x10;
-    assert_eq!(HitchPtoCombinedCmd::decode(&bad_combined_controls), None);
+    // G3 — byte 5 bits 5-8 are undefined: transmitted as ones, ignored on
+    // receive. The decoder already masked bits 3-4 out of `pto_cmd` while
+    // rejecting the frame on 5-8, so a conformant 1-filled byte 5 dropped the
+    // whole combined command.
+    assert_eq!(
+        combined_bytes[4] & 0xF0,
+        0xF0,
+        "undefined bits are transmitted as ones"
+    );
+    let mut undefined_control_bits = combined_bytes;
+    undefined_control_bits[4] &= !0x10;
+    assert_eq!(
+        HitchPtoCombinedCmd::decode(&undefined_control_bits),
+        Some(combined)
+    );
 
-    let mut bad_combined_tail = combined_bytes;
-    bad_combined_tail[5] = 0x00;
-    assert_eq!(HitchPtoCombinedCmd::decode(&bad_combined_tail), None);
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut combined_future_tail = combined_bytes;
+    combined_future_tail[5] = 0x00;
+    assert!(HitchPtoCombinedCmd::decode(&combined_future_tail).is_some());
 
     let front_roll_pitch = HitchRollPitchCmd {
         roll_position: 20_000,
@@ -779,9 +854,10 @@ fn implement_hitch_pto_combined_and_roll_pitch_commands_reject_reserved_controls
         Some(rear_roll_pitch)
     );
 
-    let mut bad_roll_pitch_tail = roll_pitch_bytes;
-    bad_roll_pitch_tail[4] = 0x00;
-    assert_eq!(HitchRollPitchCmd::decode(&bad_roll_pitch_tail, true), None);
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut roll_pitch_future_tail = roll_pitch_bytes;
+    roll_pitch_future_tail[4] = 0x00;
+    assert!(HitchRollPitchCmd::decode(&roll_pitch_future_tail, true).is_some());
 }
 
 #[test]
@@ -837,9 +913,11 @@ fn implement_lighting_state_rejects_non_canonical_fixed_frames() {
     assert_eq!(LightingState::decode(&encoded), Some(lighting));
     assert_eq!(LightingState::decode(&encoded[..7]), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[4] = 0x00;
-    assert_eq!(LightingState::decode(&bad_tail), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut future_tail = encoded;
+    future_tail[4] = 0x00;
+    assert_eq!(LightingState::decode(&future_tail), Some(lighting));
 }
 
 #[test]
@@ -874,17 +952,6 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         assert_eq!(RequestResetCommandStatus::from_u8(raw), status);
     }
 
-    for (raw, status) in [
-        (0, SteeringReadiness::NotReady),
-        (1, SteeringReadiness::MechanicalReady),
-        (2, SteeringReadiness::FullyReady),
-        (3, SteeringReadiness::Error),
-        (7, SteeringReadiness::NotAvailable),
-    ] {
-        assert_eq!(SteeringReadiness::try_from_u8(raw), Some(status));
-        assert_eq!(SteeringReadiness::from_u8(raw), status);
-    }
-
     for packed_or_reserved in [0x04, 0x08, 0x10, 0x40, 0xFC, 0xFF] {
         assert_eq!(MechanicalLockout::try_from_u8(packed_or_reserved), None);
         assert_eq!(
@@ -897,16 +964,12 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         );
     }
 
-    for reserved_or_packed in [4, 5, 6, 0x08, 0x10, 0x40, 0xFF] {
-        assert_eq!(SteeringReadiness::try_from_u8(reserved_or_packed), None);
-    }
-
     for reserved_or_packed in [4, 5, 0x08, 0x10, 0x40, 0xFF] {
         assert_eq!(GuidanceLimitStatus::try_from_u8(reserved_or_packed), None);
     }
 
     let info = GuidanceMachineInfo {
-        estimated_curvature: 0.75,
+        estimated_curvature: Signal::Value(0.75),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::ErrorIndication,
@@ -916,19 +979,12 @@ fn implement_guidance_public_status_decoders_reject_noncanonical_bytes() {
         remote_engage_switch_status: GenericSaeBs02SlotValue::DisabledOffPassive,
     };
     assert_eq!(GuidanceMachineInfo::decode(&info.encode()), Some(info));
-
-    let status = GuidanceSystemStatus {
-        estimated_curvature: -0.5,
-        readiness: SteeringReadiness::FullyReady,
-        integrity_level: 3,
-    };
-    assert_eq!(GuidanceSystemStatus::decode(&status.encode()), Some(status));
 }
 
 #[test]
 fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     let info = GuidanceMachineInfo {
-        estimated_curvature: -2.5,
+        estimated_curvature: Signal::Value(-2.5),
         lockout: MechanicalLockout::Active,
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -939,7 +995,12 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
     };
     let encoded = info.encode();
     let decoded = GuidanceMachineInfo::decode(&encoded).unwrap();
-    assert!((decoded.estimated_curvature - -2.5).abs() < 0.25);
+    assert!(
+        decoded
+            .estimated_curvature
+            .value()
+            .is_some_and(|k| (k + 2.5).abs() < 0.25)
+    );
     assert_eq!(
         decoded.guidance_limit_status,
         GuidanceLimitStatus::LimitedLow
@@ -954,41 +1015,22 @@ fn implement_guidance_messages_reject_reserved_status_values_and_padding() {
 
     let mut bad_lower_reserved_bits = encoded;
     bad_lower_reserved_bits[3] |= 0x01;
-    assert_eq!(GuidanceMachineInfo::decode(&bad_lower_reserved_bits), None);
+    assert!(GuidanceMachineInfo::decode(&bad_lower_reserved_bits).is_some());
 
-    let mut bad_tail = encoded;
-    bad_tail[5] = 0x00;
-    assert_eq!(GuidanceMachineInfo::decode(&bad_tail), None);
-
-    let status = GuidanceSystemStatus {
-        estimated_curvature: 1.0,
-        readiness: SteeringReadiness::FullyReady,
-        integrity_level: 2,
-    };
-    let status_encoded = status.encode();
-    assert_eq!(
-        GuidanceSystemStatus::decode(&status_encoded)
-            .unwrap()
-            .readiness,
-        SteeringReadiness::FullyReady
-    );
-
-    for reserved_readiness in 4..=6 {
-        let mut bad_readiness = status_encoded;
-        bad_readiness[2] &= !0x07;
-        bad_readiness[2] |= reserved_readiness;
-        assert_eq!(GuidanceSystemStatus::decode(&bad_readiness), None);
-    }
+    // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are don't-care.
+    let mut future_tail = encoded;
+    future_tail[5] = 0x00;
+    assert!(GuidanceMachineInfo::decode(&future_tail).is_some());
 }
 
 #[test]
 fn implement_hitch_status_rejects_reserved_exit_codes_without_payload_slop() {
     let status = HitchStatus {
-        position_percent: 200,
+        position_percent: Signal::Value(80.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let encoded = status.encode();
@@ -1004,13 +1046,17 @@ fn implement_hitch_status_rejects_reserved_exit_codes_without_payload_slop() {
         assert_eq!(HitchStatus::decode(&bad_exit, true), None);
     }
 
+    // Byte 1 bit 8 is a *defined* bit — the hitch exit code is 3 bits wide —
+    // so a set bit there is genuinely malformed and stays rejected.
     let mut bad_reserved_bit = encoded;
     bad_reserved_bit[1] |= 0x80;
     assert_eq!(HitchStatus::decode(&bad_reserved_bit, true), None);
 
-    let mut bad_tail = encoded;
-    bad_tail[4] = 0x00;
-    assert_eq!(HitchStatus::decode(&bad_tail, true), None);
+    // B5 / G3 — ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+    // receive so they can be assigned later. These used to assert rejection.
+    let mut future_tail = encoded;
+    future_tail[4] = 0x00;
+    assert!(HitchStatus::decode(&future_tail, true).is_some());
 }
 
 #[test]
@@ -1041,7 +1087,7 @@ fn implement_exit_reason_public_decoders_reject_noncanonical_bytes() {
     }
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1057,8 +1103,8 @@ fn implement_exit_reason_public_decoders_reject_noncanonical_bytes() {
 #[test]
 fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_position_values() {
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.0,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.0.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 60,
         key_switch_state: 1,
@@ -1070,24 +1116,36 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         WheelBasedSpeedDist::decode(&wheel_bytes).unwrap().direction,
         MachineDirection::Forward
     );
-    let mut bad_wheel_speed = wheel_bytes;
-    bad_wheel_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(WheelBasedSpeedDist::decode(&bad_wheel_speed), None);
+    // A speed the TECU does not provide is reported as such; the rest of the
+    // PG (direction, key switch, power time) is still mandatory data and must
+    // survive. Dropping the whole frame here is what blinded the stack to
+    // every real ground-speed message.
+    let mut na_wheel_speed = wheel_bytes;
+    na_wheel_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = WheelBasedSpeedDist::decode(&na_wheel_speed)
+        .expect("a not-available speed must not discard the whole PG");
+    assert!(decoded.speed_mps.is_not_available());
+    assert_eq!(decoded.speed_mps.value(), None);
+    assert_eq!(decoded.direction, MachineDirection::Forward);
+    assert_eq!(decoded.max_power_time_min, 60);
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 3.0,
-        distance_m: 100.0,
+        speed_mps: 3.0.into(),
+        distance_m: 100.0.into(),
         direction: MachineDirection::Reverse,
     };
     let ground_bytes = ground.encode();
     assert_eq!(GroundBasedSpeedDist::decode(&ground_bytes), Some(ground));
-    let mut bad_ground_speed = ground_bytes;
-    bad_ground_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(GroundBasedSpeedDist::decode(&bad_ground_speed), None);
+    let mut na_ground_speed = ground_bytes;
+    na_ground_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded_ground = GroundBasedSpeedDist::decode(&na_ground_speed)
+        .expect("a machine with no ground-speed sensor still sends a valid PG");
+    assert!(decoded_ground.speed_mps.is_not_available());
+    assert_eq!(decoded_ground.direction, MachineDirection::Reverse);
 
     let selected = MachineSelectedSpeedFull {
-        speed_mps: 2.5,
-        distance_m: 1_000.0,
+        speed_mps: 2.5.into(),
+        distance_m: 1_000.0.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
         limit_status: 1,
@@ -1100,12 +1158,15 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
             .source,
         SpeedSource::GroundBased
     );
-    let mut bad_selected_speed = selected_bytes;
-    bad_selected_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(MachineSelectedSpeedFull::decode(&bad_selected_speed), None);
+    let mut na_selected_speed = selected_bytes;
+    na_selected_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded_selected = MachineSelectedSpeedFull::decode(&na_selected_speed)
+        .expect("a not-available selected speed must not discard the whole PG");
+    assert!(decoded_selected.speed_mps.is_not_available());
+    assert_eq!(decoded_selected.source, SpeedSource::GroundBased);
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1117,24 +1178,33 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         PtoStatus::decode(&pto_bytes, false).unwrap().limit_status,
         LimitStatus::SystemLimited
     );
-    let mut bad_pto_speed = pto_bytes;
-    bad_pto_speed[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
-    assert_eq!(PtoStatus::decode(&bad_pto_speed, false), None);
+    // K2 — ISO 11783-9 §4.4.2.1 requires a tractor with no PTO fitted to
+    // broadcast not-available here. Dropping the frame hid the engagement,
+    // economy mode, limit status and exit code in the same byte (G4).
+    let mut no_pto_fitted = pto_bytes;
+    no_pto_fitted[0..2].copy_from_slice(&u16::MAX.to_le_bytes());
+    let decoded = PtoStatus::decode(&no_pto_fitted, false)
+        .expect("an unfitted PTO must not drop the whole PG");
+    assert_eq!(decoded.shaft_speed_rpm, Signal::NotAvailable);
+    assert_eq!(decoded.limit_status, LimitStatus::SystemLimited);
+    assert_eq!(decoded.exit_code, ExitReasonCode::Fault);
 
     let hitch = HitchStatus {
-        position_percent: 250,
+        position_percent: Signal::Value(100.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let hitch_bytes = hitch.encode();
+    // Raw 250 is the top of the 0.4 %/bit range: 100 %.
+    assert_eq!(hitch_bytes[0], 250);
     assert_eq!(
         HitchStatus::decode(&hitch_bytes, true)
             .unwrap()
             .position_percent,
-        250
+        Signal::Value(100.0)
     );
     let mut not_available_hitch_position = hitch_bytes;
     not_available_hitch_position[0] = 0xFF;
@@ -1142,9 +1212,27 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
         HitchStatus::decode(&not_available_hitch_position, true)
             .unwrap()
             .position_percent,
-        0xFF
+        Signal::NotAvailable
     );
-    for reserved_position in 251..=254 {
+    // B4 — 0xFE is the error indicator, not a decode failure: a hitch whose
+    // position sensor has failed still reports the limit status and exit code
+    // that say why (G4).
+    let mut faulted_hitch_position = hitch_bytes;
+    faulted_hitch_position[0] = 0xFE;
+    let faulted = HitchStatus::decode(&faulted_hitch_position, true)
+        .expect("a failed position sensor must not drop the PG");
+    assert_eq!(faulted.position_percent, Signal::Error);
+    assert_eq!(faulted.limit_status, LimitStatus::OperatorLimited);
+    assert_eq!(faulted.exit_code, ExitReasonCode::Fault);
+    // K1 — ISO 11783-9 §4.4.2.1 requires a tractor with no draft sensor to
+    // broadcast not-available here, so the frame must still decode.
+    let mut no_draft_sensor = hitch_bytes;
+    no_draft_sensor[2..4].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    let no_draft = HitchStatus::decode(&no_draft_sensor, true)
+        .expect("an unfitted draft sensor must not drop the PG");
+    assert_eq!(no_draft.draft_force_n, Signal::NotAvailable);
+    assert_eq!(no_draft.position_percent, Signal::Value(100.0));
+    for reserved_position in 251..=253 {
         let mut bad_hitch_position = hitch_bytes;
         bad_hitch_position[0] = reserved_position;
         assert_eq!(
@@ -1158,8 +1246,8 @@ fn implement_speed_distance_status_rejects_unavailable_speed_and_reserved_positi
 #[test]
 fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling() {
     let wheel = WheelBasedSpeedDist {
-        speed_mps: 5.5,
-        distance_m: 12_345.0,
+        speed_mps: 5.5.into(),
+        distance_m: 12_345.0.into(),
         direction: MachineDirection::Forward,
         max_power_time_min: 60,
         key_switch_state: 1,
@@ -1167,28 +1255,52 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
         operator_direction_reversed_state: 0,
     };
     let wheel_bytes = wheel.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = wheel_bytes;
-        bad[0..2].copy_from_slice(&raw.to_le_bytes());
+    // Only the reserved band is a genuine decode failure. The error and
+    // not-available bands are states the transmitter is entitled to report,
+    // and they must be distinguishable from each other.
+    let mut reserved = wheel_bytes;
+    reserved[0..2].copy_from_slice(&0xFB00_u16.to_le_bytes());
+    assert_eq!(WheelBasedSpeedDist::decode(&reserved), None);
+
+    for (raw, expect_error) in [(0xFE00_u16, true), (0xFFFF, false)] {
+        let mut frame = wheel_bytes;
+        frame[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = WheelBasedSpeedDist::decode(&frame)
+            .unwrap_or_else(|| panic!("raw 0x{raw:04X} is a reportable state, not a bad frame"));
         assert_eq!(
-            WheelBasedSpeedDist::decode(&bad),
-            None,
-            "wheel speed raw value 0x{raw:04X} must stay outside accepted signal data"
+            decoded.speed_mps.is_error(),
+            expect_error,
+            "raw 0x{raw:04X}"
         );
+        assert_eq!(
+            decoded.speed_mps.is_not_available(),
+            !expect_error,
+            "raw 0x{raw:04X}"
+        );
+        assert_eq!(decoded.distance_m.value(), Some(12_345.0));
     }
-    for raw in [0xFB00_0000_u32, 0xFE00_0000, 0xFFFF_FFFF] {
-        let mut bad = wheel_bytes;
-        bad[2..6].copy_from_slice(&raw.to_le_bytes());
+
+    let mut reserved_distance = wheel_bytes;
+    reserved_distance[2..6].copy_from_slice(&0xFB00_0000_u32.to_le_bytes());
+    assert_eq!(WheelBasedSpeedDist::decode(&reserved_distance), None);
+
+    for (raw, expect_error) in [(0xFE00_0000_u32, true), (0xFFFF_FFFF, false)] {
+        let mut frame = wheel_bytes;
+        frame[2..6].copy_from_slice(&raw.to_le_bytes());
+        let decoded = WheelBasedSpeedDist::decode(&frame)
+            .unwrap_or_else(|| panic!("raw 0x{raw:08X} is a reportable state, not a bad frame"));
         assert_eq!(
-            WheelBasedSpeedDist::decode(&bad),
-            None,
-            "wheel distance raw value 0x{raw:08X} must stay outside accepted signal data"
+            decoded.distance_m.is_error(),
+            expect_error,
+            "raw 0x{raw:08X}"
         );
+        // A bad distance must never take a valid speed down with it.
+        assert_eq!(decoded.speed_mps.value(), Some(5.5));
     }
 
     let ground = GroundBasedSpeedDist {
-        speed_mps: 3.0,
-        distance_m: 100.0,
+        speed_mps: 3.0.into(),
+        distance_m: 100.0.into(),
         direction: MachineDirection::Reverse,
     };
     let ground_bytes = ground.encode();
@@ -1199,27 +1311,48 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
     bad_ground_distance[2..6].copy_from_slice(&0xFB00_0000_u32.to_le_bytes());
     assert_eq!(GroundBasedSpeedDist::decode(&bad_ground_distance), None);
 
+    // The error band is reportable, not malformed.
+    let mut error_ground_speed = ground_bytes;
+    error_ground_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
+    assert!(
+        GroundBasedSpeedDist::decode(&error_ground_speed)
+            .expect("error band decodes")
+            .speed_mps
+            .is_error()
+    );
+
     let selected = MachineSelectedSpeedFull {
-        speed_mps: 2.5,
-        distance_m: 1_000.0,
+        speed_mps: 2.5.into(),
+        distance_m: 1_000.0.into(),
         direction: MachineDirection::Forward,
         source: SpeedSource::GroundBased,
         limit_status: 1,
         exit_code: 0x42,
     };
     let selected_bytes = selected.encode();
-    let mut bad_selected_speed = selected_bytes;
-    bad_selected_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
-    assert_eq!(MachineSelectedSpeedFull::decode(&bad_selected_speed), None);
-    let mut bad_selected_distance = selected_bytes;
-    bad_selected_distance[2..6].copy_from_slice(&0xFE00_0000_u32.to_le_bytes());
-    assert_eq!(
-        MachineSelectedSpeedFull::decode(&bad_selected_distance),
-        None
+    let mut error_selected_speed = selected_bytes;
+    error_selected_speed[0..2].copy_from_slice(&0xFE00_u16.to_le_bytes());
+    assert!(
+        MachineSelectedSpeedFull::decode(&error_selected_speed)
+            .expect("error band decodes")
+            .speed_mps
+            .is_error()
     );
+    let mut error_selected_distance = selected_bytes;
+    error_selected_distance[2..6].copy_from_slice(&0xFE00_0000_u32.to_le_bytes());
+    assert!(
+        MachineSelectedSpeedFull::decode(&error_selected_distance)
+            .expect("error band decodes")
+            .distance_m
+            .is_error()
+    );
+    // Reserved raws remain genuine decode failures.
+    let mut reserved_selected = selected_bytes;
+    reserved_selected[0..2].copy_from_slice(&0xFB00_u16.to_le_bytes());
+    assert_eq!(MachineSelectedSpeedFull::decode(&reserved_selected), None);
 
     let pto = PtoStatus {
-        shaft_speed_rpm: 540.0,
+        shaft_speed_rpm: Signal::Value(540.0),
         engagement: 1,
         limit_status: LimitStatus::SystemLimited,
         exit_code: ExitReasonCode::Fault,
@@ -1227,30 +1360,46 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
         is_rear: false,
     };
     let pto_bytes = pto.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = pto_bytes;
-        bad[0..2].copy_from_slice(&raw.to_le_bytes());
-        assert_eq!(PtoStatus::decode(&bad, false), None);
+    // The indicator bands are reported; only a reserved raw is a decode failure.
+    for (raw, expected) in [(0xFE00_u16, Signal::Error), (0xFFFF, Signal::NotAvailable)] {
+        let mut special = pto_bytes;
+        special[0..2].copy_from_slice(&raw.to_le_bytes());
+        let decoded = PtoStatus::decode(&special, false)
+            .unwrap_or_else(|| panic!("PTO speed raw {raw:#06X} must not drop the PG"));
+        assert_eq!(decoded.shaft_speed_rpm, expected);
+        assert_eq!(decoded.engagement, 1);
     }
+    let mut reserved_pto = pto_bytes;
+    reserved_pto[0..2].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(PtoStatus::decode(&reserved_pto, false), None);
 
     let hitch = HitchStatus {
-        position_percent: 250,
+        position_percent: Signal::Value(100.0),
         in_work_indication: 1,
         limit_status: LimitStatus::OperatorLimited,
         exit_code: ExitReasonCode::Fault,
-        draft_force_n: -100_000.0,
+        draft_force_n: Signal::Value(-100_000.0),
         is_rear: true,
     };
     let hitch_bytes = hitch.encode();
-    for raw in [0xFB00_u16, 0xFE00, 0xFFFF] {
-        let mut bad = hitch_bytes;
-        bad[2..4].copy_from_slice(&raw.to_le_bytes());
-        assert_eq!(HitchStatus::decode(&bad, true), None);
+    // K1/G4 — the indicator bands are reported, not fatal: only a reserved raw
+    // is a decode failure. A tractor with no draft sensor is *required* by
+    // ISO 11783-9 §4.4.2.1 to broadcast 0xFFFF here.
+    for (raw, expected) in [(0xFE00_u16, Signal::Error), (0xFFFF, Signal::NotAvailable)] {
+        let mut special = hitch_bytes;
+        special[2..4].copy_from_slice(&raw.to_le_bytes());
+        let decoded = HitchStatus::decode(&special, true)
+            .unwrap_or_else(|| panic!("draft raw {raw:#06X} must not drop the PG"));
+        assert_eq!(decoded.draft_force_n, expected);
+        assert_eq!(decoded.position_percent, Signal::Value(100.0));
     }
+    let mut reserved = hitch_bytes;
+    reserved[2..4].copy_from_slice(&0xFB00u16.to_le_bytes());
+    assert_eq!(HitchStatus::decode(&reserved, true), None);
 
     let saturated = WheelBasedSpeedDist {
-        speed_mps: 1.0e9,
-        distance_m: 1.0e12,
+        speed_mps: 1.0e9.into(),
+        distance_m: 1.0e12.into(),
         ..wheel
     }
     .encode();
@@ -1260,7 +1409,7 @@ fn implement_speed_distance_status_rejects_reserved_signal_ranges_before_scaling
 }
 
 #[test]
-fn implement_tractor_control_mode_rejects_reserved_modes_and_non_ff_tail() {
+fn implement_tractor_control_mode_rejects_reserved_modes_but_ignores_the_tail() {
     let control = TractorControlModeMsg {
         hitch_mode: TractorMode::Manual,
         pto_mode: TractorMode::Automatic,
@@ -1278,7 +1427,12 @@ fn implement_tractor_control_mode_rejects_reserved_modes_and_non_ff_tail() {
         assert_eq!(TractorControlModeMsg::decode(&reserved_slot), None);
     }
 
-    let mut bad_tail = encoded;
-    bad_tail[2] = 0x00;
-    assert_eq!(TractorControlModeMsg::decode(&bad_tail), None);
+    // G3 — §5.4: the reserved tail goes out as ones and is ignored on receive.
+    // Rejecting a zero-padded frame dropped the whole control-mode command.
+    let mut zero_padded_tail = encoded;
+    zero_padded_tail[2] = 0x00;
+    assert_eq!(
+        TractorControlModeMsg::decode(&zero_padded_tail),
+        Some(control)
+    );
 }

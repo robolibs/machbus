@@ -85,6 +85,11 @@ fn value_attribute_id_for_type(object_type: ObjectType) -> Option<u8> {
 fn numeric_value_is_valid(pool: &ObjectPool, object: &VTObject, value: u32) -> bool {
     match object.r#type {
         ObjectType::InputBoolean => value <= 1,
+        // B.18 NOTE: "While the operator is not allowed to enter values outside
+        // the min/max range, the Working Set is allowed to set any value either
+        // by pool upload or by the Change Numeric Value command." The same
+        // applies to a list index, where B.20 reserves 255 for "no item
+        // chosen" rather than bounding the value by the item count.
         ObjectType::Animation => animation_numeric_value_is_valid(object, value),
         ObjectType::ObjectPointer => object_pointer_numeric_value_is_valid_for_context(
             pool,
@@ -281,8 +286,8 @@ fn select_input_container_visible(object: &VTObject, state: &ServerObjectState) 
 
 fn numeric_value_payload_width_is_canonical(data: &[u8], value_width: usize) -> bool {
     match value_width {
-        1 => data.len() == 8 && data[5..8].iter().all(|&byte| byte == 0),
-        2 => data.len() == 8 && data[6..8].iter().all(|&byte| byte == 0),
+        1 => data.len() == 8 && data[5..8].iter().all(|&byte| byte == 0 || byte == 0xFF),
+        2 => data.len() == 8 && data[6..8].iter().all(|&byte| byte == 0 || byte == 0xFF),
         4 => data.len() == 8,
         _ => false,
     }
@@ -349,7 +354,11 @@ fn vt_change_attribute_value_is_valid(
             reference == ObjectID::NULL
                 || pool_reference_has_type(pool, reference, ObjectType::ExternalReferenceName)
         }
-        (ObjectType::OutputString, 5) => value <= 0x03,
+        // Same three option bits as Input String AID 6: transparent
+        // background, auto-wrap, wrap on hyphen (VT4+). Refusing bit 2 here
+        // while accepting it on Input String is the same contradiction the
+        // codec carried.
+        (ObjectType::OutputString, 5) => value <= 0x07,
         (ObjectType::OutputString, 7) | (ObjectType::InputString, 8) => {
             value <= u32::from(u8::MAX) && text_justification_is_valid(value as u8)
         }
@@ -441,7 +450,9 @@ fn vt_change_attribute_value_is_valid(
             pool_reference_has_type(pool, reference, ObjectType::FillAttributes)
         }
         (ObjectType::Polygon, 5) => value <= 3,
-        (ObjectType::Meter, 5) => value <= 0x01,
+        // Meter options are bits 0-3, matching the sibling gauges; the
+        // single-bit gate refused a runtime border/tick change outright.
+        (ObjectType::Meter, 5) => value <= 0x0F,
         (ObjectType::Meter, 7 | 8) => value <= 180,
         (ObjectType::Meter, 9 | 10) => value <= u32::from(u16::MAX),
         (ObjectType::LinearBarGraph, 5) => value <= 0x3F,

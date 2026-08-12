@@ -24,6 +24,9 @@ use super::imp::{Hitch, Pto};
 pub enum TimEvent {
     /// Local authority state changed due to request/grant/deny/revoke/interlock.
     AuthorityStateChanged(TimAuthorityState),
+    /// ISO 11783-9 §4.7 safe mode was entered automatically. Engage commands
+    /// are refused until it is explicitly cleared; stops always pass.
+    SafeModeEntered(crate::safety::SafeModeTrigger),
     /// A guarded command was refused before any CAN frame was emitted.
     CommandBlocked {
         command: TimCommand,

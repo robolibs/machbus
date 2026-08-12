@@ -1072,7 +1072,7 @@ fn vt_server_visual_graphics_and_macro_commands_require_uploaded_objects() {
         (28, 5, 181),        // Ellipse start angle is a half-degree angle.
         (28, 6, 181),        // Ellipse end angle is a half-degree angle.
         (9, 5, 4),           // Polygon type admits 0..=3.
-        (29, 5, 2),          // Meter options has only bit 0.
+        (29, 5, 0x10),       // Meter options reserves bits 4..=7.
         (29, 7, 181),        // Meter start angle is a half-degree angle.
         (29, 8, 181),        // Meter end angle is a half-degree angle.
         (30, 5, 0x40),       // Linear Bar Graph options reserves bits 6..=7.

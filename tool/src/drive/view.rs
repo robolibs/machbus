@@ -4,10 +4,12 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use machbus::isobus::implement::guidance::GenericSaeBs02SlotValue;
 use machbus::session::Session;
-use machbus::session::plugins::{Gnss, Guidance};
+use machbus::session::plugins::{AutoDrive, Gnss};
+use machbus::session::AutomationStatus;
 
 use super::DriveState;
 use super::joystick::PadState;
@@ -20,6 +22,21 @@ const RED: Color = Color::Red;
 const GRAY: Color = Color::DarkGray;
 const WHITE: Color = Color::White;
 
+/// Render `widget`, clipped to the frame.
+///
+/// The keyboard and gamepad panes are drawn at **fixed absolute offsets** — an
+/// 8-row key grid, stick boxes, trigger bars — none of which shrink with the
+/// terminal. Any of them writing past the buffer makes ratatui panic, so the
+/// tool used to die on a standard 80x24 rather than draw something cramped.
+/// Clipping here instead of at each of the twenty-odd call sites means a new
+/// widget cannot reintroduce it by forgetting a bounds check.
+fn paint<W: Widget>(f: &mut Frame, widget: W, area: Rect) {
+    let area = area.intersection(f.area());
+    if area.width > 0 && area.height > 0 {
+        f.render_widget(widget, area);
+    }
+}
+
 pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, session: &Session) {
     let area = f.area();
     let cols = Layout::default()
@@ -27,14 +44,14 @@ pub fn render_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, se
         .constraints([
             Constraint::Length(2), // title
             Constraint::Min(0),    // keyboard (takes the bulk)
-            Constraint::Length(8), // telemetry (6 content + 2 border)
+            Constraint::Length(9), // telemetry (7 content + 2 border)
             Constraint::Length(1), // status
         ])
         .split(area);
 
     draw_title(f, state, cols[0]);
     draw_keyboard(f, state, kb, cols[1]);
-    draw_telemetry(f, state, session, cols[2]);
+    draw_telemetry(f, state, session, cols[2], "SPACE");
     draw_status(f, state, cols[3]);
 }
 
@@ -57,7 +74,7 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
     if inner.height < 14 {
         return;
@@ -67,14 +84,14 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     let cy = inner.y + inner.height / 2;
 
     // Left stick circle — bigger: 14 wide × 7 tall.
-    draw_stick(f, cx - 22, cy - 4, pad.lstick_x, pad.lstick_y, "L", GOLD);
+    draw_stick(f, cx.saturating_sub(22), cy - 4, pad.lstick_x, pad.lstick_y, "L", GOLD);
     // Right stick circle — same size.
     draw_stick(f, cx + 12, cy - 4, 0.0, 0.0, "R", GRAY);
 
     // Trigger bars above.
     let ty = inner.y + 1;
     let engaged = pad.rtrigger > 0.3;
-    draw_trigger(f, cx - 26, ty, "L2", pad.ltrigger, GRAY);
+    draw_trigger(f, cx.saturating_sub(26), ty, "L2", pad.ltrigger, GRAY);
     let r2_col = if engaged { GREEN } else { RED };
     let r2_label = if engaged { "R2 ENGAGED" } else { "R2 HOLD" };
     draw_trigger(f, cx + 14, ty, r2_label, pad.rtrigger, r2_col);
@@ -83,14 +100,14 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     let bx = cx + 18;
     let by = cy;
     draw_pad_btn(f, bx, by - 3, "Y", pad.y_held);
-    draw_pad_btn(f, bx - 6, by, "X", pad.x_held);
+    draw_pad_btn(f, bx.saturating_sub(6), by, "X", pad.x_held);
     draw_pad_btn(f, bx + 6, by, "B", pad.b_held);
     draw_pad_btn(f, bx, by + 3, "A", pad.a_held);
 
     // D-pad on the left — bigger spacing.
-    let dx = cx - 18;
+    let dx = cx.saturating_sub(18);
     draw_pad_btn(f, dx, by - 3, "↑", pad.dpad_up);
-    draw_pad_btn(f, dx - 6, by, "←", false);
+    draw_pad_btn(f, dx.saturating_sub(6), by, "←", false);
     draw_pad_btn(f, dx + 6, by, "→", false);
     draw_pad_btn(f, dx, by + 3, "↓", pad.dpad_down);
 
@@ -98,23 +115,35 @@ fn draw_gamepad(f: &mut Frame, state: &DriveState, pad: &PadState, area: Rect) {
     draw_pad_btn(f, cx, by, "⌖", pad.start_held);
 
     // Labels under left stick.
-    f.render_widget(
+    paint(f, 
         Paragraph::new("steer / throttle")
             .style(Style::default().fg(GRAY))
             .alignment(Alignment::Center),
-        Rect { x: cx - 28, y: cy + 4, width: 16, height: 1 },
+        Rect {
+            x: cx.saturating_sub(28),
+            y: cy + 4,
+            width: 16,
+            height: 1,
+        },
     );
 
     // Info line at the bottom.
-    f.render_widget(
+    paint(f, 
         Paragraph::new(format!(
             " L: ({:+.2},{:+.2})  R2:{:.0}%  L2:{:.0}%  {}× counter",
-            pad.lstick_x, pad.lstick_y,
-            pad.rtrigger * 100.0, pad.ltrigger * 100.0,
+            pad.lstick_x,
+            pad.lstick_y,
+            pad.rtrigger * 100.0,
+            pad.ltrigger * 100.0,
             state.counter_mult,
         ))
         .style(Style::default().fg(WHITE)),
-        Rect { x: inner.x + 1, y: inner.y + inner.height.saturating_sub(1), width: inner.width - 2, height: 1 },
+        Rect {
+            x: inner.x + 1,
+            y: inner.y + inner.height.saturating_sub(1),
+            width: inner.width - 2,
+            height: 1,
+        },
     );
 }
 
@@ -126,8 +155,21 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
         .border_set(ratatui::symbols::border::ROUNDED)
         .border_style(Style::default().fg(col))
         .title(Span::styled(format!(" {label} "), Style::default().fg(col)));
-    let inner = block.inner(Rect { x, y, width: w, height: h });
-    f.render_widget(block, Rect { x, y, width: w, height: h });
+    let inner = block.inner(Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    });
+    paint(f, 
+        block,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        },
+    );
 
     let ccx = inner.x + inner.width / 2;
     let mid_y = inner.y + inner.height / 2;
@@ -140,24 +182,42 @@ fn draw_stick(f: &mut Frame, x: u16, y: u16, sx: f64, sy: f64, label: &str, col:
     let h_line: String = (0..inner.width)
         .map(|i| if inner.x + i == ccx { '┼' } else { '─' })
         .collect();
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(h_line, Style::default().fg(GRAY))),
-        Rect { x: inner.x, y: mid_y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y: mid_y,
+            width: inner.width,
+            height: 1,
+        },
     );
 
     // Crosshair — vertical line through centre.
     for ry in inner.y..inner.y + inner.height {
         let ch = if ry == mid_y { '┼' } else { '│' };
-        f.render_widget(
+        paint(f, 
             Paragraph::new(Span::styled(ch.to_string(), Style::default().fg(GRAY))),
-            Rect { x: ccx, y: ry, width: 1, height: 1 },
+            Rect {
+                x: ccx,
+                y: ry,
+                width: 1,
+                height: 1,
+            },
         );
     }
 
     // The dot.
-    f.render_widget(
-        Paragraph::new(Span::styled("●", Style::default().fg(col).add_modifier(Modifier::BOLD))),
-        Rect { x: dot_x, y: dot_y, width: 1, height: 1 },
+    paint(f, 
+        Paragraph::new(Span::styled(
+            "●",
+            Style::default().fg(col).add_modifier(Modifier::BOLD),
+        )),
+        Rect {
+            x: dot_x,
+            y: dot_y,
+            width: 1,
+            height: 1,
+        },
     );
 }
 
@@ -166,7 +226,7 @@ fn draw_trigger(f: &mut Frame, x: u16, y: u16, label: &str, value: f64, col: Col
     let pct = (value.clamp(0.0, 1.0) * w as f64).round() as u16;
     let bar: String = "▰".repeat(pct as usize) + &"▱".repeat((w - pct) as usize);
     let line = format!("{label} {bar}");
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(line, Style::default().fg(col))),
         Rect {
             x,
@@ -186,7 +246,7 @@ fn draw_pad_btn(f: &mut Frame, x: u16, y: u16, label: &str, held: bool) {
     } else {
         Style::default().fg(WHITE).bg(Color::Indexed(236))
     };
-    f.render_widget(
+    paint(f, 
         Paragraph::new(format!(" {label} "))
             .style(style)
             .alignment(Alignment::Center),
@@ -206,14 +266,14 @@ pub fn render_joystick(f: &mut Frame, state: &DriveState, pad: &PadState, sessio
         .constraints([
             Constraint::Length(2),
             Constraint::Min(0),
-            Constraint::Length(8),
+            Constraint::Length(9), // telemetry (7 content + 2 border)
             Constraint::Length(1),
         ])
         .split(area);
 
     draw_title(f, state, cols[0]);
     draw_gamepad(f, state, pad, cols[1]);
-    draw_telemetry(f, state, session, cols[2]);
+    draw_telemetry(f, state, session, cols[2], "R2");
     draw_status(f, state, cols[3]);
 }
 
@@ -227,7 +287,7 @@ fn draw_title(f: &mut Frame, state: &DriveState, area: Rect) {
             .bg(CYAN)
             .add_modifier(Modifier::BOLD),
     );
-    let sub = Span::styled(" ISOBUS guidance ", Style::default().fg(GRAY));
+    let sub = Span::styled(" ISOBUS AutoDrive ", Style::default().fg(GRAY));
     let claim_dot = if state.claimed { "●" } else { "○" };
     let claim_col = if state.claimed { GREEN } else { RED };
     let claim = Span::styled(
@@ -239,8 +299,8 @@ fn draw_title(f: &mut Frame, state: &DriveState, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(20)])
         .split(area);
-    f.render_widget(Paragraph::new(Line::from(vec![brand, sub])), top[0]);
-    f.render_widget(Paragraph::new(right), top[1]);
+    paint(f, Paragraph::new(Line::from(vec![brand, sub])), top[0]);
+    paint(f, Paragraph::new(right), top[1]);
 }
 
 // ─── keyboard ────────────────────────────────────────────────────────────
@@ -255,7 +315,7 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
     let cx = inner.x + inner.width / 2;
     let mut y = inner.y;
@@ -267,7 +327,7 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     key(f, cx, y, 'W', kb.kw.lit(), "forward");
     y += step;
     // A S D
-    key(f, cx - 14, y, 'A', kb.ka.lit(), "left");
+    key(f, cx.saturating_sub(14), y, 'A', kb.ka.lit(), "left");
     key(f, cx, y, 'S', kb.ks.lit(), "brake");
     key(f, cx + 14, y, 'D', kb.kd.lit(), "right");
     y += step;
@@ -275,15 +335,15 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
     key_wide(f, cx, y, "ENTER", 14, kb.kenter.lit(), "stop");
     y += step;
     // I K
-    key(f, cx - 7, y, 'I', kb.ki.lit(), "limit +");
+    key(f, cx.saturating_sub(7), y, 'I', kb.ki.lit(), "limit +");
     key(f, cx + 7, y, 'K', kb.kk.lit(), "limit −");
     y += step;
     // H J
-    key(f, cx - 7, y, 'H', kb.kh.lit(), "hitch ↑");
+    key(f, cx.saturating_sub(7), y, 'H', kb.kh.lit(), "hitch ↑");
     key(f, cx + 7, y, 'J', kb.kj.lit(), "hitch ↓");
     y += step;
     // P O
-    key(f, cx - 7, y, 'P', kb.kp.lit(), "PTO on");
+    key(f, cx.saturating_sub(7), y, 'P', kb.kp.lit(), "PTO on");
     key(f, cx + 7, y, 'O', kb.ko.lit(), "PTO off");
     y += step;
     // X
@@ -296,55 +356,54 @@ fn draw_keyboard(f: &mut Frame, state: &DriveState, kb: &KeyboardState, area: Re
         kb.kx.lit(),
         "counter rate",
     );
+    y += step;
+    // SPACE — the dead-man. Held, not toggled: lit while the hold is live.
+    key_wide(f, cx, y, "SPACE", 14, kb.kspace.lit(), "HOLD to drive");
+    key(f, cx + 14, y, 'C', kb.kc.lit(), "clear stop");
+}
+
+/// The caption under a key cap.
+///
+/// `key_box` clips itself to the frame but this did not, so on any terminal
+/// shorter than the fixed 8-row key grid needs (~34 lines, and a standard
+/// 80x24 is well under that) the hint wrote past the buffer and ratatui
+/// panicked. Clip it the same way rather than letting terminal size crash the
+/// tool.
+fn key_hint(f: &mut Frame, cx: u16, y: u16, hint: &str) {
+    let row = y + 3;
+    if row >= f.area().bottom() {
+        return;
+    }
+    paint(f, 
+        Paragraph::new(hint)
+            .style(Style::default().fg(GRAY))
+            .alignment(Alignment::Center),
+        Rect {
+            x: cx.saturating_sub(10),
+            y: row,
+            width: 21,
+            height: 1,
+        },
+    );
 }
 
 fn key(f: &mut Frame, cx: u16, y: u16, ch: char, held: bool, hint: &str) {
     let w = 7u16;
     let x = cx.saturating_sub(w / 2);
     key_box(f, x, y, w, &format!("  {ch}  "), held);
-    f.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx.saturating_sub(10),
-            y: y + 3,
-            width: 21,
-            height: 1,
-        },
-    );
+    key_hint(f, cx, y, hint);
 }
 
 fn key_wide(f: &mut Frame, cx: u16, y: u16, label: &str, w: u16, held: bool, hint: &str) {
     let x = cx.saturating_sub(w / 2);
     key_box(f, x, y, w, &format!(" {} ", label), held);
-    f.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx.saturating_sub(10),
-            y: y + 3,
-            width: 21,
-            height: 1,
-        },
-    );
+    key_hint(f, cx, y, hint);
 }
 
 fn key_fmt(f: &mut Frame, cx: u16, y: u16, label: &str, w: u16, held: bool, hint: &str) {
     let x = cx.saturating_sub(w / 2);
     key_box(f, x, y, w, &format!("{}  ", label), held);
-    f.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(GRAY))
-            .alignment(Alignment::Center),
-        Rect {
-            x: cx.saturating_sub(10),
-            y: y + 3,
-            width: 21,
-            height: 1,
-        },
-    );
+    key_hint(f, cx, y, hint);
 }
 
 fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
@@ -372,7 +431,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         top.push_str(h);
     }
     top.push(corners.chars().nth(1).unwrap());
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(top, b_style)),
         Rect {
             x,
@@ -382,7 +441,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         },
     );
     // Middle
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(label.to_string(), i_style)).alignment(Alignment::Center),
         Rect {
             x: x + 1,
@@ -391,7 +450,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
             height: 1,
         },
     );
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(v.to_string(), b_style)),
         Rect {
             x,
@@ -400,7 +459,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
             height: 1,
         },
     );
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(v.to_string(), b_style)),
         Rect {
             x: x + w - 1,
@@ -416,7 +475,7 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
         bot.push_str(h);
     }
     bot.push(corners.chars().nth(3).unwrap());
-    f.render_widget(
+    paint(f, 
         Paragraph::new(Span::styled(bot, b_style)),
         Rect {
             x,
@@ -429,7 +488,15 @@ fn key_box(f: &mut Frame, x: u16, y: u16, w: u16, label: &str, held: bool) {
 
 // ─── telemetry (6 compact lines) ─────────────────────────────────────────
 
-fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Rect) {
+/// `deadman` names the control the operator holds, so the arm prompt reads
+/// correctly in both input modes rather than always saying "R2".
+fn draw_telemetry(
+    f: &mut Frame,
+    state: &DriveState,
+    session: &Session,
+    area: Rect,
+    deadman: &str,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
@@ -439,9 +506,9 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    paint(f, block, area);
 
-    // 6 lines max. Values + bars on the SAME line.
+    // 7 lines max. Values + bars on the SAME line.
     let lines: Vec<Line> = vec![
         // 1: Speed + bar
         line_bar(
@@ -466,25 +533,69 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             state.steer,
             inner.width,
         ),
-        // 4: Steering readiness + est curvature
+        // 4: Steering link + raw readiness + est curvature
         {
             let mut spans = vec![Span::styled("str ", Style::default().fg(GRAY))];
-            if let Some(g) = session.get::<Guidance>() {
-                let ready = g.is_steering_ready();
+            if let Some(g) = session.get::<AutoDrive>() {
+                // Link liveness: are we actually receiving Machine Info (0xAC00)?
+                // This is the honest "guidance data flowing" signal — some ECUs
+                // stream valid info while never asserting readiness=on.
+                let live = g.is_link_alive();
                 spans.push(Span::styled(
-                    if ready { "●READY" } else { "○OFFLINE" },
+                    if live { "●LIVE" } else { "○OFFLINE" },
                     Style::default()
-                        .fg(if ready { GREEN } else { RED })
+                        .fg(if live { GREEN } else { RED })
                         .add_modifier(Modifier::BOLD),
                 ));
-                if let Some(est) = g.estimated_curvature() {
+                // The ECU's self-reported readiness slot, shown verbatim.
+                let rdy = match g.steering_readiness_state() {
+                    Some(GenericSaeBs02SlotValue::EnabledOnActive) => "on",
+                    Some(GenericSaeBs02SlotValue::DisabledOffPassive) => "off",
+                    Some(GenericSaeBs02SlotValue::ErrorIndication) => "err",
+                    Some(GenericSaeBs02SlotValue::NotAvailableTakeNoAction) => "n/a",
+                    None => "—",
+                };
+                spans.push(Span::styled(
+                    format!("  rdy:{rdy}"),
+                    Style::default().fg(GRAY),
+                ));
+                if let Some(est) = g.estimated_curvature().value() {
                     spans.push(Span::styled(
-                        format!("  est={:.1}", est),
+                        format!("  est={est:.1}"),
                         Style::default().fg(WHITE),
                     ));
                 }
             } else {
                 spans.push(Span::styled("—", Style::default().fg(GRAY)));
+            }
+            // Safety latch: until armed, show the "hold R2 to arm" prompt with a
+            // fill bar; once armed, show whether we're commanding steer.
+            if !state.armed {
+                if state.arm_block {
+                    // Disarmed while still held — release before re-arming.
+                    spans.push(Span::styled(
+                        format!("  ⚠ RELEASE {deadman} TO RE-ARM"),
+                        Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    let filled = (state.arm_progress * 6.0).round() as usize;
+                    let bar: String = (0..6).map(|i| if i < filled { '█' } else { '░' }).collect();
+                    spans.push(Span::styled(
+                        format!("  ⚠ HOLD {deadman} TO ARM [{bar}]"),
+                        Style::default().fg(GOLD).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            } else {
+                spans.push(Span::styled(
+                    if state.engaged {
+                        "  ARMED  cmd:ENGAGED"
+                    } else {
+                        "  ARMED  cmd:hold"
+                    },
+                    Style::default()
+                        .fg(if state.engaged { GREEN } else { GRAY })
+                        .add_modifier(Modifier::BOLD),
+                ));
             }
             spans.push(Span::styled(
                 format!("  │  {}× counter", state.counter_mult),
@@ -531,12 +642,55 @@ fn draw_telemetry(f: &mut Frame, state: &DriveState, session: &Session, area: Re
             }
             Line::from(spans)
         },
+        // 7: AutoDrive automation status, latched stop and last refusal. The
+        // plugin refuses rather than silently ignoring, so a rejected arm or
+        // command has to be visible or it reads as "nothing happened".
+        {
+            let mut spans = vec![Span::styled("aut ", Style::default().fg(GRAY))];
+            let (label, colour) = automation_label(state.automation);
+            spans.push(Span::styled(
+                label,
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ));
+            if let Some(trigger) = state.stop_reason {
+                spans.push(Span::styled(
+                    format!("  ■ STOP:{}", trigger.as_str()),
+                    Style::default().fg(RED).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if let Some(refusal) = state.refusal {
+                spans.push(Span::styled(
+                    format!("  refused:{}", refusal.as_str()),
+                    Style::default().fg(GOLD),
+                ));
+            }
+            Line::from(spans)
+        },
     ];
 
-    f.render_widget(
+    paint(f, 
         Paragraph::new(lines).style(Style::default().fg(WHITE)),
         inner,
     );
+}
+
+/// ISO 11783-7 Table 45 automation status as a short label plus a colour.
+/// `ActiveLimitedHigh`/`Low` are the steering ECU reporting saturation, which is
+/// the anti-windup signal an outer loop needs — worth showing distinctly rather
+/// than lumping in with "active".
+fn automation_label(status: AutomationStatus) -> (&'static str, Color) {
+    match status {
+        AutomationStatus::ActiveNotLimited => ("ACTIVE", GREEN),
+        AutomationStatus::ActiveLimitedHigh => ("ACTIVE:LIM-HI", GOLD),
+        AutomationStatus::ActiveLimitedLow => ("ACTIVE:LIM-LO", GOLD),
+        AutomationStatus::ReadyToEnable => ("READY", CYAN),
+        AutomationStatus::Enabled => ("ENABLED", CYAN),
+        AutomationStatus::Pending => ("PENDING", CYAN),
+        AutomationStatus::NotReady => ("not-ready", GRAY),
+        AutomationStatus::Fault => ("FAULT", RED),
+        AutomationStatus::Error => ("ERROR", RED),
+        AutomationStatus::Unavailable | AutomationStatus::NotAvailable => ("n/a", GRAY),
+    }
 }
 
 /// A label + value + bar on ONE line. Bar fills left-to-right for 0..1.
@@ -611,5 +765,5 @@ fn draw_status(f: &mut Frame, state: &DriveState, area: Rect) {
         format!("❯ {}", state.status),
         Style::default().fg(GOLD),
     ));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    paint(f, Paragraph::new(Line::from(spans)), area);
 }

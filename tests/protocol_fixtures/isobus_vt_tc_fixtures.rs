@@ -1,3 +1,22 @@
+/// E1 — ISO 11783-6 Annex F.1: "The VT shall respond to these commands even if
+/// no object pool of the originating Working Set is loaded. The originator
+/// shall wait for a response before sending another command."
+///
+/// A command the VT refuses is still answered; the refusal goes in the error
+/// byte. These assertions used to require an *empty* reply, which is exactly
+/// the defect — a Working Set then blocked 1,5 s and retried three times before
+/// declaring the terminal unresponsive.
+#[allow(dead_code)]
+#[track_caller]
+fn assert_annex_f_refusal(out: &[machbus::isobus::vt::OutboundFrame]) {
+    assert_eq!(out.len(), 1, "Annex F.1 requires a response");
+    assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+    assert!(
+        out[0].data[1..].iter().any(|&b| b != 0xFF),
+        "a refused command must carry an error, not an all-FF reply"
+    );
+}
+
 #[test]
 fn fixture_isobus_niu_router_reassembles_routed_tp_etp_sessions() {
     let raw_id =
@@ -542,6 +561,8 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ] {
         let mut bad_server = VTServer::new(VTServerConfig::default());
         bad_server.start().unwrap();
+        // Object Pool Transfer has no Annex F response — it is answered by the
+        // End of Object Pool response — so silence is correct here.
         assert!(
             bad_server
                 .handle_ecu_message(&Message::with_addressing(
@@ -569,7 +590,9 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     client.handle_vt_message(&Message::new(PGN_VT_TO_ECU, status.to_vec(), 0x80));
     assert_eq!(client.state(), VTState::SendWorkingSetMaster);
     assert_eq!(client.vt_address(), 0x80);
-    assert_eq!(client.vt_version_value(), 5);
+    // Annex H.1 carries no version in the status message; it arrives with the
+    // Get Memory response (D.3 byte 2), asserted below.
+    assert_eq!(client.vt_version_value(), 0);
 
     let working_set_master = client.update(1);
     assert_eq!(working_set_master.len(), 1);
@@ -599,6 +622,16 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ));
     assert_eq!(memory_response.len(), 1);
     assert_eq!(memory_response[0].dest, Some(0x42));
+    client.handle_vt_message(&Message::new(
+        PGN_VT_TO_ECU,
+        memory_response[0].data.clone(),
+        0x80,
+    ));
+    assert_eq!(
+        client.vt_version_value(),
+        5,
+        "D.3 byte 2 is where the VT reports its version"
+    );
     assert_eq!(
         memory_response[0].data,
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "get_memory_response_success")
@@ -640,8 +673,9 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         Priority::Default,
     ));
     assert!(no_reply.is_empty());
-    assert!(server.clients()[0].pool_uploaded);
-    assert_eq!(server.clients()[0].pool.serialize().unwrap(), pool_bytes);
+    // E5 — C.2.2 b)1): the transfer is staged and only End of Object Pool
+    // closes the upload, so the pool is not live yet.
+    assert!(!server.clients()[0].pool_uploaded);
 
     let eop_response = server.handle_ecu_message(&Message::with_addressing(
         PGN_ECU_TO_VT,
@@ -655,6 +689,8 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         eop_response[0].data,
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_success")
     );
+    assert!(server.clients()[0].pool_uploaded);
+    assert_eq!(server.clients()[0].pool.serialize().unwrap(), pool_bytes);
     assert_eq!(server.state(), VTServerState::Connected);
     assert_eq!(server.active_working_set(), 0x42);
 
@@ -731,7 +767,7 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     ));
     assert_eq!(
         rejected_eop[0].data,
-        parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_pool_error")
+        parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "end_of_object_pool_no_pool_error")
     );
 
     assert_eq!(
@@ -888,7 +924,7 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
         parse_named_hex_frame(ISOBUS_VT_COMMANDS_HEX, "extended_store_response_success").to_vec(),
         0x80,
     ));
-    assert_eq!(*extended_store_log.borrow(), vec![(true, 0xFF)]);
+    assert_eq!(*extended_store_log.borrow(), vec![(true, 0x00)]);
 
     let mut extended_load_client = VTClient::new(VTClientConfig::default());
     extended_load_client.set_self_address(0x42);
@@ -1116,53 +1152,57 @@ fn fixture_isobus_vt_command_responses_and_client_server_flow_are_stable() {
     server
         .on_string_value_change
         .subscribe(move |v| server_string_log_sink.borrow_mut().push(v.clone()));
+    // E1 — Annex F.1: the VT answers these commands whether it carries them out
+    // or not; a refusal is reported in the error byte, not by silence. These
+    // used to assert an *empty* reply, which is the defect: a Working Set that
+    // sends a malformed command would wait 1,5 s and retry three times before
+    // giving up on the terminal.
+    let refused = |server: &mut VTServer, data: Vec<u8>| {
+        let function = data[0];
+        let out = server.handle_ecu_message(&Message::with_addressing(
+            PGN_ECU_TO_VT,
+            data,
+            0x42,
+            0x80,
+            Priority::Default,
+        ));
+        assert_eq!(out.len(), 1, "F.1 requires a response to {function:#04X}");
+        assert_eq!(out[0].data.len(), 8, "Annex F responses are 8 bytes");
+        assert_eq!(
+            out[0].data[0], function,
+            "F.1: the response echoes the command's function code"
+        );
+        // The error byte's position is per-command; the unit tests in
+        // `vt::server` check it against `VtResponseShape`. Here it is enough
+        // that the VT answered at all and did not act on the command.
+        assert!(
+            out[0].data[1..].iter().any(|&b| b != 0xFF),
+            "a refused command must carry an error, not an all-FF reply"
+        );
+    };
+    refused(&mut server, truncated_client_string);
     assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                truncated_client_string,
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
+        server_string_log.borrow().is_empty(),
+        "VT server must not act on truncated ECU string-change commands"
+    );
+    refused(
+        &mut server,
+        parse_named_hex_frame(
+            ISOBUS_VT_COMMANDS_HEX,
+            "client_change_numeric_value_bad_reserved",
+        )
+        .to_vec(),
+    );
+    refused(
+        &mut server,
+        parse_named_hex_bytes(
+            ISOBUS_VT_COMMANDS_HEX,
+            "client_change_string_value_obj5_bad_tail",
+        ),
     );
     assert!(
         server_string_log.borrow().is_empty(),
-        "VT server must reject truncated ECU string-change commands"
-    );
-    assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                parse_named_hex_frame(
-                    ISOBUS_VT_COMMANDS_HEX,
-                    "client_change_numeric_value_bad_reserved",
-                )
-                .to_vec(),
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
-    );
-    assert!(
-        server
-            .handle_ecu_message(&Message::with_addressing(
-                PGN_ECU_TO_VT,
-                parse_named_hex_bytes(
-                    ISOBUS_VT_COMMANDS_HEX,
-                    "client_change_string_value_obj5_bad_tail"
-                ),
-                0x42,
-                0x80,
-                Priority::Default,
-            ))
-            .is_empty()
-    );
-    assert!(
-        server_string_log.borrow().is_empty(),
-        "VT server must reject bad reserved numeric and bad-tail string commands"
+        "VT server must not act on bad reserved numeric or bad-tail string commands"
     );
     assert_eq!(
         VTServer::build_select_input_object(0x1234, true, true),
@@ -1197,12 +1237,26 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let expected = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Sprayer")
                 .with_software_version("1.0")
                 .with_serial_number("SN-1234")
                 .with_structure_label([1, 2, 3, 4, 5, 6, 7])
                 .with_localization_label([8, 9, 10, 11, 12, 13, 14]),
+        )
+        // F7 — A.7: "A device descriptor object pool shall contain only a
+        // single device object", Figure A.1 puts it at ObjectId 0, and A.3
+        // requires exactly one DeviceElement of type device, numbered 0
+        // (B.3.2: "The element number would be 0 to address the implement").
+        // This vector had no device-type element at all — it was never a valid
+        // pool, and nothing checked.
+        .with_element(
+            DeviceElement::default()
+                .with_id(1)
+                .with_type(DeviceElementType::Device)
+                .with_number(0)
+                .with_parent(0)
+                .with_designator("Sprayer"),
         )
         .with_element(
             DeviceElement::default()
@@ -1245,11 +1299,14 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
 
     let decoded = DDOP::deserialize(&bytes).expect("valid DDOP fixture must decode");
     decoded.validate().unwrap();
-    assert_eq!(decoded.object_count(), 5);
+    // Six now: the A.3 device-type root joined the five original objects.
+    assert_eq!(decoded.object_count(), 6);
     assert_eq!(decoded.devices()[0].designator, "Sprayer");
-    assert_eq!(decoded.elements()[0].r#type, DeviceElementType::Section);
+    assert_eq!(decoded.elements()[0].r#type, DeviceElementType::Device);
+    assert_eq!(decoded.elements()[0].number.raw(), 0);
+    assert_eq!(decoded.elements()[1].r#type, DeviceElementType::Section);
     assert_eq!(
-        decoded.elements()[0].child_objects,
+        decoded.elements()[1].child_objects,
         vec![ObjectID(10), ObjectID(20)]
     );
     assert_eq!(decoded.process_data()[0].ddi, DDI(0x1234));
@@ -1264,7 +1321,7 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let drill = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Drill")
                 .with_software_version("2.1")
                 .with_serial_number("DR-42")
@@ -1362,7 +1419,11 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
 
     let invalid_type = parse_named_hex_bytes(ISOBUS_TC_DDOP_HEX, "invalid_unknown_element_type");
     assert!(DDOP::deserialize(&invalid_type).is_err());
-    assert_eq!(invalid_type[0], TCObjectType::DeviceElement.as_u8());
+    assert_eq!(
+        &invalid_type[0..3],
+        &TCObjectType::DeviceElement.table_id(),
+        "records open with the 3-byte ASCII Table ID of Tables A.1-A.5"
+    );
 
     let duplicate = parse_named_hex_bytes(ISOBUS_TC_DDOP_HEX, "invalid_duplicate_object_id");
     let duplicate_ddop = DDOP::deserialize(&duplicate).expect("duplicate fixture still parses");
@@ -1375,7 +1436,7 @@ fn fixture_isobus_tc_ddop_codecs_and_invalid_graphs_are_stable() {
     let overlong = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("A".repeat(usize::from(u8::MAX) + 1)),
         )
         .with_element(DeviceElement::default().with_id(2));
@@ -1401,7 +1462,17 @@ fn fixture_isobus_tc_ddop_helper_expectations_are_stable() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
+                .with_id(0u16)
+                .with_designator("Two Section Sprayer"),
+        )
+        // F7 — A.3 requires exactly one device-type element, numbered 0. Its
+        // children referenced parent 1, so this is the object they meant.
+        .with_element(
+            DeviceElement::default()
                 .with_id(1)
+                .with_type(DeviceElementType::Device)
+                .with_number(0)
+                .with_parent(0)
                 .with_designator("Two Section Sprayer"),
         )
         .with_element(

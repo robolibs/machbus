@@ -16,7 +16,7 @@ use machbus::nmea::{
     AISDTE, AISMode, AISNavStatus, AISRepeat, AISTransceiverInfo, AISUnit, BatteryChemistry,
     BatteryEqSupport, BatteryNominalVoltage, BatteryStatusData, BatteryType, ChargeState,
     ChargerMode, ConverterMode, DCType, DataMode, DelaySource, DistanceCalculationType, EngineData,
-    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSSystem,
+    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSIntegrity, GNSSSystem,
     HEADING_RESOLUTION, HUMIDITY_RESOLUTION, HeadingReference, HumidityData, HumiditySource,
     MOBBatteryStatus, MOBPositionSource, MOBStatus, N2K_REQUEST_TIMEOUT_MS, N2KConfigInfo,
     N2KHeartbeat, N2KManagement, N2KManagementConfig, N2KProductInfo, NMEA2000_INTERFACE_PGNS,
@@ -34,6 +34,9 @@ use std::rc::Rc;
 
 fn standard_position_detail_frame() -> Vec<u8> {
     let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
     let lat_raw = (52.0_f64 * 1e16) as i64;
     let lon_raw = (5.0_f64 * 1e16) as i64;
     let alt_raw = (12.5_f64 * 1e6) as i64;
@@ -46,6 +49,50 @@ fn standard_position_detail_frame() -> Vec<u8> {
     detail[36..38].copy_from_slice(&150u16.to_le_bytes());
     detail[42] = 0;
     detail
+}
+
+/// NMEA 2000 DD209 (PGN 129029 field 9). The field was decoded, range-checked
+/// and then discarded, so a receiver reporting RTK Fixed *and* Caution — an
+/// ephemeris fault or an unresolved integer ambiguity — was indistinguishable
+/// from a Safe fix.
+#[test]
+fn gnss_position_detail_carries_dd209_integrity() {
+    for (raw, want) in [
+        (0xFC, GNSSIntegrity::NoChecking),
+        (0xFD, GNSSIntegrity::Safe),
+        (0xFE, GNSSIntegrity::Caution),
+        (0xFF, GNSSIntegrity::Unsafe),
+    ] {
+        let mut iface = NMEAInterface::new(NMEAConfig::default());
+        let mut detail = standard_position_detail_frame();
+        detail[32] = raw;
+        iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, detail, 0x1C));
+        let pos = iface.latest_position().expect("a detailed fix decodes");
+        assert_eq!(pos.integrity, want, "byte 33 raw 0x{raw:02X}");
+        // The fix method is reported independently of integrity.
+        assert_eq!(pos.fix_type, GNSSFixType::GNSSFix);
+    }
+
+    // Only Caution and Unsafe are the receiver reporting a problem;
+    // NoChecking is "I did not look", which is not the same as "it is fine".
+    assert!(!GNSSIntegrity::NoChecking.is_degraded());
+    assert!(!GNSSIntegrity::Safe.is_degraded());
+    assert!(GNSSIntegrity::Caution.is_degraded());
+    assert!(GNSSIntegrity::Unsafe.is_degraded());
+
+    // G3 — the six reserved bits above DD209 are don't-care on receive. This
+    // used to assert the opposite, so a transmitter that zero-fills them lost
+    // its entire position PG, latitude and longitude included, and the operator
+    // saw "fix degraded" rather than "frame rejected".
+    let mut iface = NMEAInterface::new(NMEAConfig::default());
+    let mut zero_filled = standard_position_detail_frame();
+    zero_filled[32] = 0x01; // reserved bits cleared, DD209 = Safe
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, zero_filled, 0x1C));
+    let pos = iface
+        .latest_position()
+        .expect("zero-filled reserved bits must not cost the position");
+    assert_eq!(pos.integrity, GNSSIntegrity::Safe);
+    assert!((pos.wgs.latitude - 52.0).abs() < 1e-6);
 }
 
 fn nmea0183_with_checksum(body: &str) -> String {
@@ -504,7 +551,7 @@ fn nmea2000_management_config_info_length_prefixes_are_canonical() {
 }
 
 #[test]
-fn nmea2000_vessel_heading_rejects_reserved_reference_before_event_or_cache_update() {
+fn nmea2000_vessel_heading_ignores_the_reserved_bits_around_the_reference() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let headings: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
     let heading_log = headings.clone();
@@ -512,21 +559,30 @@ fn nmea2000_vessel_heading_rejects_reserved_reference_before_event_or_cache_upda
         .on_heading
         .subscribe(move |heading| heading_log.borrow_mut().push(*heading));
 
-    for reserved in [4, 0xFC | HeadingReference::Magnetic.as_u8()] {
-        let mut reserved_reference = NMEAInterface::build_heading(1.0, 0.0, 0.0);
-        reserved_reference[7] = reserved;
-        iface.handle_message(&Message::new(
-            PGN_HEADING_TRACK,
-            reserved_reference.to_vec(),
-            0x24,
-        ));
+    // The reference is a 2-bit field and all four values are defined; the
+    // other six bits are reserved and transmitted as 1s. Folding the whole
+    // byte into the enum rejected every conformant frame.
+    for reference in [
+        HeadingReference::True,
+        HeadingReference::Magnetic,
+        HeadingReference::Error,
+        HeadingReference::Unavailable,
+    ] {
+        let mut frame = NMEAInterface::build_heading(1.0, 0.0, 0.0);
+        frame[7] = 0xFC | reference.as_u8();
+        iface.handle_message(&Message::new(PGN_HEADING_TRACK, frame.to_vec(), 0x24));
     }
-    assert!(headings.borrow().is_empty());
-    assert!(iface.latest_position().is_none());
+    assert_eq!(
+        headings.borrow().len(),
+        4,
+        "reserved bits set to 1 are the conformant encoding, not a rejection"
+    );
 
-    let valid = NMEAInterface::build_heading(1.0, 0.0, 0.0);
-    iface.handle_message(&Message::new(PGN_HEADING_TRACK, valid.to_vec(), 0x24));
-    assert_eq!(headings.borrow().len(), 1);
+    // Cleared reserved bits are equally acceptable on receive.
+    let mut cleared = NMEAInterface::build_heading(1.0, 0.0, 0.0);
+    cleared[7] = HeadingReference::Magnetic.as_u8();
+    iface.handle_message(&Message::new(PGN_HEADING_TRACK, cleared.to_vec(), 0x24));
+    assert_eq!(headings.borrow().len(), 5);
 }
 
 #[test]
@@ -640,7 +696,7 @@ fn nmea2000_system_time_rejects_out_of_range_time_of_day_before_event() {
 }
 
 #[test]
-fn nmea2000_cog_sog_rejects_reserved_reference_before_event_or_cache_update() {
+fn nmea2000_cog_sog_ignores_the_reserved_bits_around_the_reference() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_RAPID,
@@ -658,20 +714,21 @@ fn nmea2000_cog_sog_rejects_reserved_reference_before_event_or_cache_update() {
         .on_sog
         .subscribe(move |sog| sog_log.borrow_mut().push(*sog));
 
-    for reserved in [4, 0xFC | HeadingReference::Magnetic.as_u8()] {
-        let mut reserved_reference = NMEAInterface::build_cog_sog(1.0, 2.0);
-        reserved_reference[1] = reserved;
+    // Same 2-bit field, same reserved-as-1s rule as PGN 127250.
+    for reference in [4u8, 0xFC | HeadingReference::Magnetic.as_u8()] {
+        let mut frame = NMEAInterface::build_cog_sog(1.0, 2.0);
+        frame[1] = reference;
         iface.handle_message(&Message::new(
             PGN_GNSS_COG_SOG_RAPID,
-            reserved_reference.to_vec(),
+            frame.to_vec(),
             0x24,
         ));
     }
     let cached = iface.latest_position().unwrap();
-    assert!(cached.cog_rad.is_none());
-    assert!(cached.speed_mps.is_none());
-    assert!(cogs.borrow().is_empty());
-    assert!(sogs.borrow().is_empty());
+    assert!(cached.cog_rad.is_some());
+    assert!(cached.speed_mps.is_some());
+    assert_eq!(cogs.borrow().len(), 2);
+    assert_eq!(sogs.borrow().len(), 2);
 
     let mut magnetic_reference = NMEAInterface::build_cog_sog(1.0, 2.0);
     magnetic_reference[1] = 1;
@@ -680,8 +737,8 @@ fn nmea2000_cog_sog_rejects_reserved_reference_before_event_or_cache_update() {
         magnetic_reference.to_vec(),
         0x24,
     ));
-    assert_eq!(cogs.borrow().len(), 1);
-    assert_eq!(sogs.borrow().len(), 1);
+    assert_eq!(cogs.borrow().len(), 3);
+    assert_eq!(sogs.borrow().len(), 3);
 }
 
 #[test]
@@ -752,7 +809,7 @@ fn nmea2000_cog_sog_rejects_reserved_numeric_special_values_before_event_or_cach
 }
 
 #[test]
-fn nmea2000_position_detail_rejects_reserved_fix_method_before_event_or_cache_update() {
+fn nmea2000_position_detail_surfaces_an_unknown_fix_method_without_dropping_the_fix() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<_>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -760,16 +817,28 @@ fn nmea2000_position_detail_rejects_reserved_fix_method_before_event_or_cache_up
         .on_position
         .subscribe(move |pos| position_log.borrow_mut().push(*pos));
 
+    // G4: an unrecognised method must not discard the whole PG. Dropping it
+    // left the consumer silently reusing the last cached fix, which is worse
+    // than reporting a degraded one — so the coordinates still arrive and the
+    // method is surfaced as `Error`, which a quality gate refuses.
     let mut detail = standard_position_detail_frame();
     detail[31] = 0x90;
 
     iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, detail.clone(), 0x24));
-    assert!(positions.borrow().is_empty());
-    assert!(iface.latest_position().is_none());
+    assert_eq!(positions.borrow().len(), 1);
+    assert_eq!(
+        iface.latest_position().unwrap().fix_type,
+        GNSSFixType::Error,
+        "an unknown method is reported as an error, not silently dropped"
+    );
 
     detail[31] = 0x10;
     iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, detail, 0x24));
-    assert_eq!(positions.borrow().len(), 1);
+    assert_eq!(positions.borrow().len(), 2);
+    assert_eq!(
+        iface.latest_position().unwrap().fix_type,
+        GNSSFixType::GNSSFix
+    );
     assert!(iface.latest_position().is_some());
 }
 
@@ -800,7 +869,7 @@ fn nmea2000_position_detail_accepts_defined_manual_and_simulated_fix_methods() {
 }
 
 #[test]
-fn nmea2000_position_detail_rejects_reserved_gnss_system_before_cache_update() {
+fn nmea2000_position_detail_keeps_the_fix_when_the_gnss_system_is_unknown() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<GNSSSystem>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -829,13 +898,14 @@ fn nmea2000_position_detail_rejects_reserved_gnss_system_before_cache_update() {
         assert_eq!(iface.latest_position().unwrap().gnss_system, defined_system);
     }
 
+    // G4 again: a constellation this crate predates must not cost the fix.
     let mut reserved_system = valid;
     reserved_system[31] = (1 << 4) | 0x09;
     iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, reserved_system, 0x44));
     assert_eq!(
         positions.borrow().len(),
-        5,
-        "reserved GNSS system nibble must not emit a second position event"
+        6,
+        "an unknown GNSS system nibble must still yield a position"
     );
     assert_eq!(
         iface.latest_position().unwrap().gnss_system,
@@ -883,7 +953,7 @@ fn nmea2000_position_detail_rejects_reserved_reference_station_count_before_cach
 }
 
 #[test]
-fn nmea2000_position_detail_rejects_reserved_reference_station_type_before_cache_update() {
+fn nmea2000_position_detail_keeps_the_fix_when_the_reference_station_type_is_undefined() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<_>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -916,19 +986,21 @@ fn nmea2000_position_detail_rejects_reserved_reference_station_type_before_cache
     assert!((cached.wgs.latitude - 52.0).abs() < 1e-12);
     assert!((cached.wgs.longitude - 5.0).abs() < 1e-12);
 
-    let mut reserved_type = valid;
-    reserved_type[43] = 0x02;
-    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, reserved_type, 0x44));
+    // G4 — the station type is one 4-bit sub-signal inside a PG whose payload
+    // is the fix itself. An unrecognised value says nothing about latitude or
+    // longitude, and rejecting the frame cost an RTK rover its entire detailed
+    // fix from the moment its base came online.
+    let mut undefined_type = valid;
+    undefined_type[43] = 0x02;
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, undefined_type, 0x44));
     assert_eq!(
         positions.borrow().len(),
-        4,
-        "reserved reference-station type must not emit another position event"
+        5,
+        "an undefined reference-station type must not suppress the position"
     );
-    assert_eq!(
-        iface.latest_position().unwrap(),
-        cached,
-        "reserved reference-station type must not replace the cached GNSS position"
-    );
+    let after = iface.latest_position().unwrap();
+    assert!((after.wgs.latitude - cached.wgs.latitude).abs() < 1e-12);
+    assert!((after.wgs.longitude - cached.wgs.longitude).abs() < 1e-12);
 }
 
 #[test]
@@ -965,8 +1037,10 @@ fn nmea2000_position_detail_rejects_reference_station_reserved_age_before_cache_
     );
 }
 
+/// G3 — the DD209 reserved bits are don't-care on receive, so a frame that
+/// clears them still updates the cache. This test asserted the reverse.
 #[test]
-fn nmea2000_position_detail_rejects_noncanonical_integrity_reserved_bits_before_cache_update() {
+fn nmea2000_position_detail_accepts_zero_filled_integrity_reserved_bits() {
     let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
     let positions: Rc<RefCell<Vec<_>>> = Rc::new(RefCell::new(Vec::new()));
     let position_log = positions.clone();
@@ -979,19 +1053,18 @@ fn nmea2000_position_detail_rejects_noncanonical_integrity_reserved_bits_before_
     iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, valid.clone(), 0x44));
     assert_eq!(positions.borrow().len(), 1);
 
-    let cached = iface.latest_position().unwrap();
-    let mut noncanonical = valid;
-    noncanonical[32] = 0x03;
-    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, noncanonical, 0x44));
+    let mut zero_filled = valid;
+    zero_filled[32] = 0x03; // reserved bits cleared, DD209 = Unsafe
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, zero_filled, 0x44));
     assert_eq!(
         positions.borrow().len(),
-        1,
-        "integrity byte with noncanonical reserved bits must not emit a second position event"
+        2,
+        "zero-filled reserved bits must still yield a position event"
     );
     assert_eq!(
-        iface.latest_position().unwrap(),
-        cached,
-        "integrity byte with noncanonical reserved bits must not replace cached GNSS position"
+        iface.latest_position().unwrap().integrity,
+        GNSSIntegrity::Unsafe,
+        "the two DD209 bits are still read from a frame with cleared reserved bits"
     );
 }
 
@@ -1201,6 +1274,11 @@ fn nmea2000_position_detail_rejects_signed_special_values_before_event_or_cache_
     assert_eq!(positions.borrow().len(), 1);
     let cached = iface.latest_position().unwrap();
     assert!(cached.altitude_m.is_some());
+    // The decoded altitude has to reach `wgs` too: `to_enu`, `to_ned` and
+    // `to_ecf` all read `wgs.altitude` and never `altitude_m`, so leaving it at
+    // the literal 0.0 cost an NMEA 2000 receiver its whole vertical axis while
+    // the C ABI and Python constructors, which set both, kept it.
+    assert!((cached.wgs.altitude - 12.5).abs() < 1e-6);
     assert_eq!(cached.hdop, Some(1.0));
     assert_eq!(cached.pdop, Some(1.5));
 }
@@ -1231,7 +1309,9 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     valid_dops[4..6].copy_from_slice(&150u16.to_le_bytes());
     valid_dops[6..8].copy_from_slice(&200u16.to_le_bytes());
     for range in [2..4, 4..6, 6..8] {
-        for reserved in [0xFFFDu16, 0xFFFE] {
+        // The DOPs are signed, so the reserved sentinel is at the top of the
+        // signed range, and a negative ratio is a corrupt frame either way.
+        for reserved in [(i16::MAX - 2) as u16, 0xFFFDu16] {
             let mut frame = valid_dops;
             frame[range.clone()].copy_from_slice(&reserved.to_le_bytes());
             iface.handle_message(&Message::new(PGN_GNSS_DOPS, frame.to_vec(), 0x24));
@@ -1241,10 +1321,12 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     assert!(iface.latest_position().unwrap().hdop.is_none());
     assert!(iface.latest_position().unwrap().vdop.is_none());
 
+    // Signed field, so "data not available" is 0x7FFF, not 0xFFFF.
+    let na = (i16::MAX as u16).to_le_bytes();
     let mut unavailable_dops = valid_dops;
-    unavailable_dops[2..4].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    unavailable_dops[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    unavailable_dops[6..8].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    unavailable_dops[2..4].copy_from_slice(&na);
+    unavailable_dops[4..6].copy_from_slice(&na);
+    unavailable_dops[6..8].copy_from_slice(&na);
     iface.handle_message(&Message::new(
         PGN_GNSS_DOPS,
         unavailable_dops.to_vec(),
@@ -1263,8 +1345,11 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     assert!(iface.latest_position().unwrap().hdop.is_none());
     assert!(iface.latest_position().unwrap().vdop.is_none());
 
+    // DD055 is a signed int16, so the reserved code is 0x7FFD, not 0xFFFD:
+    // read as unsigned, 0xFFFD is -3, a negative ratio rather than a reserved
+    // raw, and the fix it accompanies is still perfectly good.
     let mut position_reserved = standard_position_detail_frame();
-    position_reserved[34..36].copy_from_slice(&0xFFFDu16.to_le_bytes());
+    position_reserved[34..36].copy_from_slice(&((i16::MAX - 2) as u16).to_le_bytes());
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_DATA,
         position_reserved,
@@ -1276,8 +1361,8 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     );
 
     let mut position_unavailable = standard_position_detail_frame();
-    position_unavailable[34..36].copy_from_slice(&0xFFFFu16.to_le_bytes());
-    position_unavailable[36..38].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    position_unavailable[34..36].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
+    position_unavailable[36..38].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
     iface.handle_message(&Message::new(
         PGN_GNSS_POSITION_DATA,
         position_unavailable,
@@ -1287,6 +1372,15 @@ fn nmea2000_gnss_dop_fields_reject_reserved_and_do_not_emit_negative_values() {
     let position = positions.borrow()[0];
     assert_eq!(position.hdop, None);
     assert_eq!(position.pdop, None);
+
+    // B3 — 0x7FFF is the signed "no DOP available" code. Read as unsigned it
+    // scaled to a real-looking 327.67, so an autosteer gate written as
+    // `hdop < 2.0` refused to engage forever on a healthy RTK receiver.
+    let mut sentinel = standard_position_detail_frame();
+    sentinel[34..36].copy_from_slice(&(i16::MAX as u16).to_le_bytes());
+    iface.handle_message(&Message::new(PGN_GNSS_POSITION_DATA, sentinel, 0x24));
+    let latest = positions.borrow().last().copied().expect("a position");
+    assert_eq!(latest.hdop, None, "0x7FFF must not scale to 327.67");
 
     iface.handle_message(&Message::new(PGN_GNSS_DOPS, valid_dops.to_vec(), 0x24));
     assert_eq!(dops.borrow().len(), 2);
@@ -1478,9 +1572,9 @@ fn nmea2000_gnss_dops_mode_byte_rejects_reserved_values_before_event_or_cache_up
     valid[4..6].copy_from_slice(&150u16.to_le_bytes());
     valid[6..8].copy_from_slice(&200u16.to_le_bytes());
 
+    // Note the two NMEA reserved bits (0x40/0x80) are deliberately absent:
+    // conformant transmitters set them, so they must never reject a frame.
     for reserved_mode_byte in [
-        valid[1] | 0x40,
-        valid[1] | 0x80,
         (valid[1] & !0x07) | 0x04,
         (valid[1] & !0x07) | 0x05,
         (valid[1] & !0x38) | (0x04 << 3),

@@ -19,16 +19,17 @@ fn diagnostics_dtc_rejects_reserved_occurrence_count_bit() {
         spn: 0x12345,
         fmi: Fmi::VoltageLow,
         occurrence_count: 7,
+        conversion_method: false,
     };
     let mut encoded = dtc.encode();
     assert_eq!(Dtc::decode(&encoded), Some(dtc));
 
     encoded[3] |= 0x80;
-    assert_eq!(Dtc::decode(&encoded), None);
+    assert!(Dtc::decode(&encoded).is_some());
 }
 
 #[test]
-fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
+fn diagnostics_fmi_decoders_surface_reserved_codes_in_dtcs_but_reject_them_in_requests() {
     for fmi in [
         Fmi::DataDriftedHigh,
         Fmi::DataDriftedLow,
@@ -38,18 +39,33 @@ fn diagnostics_fmi_decoders_accept_defined_values_and_reject_reserved_values() {
             spn: 0x12345,
             fmi,
             occurrence_count: 1,
+            conversion_method: false,
         };
         assert_eq!(Dtc::decode(&dtc.encode()), Some(dtc));
     }
 
+    // H73 — the FMI field is 5 bits and `Fmi` names all 32 values, so a
+    // reserved code is representable and `encode` can emit one. DM1/DM2 list
+    // decoding propagates a failed `Dtc::decode` with `?`, so rejecting here
+    // discarded the *whole message* — every other active fault with it (G4).
+    // A reserved code is surfaced instead.
     let mut reserved_dtc = Dtc {
         spn: 0x12345,
         fmi: Fmi::ConditionExists,
         occurrence_count: 1,
+        conversion_method: false,
     }
     .encode();
     reserved_dtc[2] = (reserved_dtc[2] & 0xE0) | 22;
-    assert_eq!(Dtc::decode(&reserved_dtc), None);
+    assert_eq!(
+        Dtc::decode(&reserved_dtc).map(|d| d.fmi),
+        Some(Fmi::Reserved22),
+        "a reserved FMI must not cost the whole DM1"
+    );
+
+    // DM22/DM25 carry a single SPN+FMI and are requests, not fault reports:
+    // refusing an undefined code there costs only that one message, so the
+    // conservative reading still applies.
 
     let dm22 = Dm22Message {
         control: Dm22Control::ClearActive,
@@ -81,13 +97,18 @@ fn diagnostics_lamp_status_round_trips_all_lamp_groups() {
         red_stop: LampStatus::Error,
         red_stop_flash: LampFlash::SlowFlash,
         amber_warning: LampStatus::NotAvailable,
-        amber_warning_flash: LampFlash::Off,
+        amber_warning_flash: LampFlash::Reserved,
         engine_protect: LampStatus::Off,
-        engine_protect_flash: LampFlash::NotAvailable,
+        engine_protect_flash: LampFlash::DoNotFlash,
     };
 
     assert_eq!(DiagnosticLamps::decode(&lamps.encode()), Some(lamps));
     assert_eq!(DiagnosticLamps::decode(&[0xFF]), None);
+
+    // J1939-73 §5.7.1 byte 1: bits 8-7 MIL (SPN 1213), 6-5 Red Stop (623),
+    // 4-3 Amber (624), 2-1 Protect (987). Round-tripping alone cannot see a
+    // reversed order, because encode and decode are each other's inverse.
+    assert_eq!(lamps.encode()[0], 0b01_10_11_00);
 }
 
 #[test]
@@ -105,8 +126,8 @@ fn diagnostics_public_lamp_decoders_reject_noncanonical_packed_bytes() {
     for (raw, flash) in [
         (0, LampFlash::SlowFlash),
         (1, LampFlash::FastFlash),
-        (2, LampFlash::Off),
-        (3, LampFlash::NotAvailable),
+        (2, LampFlash::Reserved),
+        (3, LampFlash::DoNotFlash),
     ] {
         assert_eq!(LampFlash::try_from_u8(raw), Some(flash));
         assert_eq!(LampFlash::from_u8(raw), flash);
@@ -124,8 +145,8 @@ fn diagnostics_public_lamp_decoders_reject_noncanonical_packed_bytes() {
         engine_protect: LampStatus::Off,
         malfunction_flash: LampFlash::FastFlash,
         red_stop_flash: LampFlash::SlowFlash,
-        amber_warning_flash: LampFlash::Off,
-        engine_protect_flash: LampFlash::NotAvailable,
+        amber_warning_flash: LampFlash::Reserved,
+        engine_protect_flash: LampFlash::DoNotFlash,
     };
     assert_eq!(DiagnosticLamps::decode(&lamps.encode()), Some(lamps));
 }
@@ -136,6 +157,7 @@ fn diagnostics_identification_readiness_and_driver_info_shapes_are_canonical() {
         spn: 0x12345,
         fmi: Fmi::VoltageHigh,
         occurrence_count: 2,
+        conversion_method: false,
     };
     let driver_info = Dm4Message {
         mil_status: LampStatus::On,
@@ -185,7 +207,7 @@ fn diagnostics_identification_readiness_and_driver_info_shapes_are_canonical() {
     }
     .encode();
     bad_dtc_reserved[5] |= 0x80;
-    assert_eq!(Dm4Message::decode(&bad_dtc_reserved), None);
+    assert!(Dm4Message::decode(&bad_dtc_reserved).is_some());
 
     let mut hidden_driver_info_tail = Dm4Message {
         dtcs: vec![dtc],
@@ -669,6 +691,7 @@ fn diagnostics_dtc_lists_reject_prefix_compatible_garbage_and_bad_padding() {
         spn: 100,
         fmi: Fmi::AboveNormal,
         occurrence_count: 2,
+        conversion_method: false,
     };
     let list = DmDtcList {
         lamps,
@@ -703,7 +726,7 @@ fn diagnostics_dtc_lists_reject_prefix_compatible_garbage_and_bad_padding() {
 
     let mut bad_dtc_reserved_bit = encoded;
     bad_dtc_reserved_bit[5] |= 0x80;
-    assert_eq!(DmDtcList::decode(&bad_dtc_reserved_bit), None);
+    assert!(DmDtcList::decode(&bad_dtc_reserved_bit).is_some());
 }
 
 #[test]
@@ -713,6 +736,7 @@ fn diagnostics_dtc_lists_allow_empty_placeholder_only_as_single_frame_empty_list
         spn: 0x12345,
         fmi: Fmi::VoltageLow,
         occurrence_count: 1,
+        conversion_method: false,
     };
 
     let empty = DmDtcList {
@@ -853,8 +877,8 @@ fn diagnostics_memory_access_commands_and_dm16_lengths_are_explicit() {
             let request = Dm14Request {
                 command,
                 pointer_type,
-                address: 0xFF_FFFF - command_index as u32,
-                length: 0xFFFF - command_index as u16,
+                address: 0x00_1000 + command_index as u32,
+                length: 0x0100 + command_index as u16,
                 key: 0xA0 | command.as_u8(),
             };
             let encoded = request.encode().unwrap();
@@ -1337,6 +1361,7 @@ fn diagnostics_freeze_frame_rejects_count_mismatch_and_reserved_snapshot_bits() 
             spn: 0x1234,
             fmi: Fmi::AboveNormal,
             occurrence_count: 1,
+            conversion_method: false,
         },
         timestamp_ms: 42,
         snapshots: vec![SpnSnapshot {

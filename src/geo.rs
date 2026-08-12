@@ -252,6 +252,12 @@ pub fn to_ecf(wgs: Wgs) -> Ecf {
     // Embedded fallback intentionally avoids libm. It is a stable,
     // dependency-free placeholder for protocol code that only needs a
     // Cartesian-shaped value; richer conversions require `geo-concord`.
+    //
+    // NOTE the units do not match the hosted implementation: `x` is metres
+    // while `y` and `z` are the raw degrees. Anything that treats the result as
+    // a metric Cartesian triple — differencing two of them for a distance, for
+    // instance — is wrong by orders of magnitude. `GNSSPosition::distance_to`
+    // is therefore not compiled on this profile.
     Ecf::new(EARTH_A_M + wgs.altitude, wgs.latitude, wgs.longitude)
 }
 
@@ -279,11 +285,61 @@ pub fn to_ned(origin: Geo, wgs: Wgs) -> frame::Ned {
     concord::to_ned(origin.into(), wgs.into()).into()
 }
 
+/// `cos(x)` for `x` in radians over `[-pi/2, pi/2]`, without libm.
+///
+/// Latitude never leaves that interval, so no range reduction is needed and a
+/// truncated Taylor series is enough: the first dropped term is
+/// `x^16 / 16!`, under `2e-11` at the poles — nanometres once scaled by
+/// metres-per-degree.
+#[must_use]
+fn cos_unit_interval(x: f64) -> f64 {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    let x6 = x4 * x2;
+    let x8 = x4 * x4;
+    let x10 = x8 * x2;
+    let x12 = x8 * x4;
+    let x14 = x8 * x6;
+    1.0 - x2 / 2.0 + x4 / 24.0 - x6 / 720.0 + x8 / 40_320.0 - x10 / 3_628_800.0
+        + x12 / 479_001_600.0
+        - x14 / 87_178_291_200.0
+}
+
+/// Metres per degree of latitude and of longitude at `latitude_deg`, from the
+/// usual WGS-84 series.
+///
+/// Public because it is the scale factor any caller needs to turn a
+/// latitude/longitude delta into metres, and because the embedded ENU/NED path
+/// is built on it.
+///
+/// This used to be a flat `111_320.0` on both axes, with no `cos(latitude)` on
+/// the east axis at all: at 52 °N that is a **62 % east-axis error**, silently,
+/// on a value that feeds autosteer. `embedded` is a supported profile with
+/// examples, so gating the surface off would have removed working code; the
+/// series below is libm-free, so it runs everywhere.
+///
+/// Every harmonic is expanded from `cos(latitude)` with the double- and
+/// triple-angle identities, so [`cos_unit_interval`] is the only transcendental
+/// call and the whole thing stays polynomial.
+#[must_use]
+pub fn metres_per_degree_at(latitude_deg: f64) -> (f64, f64) {
+    let phi = latitude_deg * core::f64::consts::PI / 180.0;
+    let c1 = cos_unit_interval(phi);
+    let c2 = 2.0 * c1 * c1 - 1.0;
+    let c3 = 4.0 * c1 * c1 * c1 - 3.0 * c1;
+    let c4 = 2.0 * c2 * c2 - 1.0;
+    let c5 = 16.0 * c1 * c1 * c1 * c1 * c1 - 20.0 * c1 * c1 * c1 + 5.0 * c1;
+    let c6 = 2.0 * c3 * c3 - 1.0;
+
+    let per_lat = 111_132.92 - 559.82 * c2 + 1.175 * c4 - 0.0023 * c6;
+    let per_lon = 111_412.84 * c1 - 93.5 * c3 + 0.118 * c5;
+    (per_lat, per_lon)
+}
+
 #[must_use]
 #[cfg(feature = "embedded")]
-fn metres_per_degree(_origin: Geo) -> (f64, f64) {
-    // Dependency-free approximation for `no_std` builds without libm.
-    (111_320.0, 111_320.0)
+fn metres_per_degree(origin: Geo) -> (f64, f64) {
+    metres_per_degree_at(origin.latitude)
 }
 
 #[must_use]
@@ -380,4 +436,258 @@ pub fn batch_to_wgs_from_ned(ned_coords: &[frame::Ned]) -> Vec<Wgs> {
         .map(|ned| frame::Enu::new(ned.east(), ned.north(), -ned.down(), ned.ref_origin()))
         .collect();
     batch_to_wgs_from_enu(&enu)
+}
+
+/// Path geometry for curvature-based guidance.
+///
+/// ISOBUS autosteer is commanded as a path **curvature**, so an autonomy client
+/// has to turn a pose error into κ every cycle. These helpers were missing
+/// entirely — `geo` offered frame conversions only, with no bearing, no
+/// cross-track and no curvature — leaving every caller to derive them.
+///
+/// Everything here is deliberately free of trigonometry and square roots, so it
+/// compiles and runs identically on `no_std` targets without libm.
+pub mod guidance {
+    /// Metres per kilometre — the ISO 11783-7 curvature SLOT is in km⁻¹ while
+    /// vehicle geometry is naturally in m⁻¹.
+    const M_PER_KM: f64 = 1000.0;
+
+    /// Pure-pursuit curvature to a goal point given in the **vehicle frame**:
+    /// `forward_m` ahead of the axle, `left_m` to the left (both metres).
+    ///
+    /// **Sign: left-positive**, matching the usual robotics body frame (x
+    /// forward, y left). This is the *geometry* convention, and it is the
+    /// opposite of the wire's — see [`curvature_to_goal_per_km`], which is the
+    /// one to feed to a guidance command.
+    ///
+    /// Uses the exact form `κ = 2·y / L²` with `L² = x² + y²`, so no square root
+    /// or trigonometry is needed and the result is exact rather than a
+    /// small-angle approximation.
+    ///
+    /// Returns `None` when the goal is at the vehicle (no path is defined) or
+    /// either coordinate is non-finite.
+    #[must_use]
+    pub fn curvature_to_goal_per_m(forward_m: f64, left_m: f64) -> Option<f64> {
+        if !forward_m.is_finite() || !left_m.is_finite() {
+            return None;
+        }
+        let squared_distance = forward_m * forward_m + left_m * left_m;
+        if squared_distance <= 0.0 {
+            return None;
+        }
+        Some(2.0 * left_m / squared_distance)
+    }
+
+    /// [`curvature_to_goal_per_m`] in the km⁻¹ unit **and sign** the wire uses.
+    ///
+    /// AEF 023 RIG 2 D.7.2.1: "Curvature is positive when the vehicle is moving
+    /// forward and turning to the driver's **right**." The body-frame helper is
+    /// left-positive, so the sign is flipped here — at the one boundary where
+    /// geometry becomes a wire value. Getting this backwards steers the machine
+    /// the opposite way to the commanded path and the guidance loop diverges
+    /// instead of converging.
+    #[must_use]
+    pub fn curvature_to_goal_per_km(forward_m: f64, left_m: f64) -> Option<f64> {
+        curvature_to_goal_per_m(forward_m, left_m).map(|k| -k * M_PER_KM)
+    }
+
+    /// Curvature (km⁻¹) of a turn of `radius_m`. A zero or non-finite radius is
+    /// straight ahead, not an infinite curvature.
+    #[must_use]
+    pub fn curvature_per_km_from_radius(radius_m: f64) -> f64 {
+        if radius_m.is_finite() && radius_m != 0.0 {
+            M_PER_KM / radius_m
+        } else {
+            0.0
+        }
+    }
+
+    /// Turn radius in metres for a curvature in km⁻¹, or `None` for straight.
+    #[must_use]
+    pub fn radius_m_from_curvature_per_km(curvature_per_km: f64) -> Option<f64> {
+        if curvature_per_km.is_finite() && curvature_per_km != 0.0 {
+            Some(M_PER_KM / curvature_per_km)
+        } else {
+            None
+        }
+    }
+
+    /// Curvature (km⁻¹) from a robotics-style twist: `κ = ω / v`.
+    ///
+    /// `yaw_rate_rad_s` is **left-positive** (counter-clockwise), the usual
+    /// robotics convention; the result is in the wire's **right-positive** sign
+    /// per AEF 023 D.7.2.1, so it is negated here.
+    ///
+    /// `min_speed_mps` is a **physical** floor, not an epsilon: below it a yaw
+    /// rate does not define a forward path, and dividing anyway turns odometry
+    /// noise into a full-lock command.
+    #[must_use]
+    pub fn curvature_per_km_from_twist(
+        linear_mps: f64,
+        yaw_rate_rad_s: f64,
+        min_speed_mps: f64,
+    ) -> f64 {
+        if !linear_mps.is_finite()
+            || !yaw_rate_rad_s.is_finite()
+            || linear_mps.abs() <= min_speed_mps.abs()
+        {
+            return 0.0;
+        }
+        -(yaw_rate_rad_s / linear_mps) * M_PER_KM
+    }
+
+    /// Signed lateral offset of point `p` from the infinite line through `a`
+    /// heading along the **unit** vector `dir`, in the same units as the inputs.
+    /// Positive is left of the heading.
+    ///
+    /// Takes a unit direction so no square root is required; build it from a
+    /// heading with `(cos, sin)` on hosted targets, or from two path points
+    /// normalised by the caller.
+    #[must_use]
+    pub fn cross_track_error(p: (f64, f64), a: (f64, f64), dir: (f64, f64)) -> f64 {
+        let (dx, dy) = (p.0 - a.0, p.1 - a.1);
+        // 2D cross product of the unit heading with the offset.
+        dir.0 * dy - dir.1 * dx
+    }
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::guidance::*;
+    use super::{cos_unit_interval, metres_per_degree_at};
+
+    #[test]
+    fn pure_pursuit_matches_the_geometric_circle() {
+        // A goal 10 m ahead and 0 m across is straight.
+        assert_eq!(curvature_to_goal_per_m(10.0, 0.0), Some(0.0));
+
+        // A goal directly abeam at 5 m left sits on a circle of radius 2.5 m,
+        // i.e. curvature 0.4 m^-1: kappa = 2y/L^2 = 10/25.
+        let k = curvature_to_goal_per_m(0.0, 5.0).unwrap();
+        assert!((k - 0.4).abs() < 1e-12);
+
+        // Body frame is left-positive (x forward, y left); magnitudes match.
+        let left = curvature_to_goal_per_m(10.0, 2.0).unwrap();
+        let right = curvature_to_goal_per_m(10.0, -2.0).unwrap();
+        assert!((left + right).abs() < 1e-12);
+        assert!(left > 0.0);
+
+        // Degenerate goal yields no path rather than an infinity.
+        assert_eq!(curvature_to_goal_per_m(0.0, 0.0), None);
+        assert_eq!(curvature_to_goal_per_m(f64::NAN, 1.0), None);
+    }
+
+    /// AEF 023 RIG 2 D.7.2.1: "Curvature is positive when the vehicle is moving
+    /// forward and turning to the driver's right." The helpers that produce a
+    /// wire value must carry that sign, not the body frame's.
+    #[test]
+    fn wire_curvature_is_positive_turning_right() {
+        // Goal 10 m ahead, 2 m to the driver's right.
+        let right = curvature_to_goal_per_km(10.0, -2.0).unwrap();
+        assert!(
+            right > 0.0,
+            "a goal to the right must encode as positive curvature, got {right}"
+        );
+        let left = curvature_to_goal_per_km(10.0, 2.0).unwrap();
+        assert!(left < 0.0, "a goal to the left must be negative");
+        assert!((left + right).abs() < 1e-12);
+
+        // The km helper is the metre helper mirrored, not merely rescaled.
+        let per_m = curvature_to_goal_per_m(10.0, -2.0).unwrap();
+        assert!((right + per_m * 1000.0).abs() < 1e-9);
+
+        // A left-positive yaw rate turning left is negative on the wire.
+        let turning_left = curvature_per_km_from_twist(2.0, 0.04, 0.05);
+        assert!(turning_left < 0.0, "got {turning_left}");
+        let turning_right = curvature_per_km_from_twist(2.0, -0.04, 0.05);
+        assert!((turning_right - 20.0).abs() < 1e-9, "got {turning_right}");
+    }
+
+    #[test]
+    fn radius_and_curvature_round_trip_in_wire_units() {
+        // 50 m radius is 20 km^-1, the worked example in the autosteer guide.
+        assert!((curvature_per_km_from_radius(50.0) - 20.0).abs() < 1e-9);
+        assert!((radius_m_from_curvature_per_km(20.0).unwrap() - 50.0).abs() < 1e-9);
+
+        // Straight is a zero curvature, not an infinite radius.
+        assert_eq!(curvature_per_km_from_radius(0.0), 0.0);
+        assert_eq!(radius_m_from_curvature_per_km(0.0), None);
+    }
+
+    #[test]
+    fn twist_respects_the_physical_speed_floor() {
+        // 2 m/s with 0.04 rad/s is 0.02 m^-1 = 20 km^-1 = a 50 m radius. The
+        // yaw rate is left-positive and the result is wire sign, so a left turn
+        // reads negative (AEF 023 D.7.2.1).
+        assert!((curvature_per_km_from_twist(2.0, 0.04, 0.05) + 20.0).abs() < 1e-9);
+
+        // Below the floor, odometry noise must not become a full-lock command.
+        assert_eq!(curvature_per_km_from_twist(1e-6, 0.04, 0.05), 0.0);
+        assert_eq!(curvature_per_km_from_twist(0.0, 1.0, 0.05), 0.0);
+    }
+
+    #[test]
+    fn cross_track_is_signed_left_positive() {
+        // Heading due north (+y); a point 3 m east is 3 m to the right.
+        let xte = cross_track_error((3.0, 10.0), (0.0, 0.0), (0.0, 1.0));
+        assert!(
+            (xte + 3.0).abs() < 1e-12,
+            "east of a northward line is right"
+        );
+
+        let xte_left = cross_track_error((-3.0, 10.0), (0.0, 0.0), (0.0, 1.0));
+        assert!((xte_left - 3.0).abs() < 1e-12);
+
+        // On the line is zero regardless of how far along.
+        assert!(cross_track_error((0.0, 99.0), (0.0, 0.0), (0.0, 1.0)).abs() < 1e-12);
+    }
+
+    /// The embedded ENU scale factors. This ran with a flat 111 320 m per
+    /// degree on both axes and no `cos(latitude)` at all, so the east axis was
+    /// out by 62 % at 52 °N — the value that feeds autosteer.
+    #[test]
+    fn metres_per_degree_tracks_latitude_on_both_axes() {
+        // Reference values from the WGS-84 series.
+        for (latitude, want_lat, want_lon) in [
+            (0.0, 110_574.3, 111_319.5),
+            (45.0, 111_132.0, 78_847.0),
+            (52.0, 111_267.3, 68_677.8),
+            (60.0, 111_412.3, 55_800.0),
+        ] {
+            let (per_lat, per_lon) = metres_per_degree_at(latitude);
+            assert!(
+                (per_lat - want_lat).abs() < 5.0,
+                "{latitude}: latitude scale {per_lat} vs {want_lat}"
+            );
+            assert!(
+                (per_lon - want_lon).abs() < 5.0,
+                "{latitude}: longitude scale {per_lon} vs {want_lon}"
+            );
+        }
+
+        // The old constant is what the east axis used to return everywhere.
+        let (_, per_lon_52) = metres_per_degree_at(52.0);
+        assert!(
+            (111_320.0 - per_lon_52) / per_lon_52 > 0.6,
+            "the flat constant really was over 60 % high at 52 degrees"
+        );
+
+        // Symmetric about the equator, and the poles converge to zero east.
+        let (north, north_lon) = metres_per_degree_at(37.5);
+        let (south, south_lon) = metres_per_degree_at(-37.5);
+        assert!((north - south).abs() < 1e-6);
+        assert!((north_lon - south_lon).abs() < 1e-6);
+        assert!(metres_per_degree_at(90.0).1.abs() < 1.0);
+    }
+
+    #[test]
+    fn cos_approximation_is_accurate_over_the_latitude_range() {
+        let mut degrees = -90.0_f64;
+        while degrees <= 90.0 {
+            let radians = degrees.to_radians();
+            let error = (cos_unit_interval(radians) - radians.cos()).abs();
+            assert!(error < 1e-9, "cos({degrees}) error {error}");
+            degrees += 0.5;
+        }
+    }
 }

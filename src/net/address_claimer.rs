@@ -53,6 +53,27 @@ pub struct AddressClaimer {
     /// Time since the most recent claim was sent, in ms.
     claim_guard_timer_ms: u32,
 
+    /// §4.4.2.4 — a cannot-claim response is queued, waiting for RTxD.
+    ///
+    /// "A random transmit delay (RTxD) shall be inserted between the reception
+    /// of a message triggering the cannot-claim-source-address response and the
+    /// sending of the response in order to minimize the possibility of two such
+    /// responses causing bus errors." Answering immediately meant every
+    /// address-failed CF on the segment replied to the same global request in
+    /// the same instant.
+    cannot_claim_pending: bool,
+    cannot_claim_delay_timer_ms: u32,
+
+    /// §4.5.1 a) — the initial listen window is open: the request has gone
+    /// out and we are collecting the source addresses already in use before
+    /// picking one.
+    ///
+    /// `start()` used to emit the request and the claim back to back, so the
+    /// address table was still empty at claim time and the stack evicted
+    /// whoever held its preferred address instead of choosing a free one.
+    listen_pending: bool,
+    listen_timer_ms: u32,
+
     /// §4.4.3 — re-claim queued, waiting for RTxD to elapse.
     reclaim_pending: bool,
     reclaim_delay_timer_ms: u32,
@@ -67,7 +88,8 @@ pub struct AddressClaimer {
 }
 
 impl AddressClaimer {
-    /// `rtxd_ms` should be `0.6 × random_byte` (`0..=153`).
+    /// `rtxd_ms` should be `0.6 × random_byte` (`0..=153`). Use
+    /// [`rtxd_for_name`] when no RNG is available.
     #[must_use]
     pub const fn new(rtxd_ms: u32) -> Self {
         Self::with_timeout(ADDRESS_CLAIM_TIMEOUT_MS, rtxd_ms)
@@ -86,6 +108,10 @@ impl AddressClaimer {
             rtxd_ms,
             attempted_claim: false,
             claim_guard_timer_ms: 0,
+            cannot_claim_pending: false,
+            cannot_claim_delay_timer_ms: 0,
+            listen_pending: false,
+            listen_timer_ms: 0,
             reclaim_pending: false,
             reclaim_delay_timer_ms: 0,
             reclaim_address: NULL_ADDRESS,
@@ -133,16 +159,73 @@ impl AddressClaimer {
             return vec![make_claim_frame(cf.name(), NULL_ADDRESS)];
         }
 
+        // §4.5.1 a): request for address claimed, then wait at least 250 ms
+        // plus RTxD before claiming, so the address table reflects who is
+        // already on the bus. The claim itself goes out from `update()`.
         cf.state_machine_mut().transition(ClaimState::SendRequest);
+        self.listen_pending = true;
+        self.listen_timer_ms = 0;
+        cf.reset_claim_timer();
+        self.claim_guard_timer_ms = 0;
+        vec![make_request_frame()]
+    }
 
-        let mut frames = Vec::with_capacity(2);
-        frames.push(make_request_frame());
+    /// Whether the §4.5.1 a) listen window is still open.
+    #[inline]
+    #[must_use]
+    pub const fn is_listening(&self) -> bool {
+        self.listen_pending
+    }
 
+    /// Emit the initial claim once the listen window closes, choosing the
+    /// preferred address when it is still free and the next unused one when
+    /// somebody answered from it.
+    fn finish_listen(&mut self, cf: &mut InternalCf) -> Vec<Frame> {
+        self.listen_pending = false;
+        self.listen_timer_ms = 0;
+
+        let preferred = cf.preferred_address();
+        // ISO 11783-5 Table 1, NAME MSB: "1 = Self-configurable address, 0 =
+        // Not self-configurable address". Only a self-configurable CF may pick
+        // another address from the configurable range; a fixed-address CF
+        // (TECU at 0x00, VT at 0x26, TC at 0x2B) must claim its own and, if it
+        // cannot, say Cannot Claim — which is what `handle_claim` already does
+        // on the arbitration path. Relocating unconditionally moved such a CF
+        // into 128..=247 at power-up merely because somebody answered its
+        // Request for Address Claimed, so every frame it sent carried the wrong
+        // SA, destination-specific TP/ETP addressed to its real address was
+        // dropped, it advertised self-configurable = 0 while using a
+        // self-configured address, and §4.5.3 arbitration — which would have
+        // removed one contender — was never entered.
+        let address = if self.is_occupied(preferred) && cf.name().self_configurable() {
+            let next = self.find_next_address(cf, preferred);
+            tracing::info!(
+                target: "machbus.network.claim",
+                preferred = %format_args!("0x{preferred:02X}"),
+                chosen = %format_args!("0x{next:02X}"),
+                "preferred address already in use — claiming an unused one",
+            );
+            next
+        } else {
+            preferred
+        };
+
+        if address > MAX_ADDRESS {
+            tracing::error!(
+                target: "machbus.network.claim",
+                "no available address after the initial listen window",
+            );
+            cf.set_state(CfState::Offline);
+            cf.state_machine_mut().transition(ClaimState::Failed);
+            cf.set_address(NULL_ADDRESS);
+            return vec![make_claim_frame(cf.name(), NULL_ADDRESS)];
+        }
+
+        cf.set_address(address);
         cf.state_machine_mut().transition(ClaimState::SendClaim);
         cf.reset_claim_timer();
         self.claim_guard_timer_ms = 0;
-
-        frames.push(make_claim_frame(cf.name(), cf.preferred_address()));
+        let frames = vec![make_claim_frame(cf.name(), address)];
         cf.state_machine_mut()
             .transition(ClaimState::WaitForContest);
         frames
@@ -153,6 +236,26 @@ impl AddressClaimer {
     /// transition the CF to [`ClaimState::Claimed`].
     pub fn update(&mut self, cf: &mut InternalCf, elapsed_ms: u32) -> Vec<Frame> {
         let mut frames = Vec::new();
+
+        if self.listen_pending {
+            self.listen_timer_ms = self.listen_timer_ms.saturating_add(elapsed_ms);
+            if self.listen_timer_ms >= self.timeout_ms {
+                return self.finish_listen(cf);
+            }
+            return frames;
+        }
+
+        if self.cannot_claim_pending {
+            self.cannot_claim_delay_timer_ms =
+                self.cannot_claim_delay_timer_ms.saturating_add(elapsed_ms);
+            if self.cannot_claim_delay_timer_ms >= self.rtxd_ms {
+                self.cannot_claim_pending = false;
+                self.cannot_claim_delay_timer_ms = 0;
+                if cf.claim_state() == ClaimState::Failed {
+                    frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                }
+            }
+        }
 
         if self.reclaim_pending {
             self.reclaim_delay_timer_ms = self.reclaim_delay_timer_ms.saturating_add(elapsed_ms);
@@ -242,7 +345,18 @@ impl AddressClaimer {
         if cf.claim_state() == ClaimState::Failed {
             return frames;
         }
-        if claimed_address != cf.address() && claimed_address != cf.preferred_address() {
+        // While the §4.5.1 a) window is open we hold no address yet, so a peer
+        // claim is only an entry in the address table, never a contest.
+        if self.listen_pending {
+            return frames;
+        }
+        // §4.5.3: "A CF shall transmit an address claim if it receives an
+        // address-claimed message with an SA matching **its own**". Treating a
+        // claim for our merely *preferred* address as a contest meant an
+        // unrelated CF taking an address we were not using knocked us off the
+        // one we validly held: steering and speed setpoints stopped for the
+        // ~400 ms of a fresh claim, repeatable indefinitely.
+        if claimed_address != cf.address() {
             return frames; // not contesting our address
         }
         if other_name == cf.name() {
@@ -294,6 +408,15 @@ impl AddressClaimer {
             self.reclaim_pending = true;
             self.reclaim_delay_timer_ms = 0;
             self.reclaim_address = next;
+            // Leave Claimed the moment arbitration is lost, not when the RTxD
+            // re-claim fires. §4.5.3 has the CF discontinue the address right
+            // away; staying in Claimed for the whole RTxD delay made
+            // `is_claimed()` report an address we no longer hold. A CF that
+            // was still in WaitForContest never reported itself claimed, so
+            // its state is left alone.
+            if cf.claim_state() == ClaimState::Claimed {
+                cf.state_machine_mut().transition(ClaimState::WaitForClaim);
+            }
             tracing::debug!(
                 target: "machbus.network.claim",
                 rtxd_ms = self.rtxd_ms,
@@ -365,7 +488,14 @@ impl AddressClaimer {
                 frames.push(make_claim_frame(cf.name(), cf.address()));
             }
             ClaimState::Failed => {
-                frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                // Deferred by RTxD; `update` emits it. With no delay every
+                // failed CF answers a global request simultaneously.
+                if self.rtxd_ms == 0 {
+                    frames.push(make_claim_frame(cf.name(), NULL_ADDRESS));
+                } else {
+                    self.cannot_claim_pending = true;
+                    self.cannot_claim_delay_timer_ms = 0;
+                }
             }
             _ => {}
         }
@@ -436,6 +566,80 @@ fn make_claim_frame(name: Name, addr: Address) -> Frame {
     Frame::new(id, name.to_bytes(), 8)
 }
 
+/// A per-control-function RTxD delay derived from its NAME.
+///
+/// ISO 11783-5 §4.4.3 wants the re-claim delay to differ between control
+/// functions so they do not answer in lockstep after a contention. Production
+/// passed a constant `0`, which is the worst case: every CF re-claims on the
+/// same millisecond, and the delay exists precisely to prevent that.
+///
+/// A true random value would be ideal, but the crate has no RNG under
+/// `no_std`. Hashing the NAME gives a value that is stable for a given device
+/// and differs between devices, which is what the requirement is actually for.
+/// A caller with an entropy source should prefer it and pass its own value.
+#[must_use]
+pub const fn rtxd_for_name(name: Name) -> u32 {
+    // FNV-1a over the 64-bit NAME, reduced to the 0..=255 random-byte domain.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let raw = name.raw;
+    let mut i = 0;
+    while i < 8 {
+        hash ^= (raw >> (i * 8)) & 0xFF;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        i += 1;
+    }
+    let random_byte = (hash & 0xFF) as u32;
+    // 0.6 ms per unit, capped at the standard's maximum.
+    let delay = random_byte * 6 / 10;
+    if delay > ADDRESS_CLAIM_RTXD_MAX_MS {
+        ADDRESS_CLAIM_RTXD_MAX_MS
+    } else {
+        delay
+    }
+}
+
+#[cfg(test)]
+mod rtxd_tests {
+    use super::*;
+
+    /// §4.4.3 — the re-claim delay exists so control functions do not answer in
+    /// lockstep. Production passed a constant 0, which guaranteed the lockstep.
+    #[test]
+    fn rtxd_differs_between_control_functions_and_stays_in_range() {
+        let names: Vec<Name> = (1u32..=64)
+            .map(|i| Name::default().with_identity_number(i))
+            .collect();
+
+        let delays: Vec<u32> = names.iter().map(|n| rtxd_for_name(*n)).collect();
+
+        for delay in &delays {
+            assert!(
+                *delay <= ADDRESS_CLAIM_RTXD_MAX_MS,
+                "RTxD must stay within the 0..=153 ms window, got {delay}"
+            );
+        }
+
+        // The point is spread: a handful of distinct values is not enough to
+        // break a contention between many CFs.
+        let mut unique = delays.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert!(
+            unique.len() > 32,
+            "64 different NAMEs produced only {} distinct delays",
+            unique.len()
+        );
+    }
+
+    /// It must be stable for a given device, so a CF does not shuffle its own
+    /// delay between claims within one power cycle.
+    #[test]
+    fn rtxd_is_stable_for_a_given_name() {
+        let name = Name::default().with_identity_number(0xABC);
+        assert_eq!(rtxd_for_name(name), rtxd_for_name(name));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,18 +656,91 @@ mod tests {
             .with_self_configurable(self_config)
     }
 
+    /// Start a claim and run out the §4.5.1 a) listen window, returning the
+    /// request frame and the claim that follows it.
+    fn start_and_claim(clm: &mut AddressClaimer, cf: &mut InternalCf) -> Vec<Frame> {
+        let mut frames = clm.start(cf);
+        frames.extend(clm.update(cf, ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS));
+        frames
+    }
+
+    /// §4.5.1 a): request, then wait at least 250 ms + RTxD, then claim. The
+    /// two frames used to go out back to back, so the claim was made against
+    /// an empty address table.
     #[test]
-    fn start_emits_request_then_claim() {
+    fn start_requests_then_claims_only_after_the_listen_window() {
         let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let frames = clm.start(&mut cf);
 
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].pgn(), PGN_REQUEST);
-        assert_eq!(frames[1].pgn(), PGN_ADDRESS_CLAIMED);
-        assert_eq!(frames[1].source(), 0x80);
-        assert_eq!(cf.claim_state(), ClaimState::WaitForContest);
+        let request = clm.start(&mut cf);
+        assert_eq!(request.len(), 1);
+        assert_eq!(request[0].pgn(), PGN_REQUEST);
+        assert!(clm.is_listening());
+        assert_eq!(cf.claim_state(), ClaimState::SendRequest);
         assert!(clm.has_attempted_claim());
+
+        assert!(
+            clm.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS - 1).is_empty(),
+            "no claim may go out before the listen window closes"
+        );
+        assert!(clm.is_listening());
+
+        let claim = clm.update(&mut cf, 1);
+        assert_eq!(claim.len(), 1);
+        assert_eq!(claim[0].pgn(), PGN_ADDRESS_CLAIMED);
+        assert_eq!(claim[0].source(), 0x80);
+        assert!(!clm.is_listening());
+        assert_eq!(cf.claim_state(), ClaimState::WaitForContest);
+    }
+
+    /// The point of the window: an address heard during it is not taken.
+    #[test]
+    fn an_address_heard_during_the_listen_window_is_not_claimed() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
+        let mut clm = AddressClaimer::new(0);
+        clm.start(&mut cf);
+
+        // An incumbent answers the request from our preferred address.
+        let incumbent = name_with_identity(0x900, true);
+        assert!(
+            clm.handle_claim(&mut cf, 0x80, incumbent).is_empty(),
+            "a peer claim during the listen window is a table entry, not a contest"
+        );
+
+        let claim = clm.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS);
+        assert_eq!(claim.len(), 1);
+        assert_ne!(
+            claim[0].source(),
+            0x80,
+            "the incumbent must not be evicted from an address we never held"
+        );
+        assert_eq!(cf.address(), claim[0].source());
+    }
+
+    /// G1 — ISO 11783-5 Table 1, NAME MSB: only a self-configurable CF may
+    /// select another address. A fixed-address CF (TECU at 0x00, VT at 0x26, TC
+    /// at 0x2B) used to relocate into the configurable range at power-up merely
+    /// because somebody answered its Request for Address Claimed, so every
+    /// frame it sent carried the wrong SA, destination-specific TP/ETP was
+    /// dropped, and §4.5.3 arbitration was never entered — the collision was
+    /// papered over with both devices still online.
+    #[test]
+    fn a_fixed_address_cf_claims_its_own_address_after_the_listen_window() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, false), 0, 0x26);
+        let mut clm = AddressClaimer::new(0);
+        clm.start(&mut cf);
+
+        let incumbent = name_with_identity(0x900, true);
+        assert!(clm.handle_claim(&mut cf, 0x26, incumbent).is_empty());
+
+        let claim = clm.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS);
+        assert_eq!(claim.len(), 1);
+        assert_eq!(
+            claim[0].source(),
+            0x26,
+            "a CF that is not self-configurable has exactly one address to claim"
+        );
+        assert_eq!(cf.address(), 0x26);
     }
 
     #[test]
@@ -495,7 +772,7 @@ mod tests {
         cf.on_address_claimed
             .subscribe(move |&a| *c.borrow_mut() = Some(a));
 
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         // Default timeout is 250 ms.
         let _ = clm.update(&mut cf, 100);
         assert_eq!(cf.claim_state(), ClaimState::WaitForContest);
@@ -509,7 +786,7 @@ mod tests {
     fn winning_contest_resends_claim() {
         let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         // Other CF claims same address with a higher (worse) NAME.
         let other = name_with_identity(0x999, true);
         let frames = clm.handle_claim(&mut cf, 0x80, other);
@@ -519,12 +796,86 @@ mod tests {
         assert!(cf.cf().state == CfState::Offline || cf.cf().state == CfState::Online);
     }
 
+    /// C14 — §4.5.3 triggers a contest on "an address-claimed message with an
+    /// SA matching **its own**". Treating a claim for the CF's merely
+    /// *preferred* address as a contest let an unrelated CF knock this one off
+    /// an address it validly held: guidance and speed setpoints stopped for the
+    /// duration of a fresh claim, repeatably.
+    #[test]
+    fn a_claim_for_our_preferred_address_does_not_displace_us() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
+        let mut clm = AddressClaimer::new(0);
+        let _ = start_and_claim(&mut clm, &mut cf);
+        let _ = clm.update(&mut cf, 300);
+        assert_eq!(cf.claim_state(), ClaimState::Claimed);
+
+        // We ended up on a different address than we preferred.
+        cf.set_address(0x81);
+        assert_eq!(cf.preferred_address(), 0x80);
+
+        // A stronger CF claims 0x80 — which we are not using.
+        let stronger = name_with_identity(0x001, true);
+        let frames = clm.handle_claim(&mut cf, 0x80, stronger);
+
+        assert!(
+            frames.is_empty(),
+            "a claim for an address we do not hold is not a contest"
+        );
+        assert_eq!(cf.cf().address, 0x81, "our held address is untouched");
+        assert_eq!(cf.claim_state(), ClaimState::Claimed);
+        assert!(cf.cf().is_online());
+
+        // A claim for the address we *do* hold still contests.
+        let frames = clm.handle_claim(&mut cf, 0x81, stronger);
+        assert!(
+            !frames.is_empty(),
+            "a claim for our own SA must still be answered"
+        );
+    }
+
+    /// H31 — §4.4.2.4: "A random transmit delay (RTxD) shall be inserted
+    /// between the reception of a message triggering the
+    /// cannot-claim-source-address response and the sending of the response in
+    /// order to minimize the possibility of two such responses causing bus
+    /// errors." Answering immediately had every failed CF on the segment reply
+    /// to one global request in the same instant.
+    #[test]
+    fn a_cannot_claim_response_waits_out_the_random_transmit_delay() {
+        let mut cf = InternalCf::new(name_with_identity(0x100, false), 0, 0x80);
+        let mut clm = AddressClaimer::with_timeout(250, 40);
+        let _ = start_and_claim(&mut clm, &mut cf);
+
+        // A stronger NAME takes our address. `self_configurable` is NAME bit
+        // 63, so a self-configurable peer is *weaker*, not stronger — both
+        // sides here are non-configurable and the lower identity wins.
+        let stronger = name_with_identity(0x001, false);
+        let _ = clm.handle_claim(&mut cf, 0x80, stronger);
+        assert_eq!(cf.claim_state(), ClaimState::Failed);
+
+        let immediate = clm.handle_request_for_claim(&mut cf);
+        assert!(
+            immediate.is_empty(),
+            "the response must not go out in the same instant as the request"
+        );
+
+        // Nothing before the delay expires...
+        assert!(clm.update(&mut cf, 39).is_empty());
+        // ...and exactly one cannot-claim after it.
+        let delayed = clm.update(&mut cf, 1);
+        assert_eq!(delayed.len(), 1);
+        assert_eq!(delayed[0].pgn(), PGN_ADDRESS_CLAIMED);
+        assert_eq!(delayed[0].source(), NULL_ADDRESS);
+
+        // It is a one-shot, not a repeating cadence.
+        assert!(clm.update(&mut cf, 500).is_empty());
+    }
+
     #[test]
     fn equal_name_claim_is_ignored_as_local_echo() {
         let name = name_with_identity(0x100, true);
         let mut cf = InternalCf::new(name, 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
 
         let frames = clm.handle_claim(&mut cf, 0x80, name);
 
@@ -542,7 +893,7 @@ mod tests {
         let lost = Rc::new(RefCell::new(0u32));
         let l = lost.clone();
         cf.on_address_lost.subscribe(move |_| *l.borrow_mut() += 1);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
 
         let frames = clm.handle_duplicate_name(&mut cf);
 
@@ -570,7 +921,7 @@ mod tests {
         let l = lost.clone();
         cf.on_address_lost.subscribe(move |_| *l.borrow_mut() += 1);
 
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let other = name_with_identity(0x100, true); // lower id ⇒ wins
         let frames = clm.handle_claim(&mut cf, 0x80, other);
 
@@ -585,7 +936,7 @@ mod tests {
     fn self_configurable_reclaim_skips_observed_occupied_addresses_until_cannot_claim() {
         let mut cf = InternalCf::new(name_with_identity(0xFFFF, true), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
 
         // Learn every address except our currently-contested preferred
         // address before we lose arbitration there. This mirrors a saturated
@@ -612,7 +963,7 @@ mod tests {
         // the reserved 248..=253 region.
         let mut cf = InternalCf::new(name_with_identity(0x999, true), 0, 247);
         let mut clm = AddressClaimer::new(0); // immediate reclaim
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let frames = clm.handle_claim(&mut cf, 247, name_with_identity(1, true));
         assert_eq!(cf.address(), SELF_CONFIG_ADDRESS_MIN); // wrapped to 128
         assert!(cf.address() >= SELF_CONFIG_ADDRESS_MIN);
@@ -625,7 +976,7 @@ mod tests {
     fn losing_contest_with_rtxd_queues_delayed_reclaim() {
         let mut cf = InternalCf::new(name_with_identity(0x999, true), 0, 0x80);
         let mut clm = AddressClaimer::new(50); // 50 ms RTxD
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
 
         let other = name_with_identity(0x100, true);
         let frames = clm.handle_claim(&mut cf, 0x80, other);
@@ -652,7 +1003,7 @@ mod tests {
         // identity-based comparison to decide the winner.
         let mut cf = InternalCf::new(name_with_identity(0x999, false), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let other = name_with_identity(0x100, false);
         let frames = clm.handle_claim(&mut cf, 0x80, other);
 
@@ -667,7 +1018,7 @@ mod tests {
     fn handle_claim_ignores_unrelated_address() {
         let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let frames = clm.handle_claim(&mut cf, 0x42, name_with_identity(0x999, true));
         assert!(frames.is_empty());
     }
@@ -676,7 +1027,7 @@ mod tests {
     fn rfc_after_claimed_emits_current_claim() {
         let mut cf = InternalCf::new(name_with_identity(0x100, true), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let _ = clm.update(&mut cf, 1000); // jump past timeout
         assert_eq!(cf.claim_state(), ClaimState::Claimed);
 
@@ -693,7 +1044,7 @@ mod tests {
         // `losing_contest_not_self_configurable_fails`.
         let mut cf = InternalCf::new(name_with_identity(0x999, false), 0, 0x80);
         let mut clm = AddressClaimer::new(0);
-        let _ = clm.start(&mut cf);
+        let _ = start_and_claim(&mut clm, &mut cf);
         let _ = clm.handle_claim(&mut cf, 0x80, name_with_identity(0x100, false));
         assert_eq!(cf.claim_state(), ClaimState::Failed);
 
@@ -715,8 +1066,8 @@ mod tests {
         let mut high_clm = AddressClaimer::new(50);
 
         // Both start.
-        let _ = low_clm.start(&mut low);
-        let _ = high_clm.start(&mut high);
+        let _ = start_and_claim(&mut low_clm, &mut low);
+        let _ = start_and_claim(&mut high_clm, &mut high);
 
         // Each sees the other's claim.
         let low_response = low_clm.handle_claim(&mut low, 0x80, high_name);

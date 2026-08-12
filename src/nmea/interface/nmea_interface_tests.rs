@@ -10,6 +10,54 @@ mod tests {
         Message::new(pgn, data, 0x10)
     }
 
+    /// NMEA 2000 Appendix B.1 gives every parameter group its own "Priority
+    /// Default", spanning four levels across the groups this crate transmits.
+    /// They all went out at the J1939 general default of 6, so the 10 Hz
+    /// position stream an autonomy consumer gates on arbitrated below its own
+    /// dilution-of-precision report.
+    #[test]
+    fn each_parameter_group_carries_its_own_default_priority() {
+        use crate::net::Priority;
+        use crate::nmea::nmea2000_default_priority;
+
+        // Rapid navigation and propulsion.
+        for pgn in [129_025, 129_026, 129_027, 127_250, 127_251, 127_488] {
+            assert_eq!(
+                nmea2000_default_priority(pgn),
+                Priority::AboveNormal,
+                "PGN {pgn} is Priority Default 2"
+            );
+        }
+        // Detailed position, attitude, time.
+        for pgn in [129_029, 126_992, 127_257] {
+            assert_eq!(
+                nmea2000_default_priority(pgn),
+                Priority::Normal,
+                "PGN {pgn} is Priority Default 3"
+            );
+        }
+        assert_eq!(
+            nmea2000_default_priority(127_497),
+            Priority::Low,
+            "engine trip totals are Priority Default 5"
+        );
+        assert_eq!(
+            nmea2000_default_priority(126_993),
+            Priority::Lowest,
+            "the N2K heartbeat is Priority Default 7"
+        );
+        // DOPs and satellites in view really are 6, as is the fallback.
+        for pgn in [129_539, 129_540, 127_258, 0x0000_FFFF] {
+            assert_eq!(nmea2000_default_priority(pgn), Priority::Default);
+        }
+
+        // The detailed fix must not outrank the rapid one it refines.
+        assert!(
+            nmea2000_default_priority(129_025) < nmea2000_default_priority(129_029),
+            "lower Priority value wins arbitration"
+        );
+    }
+
     #[test]
     fn position_rapid_round_trip() {
         let pos = GNSSPosition {
@@ -76,6 +124,12 @@ mod tests {
             .subscribe(move |_| *seen.borrow_mut() += 1);
 
         let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
         detail[7..15].copy_from_slice(&i64::MAX.to_le_bytes());
         detail[15..23].copy_from_slice(&i64::MAX.to_le_bytes());
         detail[23..31].copy_from_slice(&i64::MAX.to_le_bytes());
@@ -88,6 +142,213 @@ mod tests {
         assert_eq!(*emitted.borrow(), 0);
     }
 
+    /// C4 — PGN 129025 has only latitude and longitude (Appendix B.1). It used
+    /// to stamp `GNSSFixType::GNSSFix` on every update, overwriting the real
+    /// method from 129029 twice a second: an autosteer gate on fix quality
+    /// never opened, and the machine kept steering on a receiver that had
+    /// dropped to dead reckoning.
+    #[test]
+    fn position_rapid_update_does_not_invent_a_fix_quality() {
+        let mut iface = NMEAInterface::default();
+
+        // A detailed fix (129029) establishes RTK quality, the satellite count
+        // and an altitude — none of which 129025 can carry.
+        let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
+        detail[0] = 0x00;
+        detail[7..15].copy_from_slice(&(52_000_000_000_000_000i64).to_le_bytes());
+        detail[15..23].copy_from_slice(&(5_000_000_000_000_000i64).to_le_bytes());
+        detail[23..31].copy_from_slice(&(41_500_000i64).to_le_bytes());
+        // Low nibble GNSS system (0 = GPS), high nibble fix method (4 = RTK fixed).
+        detail[31] = (GNSSFixType::RTKFixed.as_u8() << 4) | GNSSSystem::GPS.as_u8();
+        detail[32] = 0xFC;
+        detail[33] = 21;
+        detail[34..36].copy_from_slice(&70u16.to_le_bytes());
+        detail[36..38].copy_from_slice(&90u16.to_le_bytes());
+        detail[38..42].copy_from_slice(&0i32.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_POSITION_DATA, detail));
+        assert_eq!(
+            iface.latest_position().unwrap().fix_type,
+            GNSSFixType::RTKFixed,
+            "precondition: the detailed fix established RTK"
+        );
+
+        // A rapid update moves the vehicle 1 m north and says nothing else.
+        let moved = GNSSPosition {
+            wgs: Wgs::new(52.000009, 5.0, 0.0),
+            ..Default::default()
+        };
+        iface.handle_message(&nmea_msg(
+            PGN_GNSS_POSITION_RAPID,
+            NMEAInterface::build_position(&moved).to_vec(),
+        ));
+
+        let cached = iface.latest_position().unwrap();
+        assert!((cached.wgs.latitude - 52.000009).abs() < 1e-6, "position updates");
+        assert_eq!(
+            cached.fix_type,
+            GNSSFixType::RTKFixed,
+            "a PG with no quality field must not downgrade the fix"
+        );
+        assert_eq!(cached.satellites_used, 21);
+        assert!(cached.hdop.is_some_and(|h| (h - 0.7).abs() < 1e-9));
+        assert_eq!(
+            cached.altitude_m,
+            Some(41.5),
+            "altitude is not a 129025 field and must survive"
+        );
+    }
+
+    /// DD056 describes the Sequence ID purely as a correlation tag — "identical
+    /// SID values within two or more different PGN transmissions identifies
+    /// those PGN transmissions as a single related data set" — and reserves
+    /// 253-254 for future use.
+    ///
+    /// Every handler used to drop the whole parameter group on one, throwing
+    /// away the measurement to punish its label: a receiver using a reserved
+    /// SID lost its DOPs entirely rather than just its ability to bind them.
+    /// The reserved band now lands on `0xFF`, the value the standard already
+    /// defines for "No binding provided", so the reading survives and only the
+    /// correlation is refused.
+    #[test]
+    fn a_reserved_sequence_id_costs_the_binding_not_the_measurement() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let seen: Rc<RefCell<Vec<GNSSDOPData>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        iface.on_gnss_dops.subscribe(move |d| sink.borrow_mut().push(*d));
+
+        let dop_frame = |sid: u8| {
+            let mut data = vec![sid, 0xD1, 0, 0, 0, 0, 0, 0];
+            data[2..4].copy_from_slice(&150i16.to_le_bytes()); // HDOP 1.50
+            data[4..6].copy_from_slice(&120i16.to_le_bytes()); // VDOP 1.20
+            data[6..8].copy_from_slice(&50i16.to_le_bytes()); // TDOP 0.50
+            data
+        };
+
+        for reserved in [253u8, 254] {
+            iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(reserved)));
+            let dops = *seen
+                .borrow()
+                .last()
+                .expect("a reserved SID must not discard the DOP report");
+            assert!((dops.hdop - 1.50).abs() < 1e-9, "the measurement survives");
+            assert_eq!(
+                dops.sid, 0xFF,
+                "a reserved SID reads as 'No binding provided'"
+            );
+        }
+
+        // A bindable SID is still passed through untouched, so correlation
+        // against a matching position report keeps working.
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(0x2A)));
+        assert_eq!(seen.borrow().last().unwrap().sid, 0x2A);
+
+        // 255 already meant "no binding" and is unchanged.
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, dop_frame(0xFF)));
+        assert_eq!(seen.borrow().last().unwrap().sid, 0xFF);
+    }
+
+    /// H8 — the DOPs in PGN 129539 are documented as "Range: +/-327.64" with a
+    /// 1x10E-2 resolution, i.e. `int16`. Decoding them as unsigned put the
+    /// unavailable sentinel at 0xFFFF instead of 0x7FFF, so an unavailable DOP
+    /// read as a plausible 327.67 and a quality gate treated "no value" as a
+    /// real, very poor one.
+    #[test]
+    fn unavailable_dops_are_not_reported_as_327_67() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let seen: Rc<RefCell<Vec<GNSSDOPData>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        iface.on_gnss_dops.subscribe(move |d| sink.borrow_mut().push(*d));
+
+        // Byte 2 as a conformant transmitter sends it: desired mode 1,
+        // actual mode 2, and the two NMEA reserved bits set to 1 (0xD1).
+        let mut data = vec![0x2A, 0xD1, 0, 0, 0, 0, 0, 0];
+        data[2..4].copy_from_slice(&i16::MAX.to_le_bytes()); // HDOP not available
+        data[4..6].copy_from_slice(&120i16.to_le_bytes()); // VDOP 1.20
+        data[6..8].copy_from_slice(&50i16.to_le_bytes()); // TDOP 0.50
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, data));
+
+        let dops = *seen.borrow().last().expect("a DOP report is emitted");
+        assert!(
+            (dops.hdop - 327.67).abs() > 1.0,
+            "an unavailable HDOP must not decode as 327.67, got {}",
+            dops.hdop
+        );
+        assert!((dops.vdop - 1.20).abs() < 1e-9);
+        assert!((dops.tdop - 0.50).abs() < 1e-9);
+        assert_eq!(dops.desired_mode, GNSSDOPMode::Mode2D);
+        assert_eq!(dops.actual_mode, GNSSDOPMode::Mode3D);
+
+        // The error sentinel is a decode refusal, not a value.
+        let before = seen.borrow().len();
+        let mut err = vec![0x2A, 0xD1, 0, 0, 0, 0, 0, 0];
+        err[2..4].copy_from_slice(&(i16::MAX - 2).to_le_bytes());
+        err[4..6].copy_from_slice(&120i16.to_le_bytes());
+        err[6..8].copy_from_slice(&50i16.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_DOPS, err));
+        assert_eq!(
+            seen.borrow().len(),
+            before,
+            "a reserved DOP value must not produce a report"
+        );
+    }
+
+    /// H6 — the COG and Heading reference fields are 2 bits wide with the rest
+    /// of the byte reserved and, per Appendix B, "all set to logic 1". Reading
+    /// the whole byte as the enum meant a conformant transmitter — which sends
+    /// 0xFC for reference True — was rejected outright, so course and heading
+    /// never reached a consumer.
+    #[test]
+    fn cog_and_heading_accept_the_mandated_reserved_bit_encoding() {
+        let mut iface = NMEAInterface::new(NMEAConfig::default().with_all(true));
+        let cogs: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = cogs.clone();
+        iface.on_cog.subscribe(move |c| sink.borrow_mut().push(*c));
+
+        // PGN 129026: byte 2 = reference True (0) with the six reserved bits
+        // set, i.e. 0xFC. Bytes 7-8 are the FF tail.
+        let mut cog_sog = [0xFFu8; 8];
+        cog_sog[0] = 0x07;
+        cog_sog[1] = 0xFC;
+        cog_sog[2..4].copy_from_slice(&10_000u16.to_le_bytes());
+        cog_sog[4..6].copy_from_slice(&500u16.to_le_bytes());
+        iface.handle_message(&nmea_msg(PGN_GNSS_COG_SOG_RAPID, cog_sog.to_vec()));
+        assert_eq!(
+            cogs.borrow().len(),
+            1,
+            "a conformant COG/SOG frame must be decoded, not dropped"
+        );
+
+        // The heading decoder updates an existing cache entry, so seed one.
+        iface.handle_message(&nmea_msg(
+            PGN_GNSS_POSITION_RAPID,
+            NMEAInterface::build_position(&GNSSPosition {
+                wgs: Wgs::new(52.0, 5.0, 0.0),
+                ..Default::default()
+            })
+            .to_vec(),
+        ));
+
+        // PGN 127250: the reference sits in byte 8, same encoding.
+        let mut heading = [0xFFu8; 8];
+        heading[0] = 0x07;
+        heading[1..3].copy_from_slice(&12_000u16.to_le_bytes());
+        heading[3..5].copy_from_slice(&0i16.to_le_bytes());
+        heading[5..7].copy_from_slice(&0i16.to_le_bytes());
+        heading[7] = 0xFD; // reference Magnetic (1) with reserved bits set
+        iface.handle_message(&nmea_msg(PGN_HEADING_TRACK, heading.to_vec()));
+        let cached = iface.latest_position().expect("heading updates the cache");
+        assert!(
+            cached.heading_rad.is_some_and(|h| h > 0.0),
+            "a conformant Vessel Heading frame must be decoded"
+        );
+    }
+
     #[test]
     fn position_detail_rejects_reference_station_count_mismatches() {
         let mut iface = NMEAInterface::default();
@@ -98,6 +359,12 @@ mod tests {
             .subscribe(move |pos| seen.borrow_mut().push(*pos));
 
         let mut detail = vec![0xFFu8; 43];
+    // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an all-0xFF
+    // fill would read as Unsafe rather than "not checked".
+    detail[32] = 0xFC;
+        // Byte 33 is [reserved: 6 bits = 1][DD209 integrity: 2 bits]; an
+        // all-0xFF fill would read as Unsafe rather than "not checked".
+        detail[32] = 0xFC;
         let lat_raw = (52.0_f64 * 1e16) as i64;
         let lon_raw = (5.0_f64 * 1e16) as i64;
         detail[7..15].copy_from_slice(&lat_raw.to_le_bytes());
@@ -411,10 +678,12 @@ mod tests {
             PGN_RATE_OF_TURN,
             vec![0x05, 0x00, 0xD4, 0x30, 0x00, 0x00, 0xFF, 0xFF],
         ));
-        iface.handle_message(&nmea_msg(
-            PGN_GNSS_DOPS,
-            vec![0x2A, 0xD3, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],
-        ));
+        // A reserved sequence ID is *not* grounds for refusal — it costs the
+        // binding, not the measurement, so that frame is exercised in
+        // `a_reserved_sequence_id_costs_the_binding_not_the_measurement`
+        // instead of here.
+        //
+        // A reserved Set Mode value (4) is refused.
         iface.handle_message(&nmea_msg(
             PGN_GNSS_DOPS,
             vec![0x2A, 0x14, 0x55, 0x00, 0x6E, 0x00, 0x32, 0x00],

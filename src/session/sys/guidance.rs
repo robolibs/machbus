@@ -1,9 +1,13 @@
 //! Automatic-guidance (autosteer) events — ISO 11783-7 agricultural guidance.
 //!
-//! The high-level [`Guidance`](crate::session::plugins::Guidance) plugin commands
-//! a steering system by *curvature* (Guidance System Command, PGN 0xAD00) and
-//! decodes the steering ECU's Agricultural Guidance Machine Info (PGN 0xAC00)
-//! into the events below.
+//! [`AutoDrive`](crate::session::plugins::AutoDrive) commands a steering system
+//! by *curvature* (Guidance System Command, PGN 0xAD00) and decodes the steering
+//! ECU's Agricultural Guidance Machine Info (PGN 0xAC00) into the events below.
+//!
+//! These report the **machine's** view. This controller's own lifecycle —
+//! engaged, refused, safe-stopped — is
+//! [`AutodriveEvent`](crate::session::AutodriveEvent). A stop is reported there,
+//! with the specific trigger, rather than as a bare "something stopped".
 
 use crate::net::types::Address;
 
@@ -15,9 +19,11 @@ pub enum GuidanceEvent {
     MachineInfo {
         /// Source address of the steering ECU that sent it.
         source: Address,
-        /// The steering system's estimated path curvature, in 1/km
-        /// (positive and negative follow the wire convention).
-        estimated_curvature: f64,
+        /// The steering system's estimated path curvature, in 1/km (positive
+        /// and negative follow the wire convention), or `None` when the ECU
+        /// reports it as not-available — which is a normal state when it is not
+        /// steering, and must not cost the rest of the report.
+        estimated_curvature: crate::isobus::implement::Signal<f64>,
         /// `true` when the steering system reports it is engaged / in a state
         /// that allows an external guidance command to steer.
         steering_ready: bool,
@@ -25,4 +31,20 @@ pub enum GuidanceEvent {
         /// or fault — see ISO 11783-7 agricultural guidance).
         limit_status: u8,
     },
+    /// No Machine Info has arrived within the link timeout, so the steering ECU
+    /// is presumed gone. The controller has been forced to the safe state:
+    /// curvature zeroed and the command status set to *not intended to steer*.
+    ///
+    /// This is the ISO 11783-7 §8.2 loss-of-communication reaction. Without it
+    /// a controller keeps streaming *intended to steer* at the last commanded
+    /// curvature indefinitely after the ECU stops answering.
+    LinkLost {
+        /// Milliseconds since the last Machine Info was received.
+        silent_for_ms: u32,
+        /// `true` when the controller was actually engaged at the moment the
+        /// link dropped, i.e. this interrupted live steering.
+        was_engaged: bool,
+    },
+    /// A Machine Info arrived after the link had been declared lost.
+    LinkRestored { source: Address },
 }

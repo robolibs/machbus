@@ -7,7 +7,7 @@ fn minimal_ddop() -> DDOP {
     DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement")
                 .with_software_version("0.1.3")
                 .with_serial_number("serial"),
@@ -16,8 +16,8 @@ fn minimal_ddop() -> DDOP {
             DeviceElement::default()
                 .with_id(2)
                 .with_type(DeviceElementType::Device)
-                .with_number(1)
-                .with_parent(1)
+                .with_number(0)
+                .with_parent(0)
                 .with_designator("root")
                 .with_children([ObjectID(3)]),
         )
@@ -49,14 +49,14 @@ fn tc_ddop_rejects_missing_child_reference_before_claiming_completion() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
             DeviceElement::default()
                 .with_id(2)
                 .with_type(DeviceElementType::Device)
-                .with_parent(1)
+                .with_parent(0)
                 .with_designator("root")
                 .with_children([ObjectID(99)]),
         );
@@ -125,15 +125,15 @@ fn tc_ddop_rejects_wrong_kind_element_parent_and_child_references() {
     let value_presentation_as_child = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
             DeviceElement::default()
                 .with_id(2)
                 .with_type(DeviceElementType::Device)
-                .with_number(1)
-                .with_parent(1)
+                .with_number(0)
+                .with_parent(0)
                 .with_designator("root")
                 .with_children([ObjectID(4)]),
         )
@@ -156,11 +156,16 @@ fn tc_ddop_rejects_wrong_kind_element_parent_and_child_references() {
 
 #[test]
 fn tc_ddop_rejects_null_and_self_referential_object_ids() {
-    let null_device = DDOP::default()
+    // K5 — A.7 Figure A.1 labels the DeviceObject node `ObjectId = 0`, so the
+    // id is not the caller's to choose: `add_device` normalises it. It used to
+    // share the auto-assign path, where `id = 0` means "pick one", so a caller
+    // who added a value presentation first got the device on ObjectId 1 and an
+    // opaque "DDOP validation failed" from `machbus_session_tc_connect`.
+    let normalised = DDOP::default()
         .with_device(
             DeviceObject::default()
                 .with_id(ObjectID::NULL)
-                .with_designator("bad-device"),
+                .with_designator("implement"),
         )
         .with_element(
             DeviceElement::default()
@@ -169,15 +174,15 @@ fn tc_ddop_rejects_null_and_self_referential_object_ids() {
                 .with_parent(ObjectID::NULL)
                 .with_designator("root"),
         );
-    assert!(
-        null_device.validate().is_err(),
-        "0xFFFF is the null/no-object marker and must not identify a real DDOP object"
-    );
+    assert_eq!(normalised.devices()[0].id, ObjectID::from(0u16));
+    normalised
+        .validate()
+        .expect("the DeviceObject id is normalised, not rejected");
 
     let self_parent = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
@@ -195,14 +200,14 @@ fn tc_ddop_rejects_null_and_self_referential_object_ids() {
     let self_child = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("implement"),
         )
         .with_element(
             DeviceElement::default()
                 .with_id(2)
                 .with_type(DeviceElementType::Device)
-                .with_parent(1)
+                .with_parent(0)
                 .with_designator("root")
                 .with_children([ObjectID(2)]),
         );
@@ -247,9 +252,105 @@ fn tc_ddop_rejects_process_data_reserved_trigger_bits() {
     );
 }
 
+/// F7 — ISO 11783-10 A.7: "A device descriptor object pool shall contain only a
+/// single device object", Figure A.1 puts it at `ObjectId = 0`, and A.3 gives
+/// exactly one DeviceElement of type device as the root — element number 0
+/// (B.3.2: "The element number would be 0 to address the implement sprayer").
+///
+/// None of this was validated, so every DDOP the crate built in its own tests
+/// and examples — device at ObjectId 1, no device-type element at all in some —
+/// validated clean and was invalid on the wire.
+#[test]
+fn tc_ddop_enforces_the_annex_a_object_hierarchy() {
+    // A conformant pool is accepted.
+    minimal_ddop()
+        .validate()
+        .expect("the corrected fixture is valid");
+
+    // Two DeviceObjects.
+    let two_devices = minimal_ddop().with_device(
+        DeviceObject::default()
+            .with_id(9u16)
+            .with_designator("second"),
+    );
+    assert!(
+        two_devices.validate().is_err(),
+        "A.7: only a single device object"
+    );
+
+    // The DeviceObject anywhere but ObjectId 0.
+    let mut moved = DDOP::default().with_device(
+        DeviceObject::default()
+            .with_id(1u16)
+            .with_designator("implement"),
+    );
+    moved = moved.with_element(
+        DeviceElement::default()
+            .with_id(2)
+            .with_type(DeviceElementType::Device)
+            .with_number(0)
+            .with_parent(1)
+            .with_designator("root"),
+    );
+    assert!(
+        moved.validate().is_err(),
+        "A.7 Figure A.1: the DeviceObject is ObjectId 0"
+    );
+
+    // No device-type element.
+    let headless = DDOP::default()
+        .with_device(DeviceObject::default().with_id(0u16).with_designator("d"))
+        .with_element(
+            DeviceElement::default()
+                .with_id(1)
+                .with_type(DeviceElementType::Section)
+                .with_number(1)
+                .with_parent(0)
+                .with_designator("S1"),
+        );
+    assert!(
+        headless.validate().is_err(),
+        "A.3: exactly one device-type element"
+    );
+
+    // A device-type element that is not element number 0.
+    let misnumbered = DDOP::default()
+        .with_device(DeviceObject::default().with_id(0u16).with_designator("d"))
+        .with_element(
+            DeviceElement::default()
+                .with_id(1)
+                .with_type(DeviceElementType::Device)
+                .with_number(7)
+                .with_parent(0)
+                .with_designator("root"),
+        );
+    assert!(
+        misnumbered.validate().is_err(),
+        "B.3.2: the implement itself is element number 0"
+    );
+
+    // Element numbers are a 12-bit field.
+    let overflowing = minimal_ddop().with_element(
+        DeviceElement::default()
+            .with_id(40)
+            .with_type(DeviceElementType::Section)
+            .with_number(4096)
+            .with_parent(2)
+            .with_designator("S"),
+    );
+    assert!(
+        overflowing.validate().is_err(),
+        "element numbers are 0 to 4095"
+    );
+}
+
 #[test]
 fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
-    let non_ascii = minimal_ddop().with_property(
+    // F4 — Annex A.1: "several attributes in this representation are coded as
+    // UTF-8 strings. These strings do not have a preceding byte-order mark
+    // (BOM)." A localized designator is ordinary content. These two assertions
+    // used to require an error, which made such a pool unserializable at all.
+    let localized = minimal_ddop().with_property(
         DeviceProperty::default()
             .with_id(4)
             .with_ddi(DDI(ddi::SECTION_CONTROL_STATE))
@@ -257,15 +358,13 @@ fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
             .with_designator("räte"),
     );
     assert!(
-        non_ascii.serialize().is_err(),
-        "wire text is validated before serialization"
+        localized.serialize().is_ok(),
+        "BOM-less UTF-8 is what A.1 specifies"
     );
-    assert!(
-        non_ascii.validate().is_err(),
-        "pool validation must catch the same text before activation"
-    );
+    assert!(localized.validate().is_ok());
 
-    let overlong_designator = "A".repeat(u8::MAX as usize + 1);
+    // Tables A.1-A.5 size these fields "0 to 128" bytes.
+    let overlong_designator = "A".repeat(129);
     let overlong = minimal_ddop().with_process_data(
         DeviceProcessData::default()
             .with_id(4)
@@ -274,7 +373,7 @@ fn tc_ddop_rejects_unencodable_text_and_non_finite_scales() {
     );
     assert!(
         overlong.validate().is_err(),
-        "one-byte wire text lengths must be enforced at validation time"
+        "the 128-byte Table A.1-A.5 text limit is enforced at validation time"
     );
 
     let non_finite_scale = minimal_ddop().with_value_presentation(

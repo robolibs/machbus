@@ -30,6 +30,8 @@ pub mod net;
 pub mod nmea;
 #[cfg(feature = "default")]
 pub mod python;
+/// The autonomy safe state — available in every profile, including `embedded`.
+pub mod safety;
 #[cfg(any(feature = "default", feature = "cli"))]
 pub mod session;
 #[cfg(feature = "embedded")]
@@ -53,12 +55,10 @@ pub mod embedded {
     };
     pub use crate::isobus::{
         AuxFunctionState, AuxFunctionType, AuxNFunction, AuxNOptions, AuxOFunction, AuxOOptions,
-        BasicTractorEcuOptions, FileAttribute, FileClientState, FileOperation, FileProperties,
-        FileServerConfig, FileServerState, FileTransferError, Functionalities, Functionality,
+        BasicTractorEcuOptions, Functionalities, Functionality,
         FunctionalityData, GroupFunctionError, GroupFunctionMsg, GroupFunctionResponder,
         GroupFunctionSupport, GroupFunctionType, MinimumControlFunctionOptions,
-        OpenFileState, TaskControllerGeoServerOptions, TractorImplementManagementOptions,
-        VolumeInfo,
+        TaskControllerGeoServerOptions, TractorImplementManagementOptions,
     };
     pub use crate::isobus::{
         AuxValve, AuxValveCommand, HitchState, MAX_AUX_VALVES, MAX_HITCH_POSITION, PtoState,
@@ -68,15 +68,14 @@ pub mod embedded {
     };
     pub use crate::isobus::{
         AuxValveCommandMsg, AuxValveFlowMsg, CURVATURE_MAX_PER_KM, CURVATURE_MIN_PER_KM,
-        CurvatureCommand, CurvatureCommandStatus, DriveStrategyCmd, DriveStrategyMode,
-        ExitReasonCode, FacilityGroup, FamilyLevel, GenericSaeBs02SlotValue, GroundBasedSpeedDist,
-        GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd, GuidanceSystemStatus,
-        HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd, HitchStatus,
-        IMPLEMENT_FAMILIES, ImplementFamilyInfo, ImplementMessageFamily, LightState,
-        LightingController, LightingState, LimitStatus, MachineDirection, MachineSelectedSpeedFull,
-        MachineSelectedSpeedMsg, MachineSpeedCommandMsg, MechanicalLockout, PtoCommand,
-        PtoCommandMsg, PtoStatus, RequestResetCommandStatus, RequiredFacilitiesAggregator,
-        SpeedExitCode, SpeedSource, SteeringReadiness, TECU_FACILITY_MATRIX, TecuClass,
+        CurvatureCommandStatus, DriveStrategyCmd, DriveStrategyMode, ExitReasonCode, FacilityGroup,
+        FamilyLevel, GenericSaeBs02SlotValue, GroundBasedSpeedDist, GuidanceLimitStatus,
+        GuidanceMachineInfo, GuidanceSystemCmd, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd,
+        HitchRollPitchCmd, HitchStatus, IMPLEMENT_FAMILIES, ImplementFamilyInfo,
+        ImplementMessageFamily, LightState, LightingController, LightingState, LimitStatus,
+        MachineDirection, MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout,
+        PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus,
+        RequiredFacilitiesAggregator, SpeedExitCode, SpeedSource, TECU_FACILITY_MATRIX, TecuClass,
         TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole, TractorMode, ValveCommand,
         ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist, curvature_within_range,
         estimated_flow_pgn, facilities_in, family_info, measured_flow_pgn, wheel_slip_percent,

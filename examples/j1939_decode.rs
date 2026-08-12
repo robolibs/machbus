@@ -10,6 +10,7 @@
 //!
 //! Run with `cargo run --example j1939_decode`.
 
+use machbus::isobus::implement::Signal;
 use machbus::j1939::{DiagnosticLamps, DmDtcList, Dtc, Eec1, Fmi};
 use machbus::net::Message;
 
@@ -18,19 +19,23 @@ fn main() {
 
     // ANCHOR: eec1
     // EEC1 (PGN 61444) — engine speed, torque, driver demand.
+    // Each parameter is a `Signal`: a value, or the engine reporting it as
+    // faulted / not provided. One absent parameter no longer costs the whole PG.
     let eec1 = Eec1 {
-        engine_speed_rpm: 1500.0,
-        driver_demand_percent: 40.0,
-        actual_engine_percent: 38.0,
-        engine_torque_percent: 35.0,
+        engine_speed_rpm: Signal::Value(1500.0),
+        driver_demand_percent: Signal::Value(40.0),
+        actual_engine_percent: Signal::Value(38.0),
+        engine_torque_percent: Signal::Value(35.0),
         starter_mode: 0,
         source_address: 0x00,
     };
     let bytes = eec1.encode(); // [u8; 8] you would put on the bus
     let back = Eec1::decode(&bytes).expect("valid EEC1 payload");
     println!(
-        "EEC1: {:.0} rpm, driver demand {:.0}%, actual {:.0}%",
-        back.engine_speed_rpm, back.driver_demand_percent, back.actual_engine_percent
+        "EEC1: {:?} rpm, driver demand {:?}%, actual {:?}%",
+        back.engine_speed_rpm.value(),
+        back.driver_demand_percent.value(),
+        back.actual_engine_percent.value()
     );
     // ANCHOR_END: eec1
 
@@ -39,8 +44,9 @@ fn main() {
     let msg = Message::new(61444, bytes.to_vec(), 0x00);
     if let Some(e) = Eec1::from_message(&msg) {
         println!(
-            "from_message: {:.0} rpm from source 0x{:02X}",
-            e.engine_speed_rpm, msg.source
+            "from_message: {:?} rpm from source 0x{:02X}",
+            e.engine_speed_rpm.value(),
+            msg.source
         );
     }
     // ANCHOR_END: from_message
@@ -54,11 +60,13 @@ fn main() {
                 spn: 110,
                 fmi: Fmi::AboveNormalModerate,
                 occurrence_count: 3,
+                conversion_method: false,
             }, // coolant temp high
             Dtc {
                 spn: 190,
                 fmi: Fmi::BelowNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             }, // engine speed low
         ],
     };

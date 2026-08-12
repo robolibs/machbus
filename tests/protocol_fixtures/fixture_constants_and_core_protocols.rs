@@ -5,14 +5,14 @@ use machbus::isobus::fs::{
     FileServerPropertiesV2, FileServerStatus, OpenFlags, VolumeStateV2, VolumeStatus, encode_ccm,
 };
 use machbus::isobus::implement::{
-    AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommand, CurvatureCommandStatus,
+    AuxValveCommandMsg, AuxValveFlowMsg, CurvatureCommandStatus,
     DriveStrategyCmd, DriveStrategyMode, ExitReasonCode, GenericSaeBs02SlotValue,
     GroundBasedSpeedDist, GuidanceLimitStatus, GuidanceMachineInfo, GuidanceSystemCmd,
-    GuidanceSystemStatus, HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd,
+    HitchCommand, HitchCommandMsg, HitchPtoCombinedCmd, HitchRollPitchCmd,
     HitchStatus, LightState, LightingState, LimitStatus, MachineDirection,
-    MachineSelectedSpeedFull, MachineSelectedSpeedMsg, MachineSpeedCommandMsg, MechanicalLockout,
-    PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, SpeedExitCode, SpeedSource,
-    SteeringReadiness, TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole,
+    MachineSelectedSpeedFull, MachineSpeedCommandMsg, MechanicalLockout,
+    PtoCommand, PtoCommandMsg, PtoStatus, RequestResetCommandStatus, SpeedSource,
+    TractorControlModeMsg, TractorFacilities, TractorFacilitiesRole,
     TractorMode, ValveCommand, ValveFailSafe, ValveLimitStatus, ValveState, WheelBasedSpeedDist,
     estimated_flow_pgn, measured_flow_pgn,
 };
@@ -49,9 +49,7 @@ use machbus::isobus::vt::{
 };
 use machbus::isobus::{
     AuxFunctionState, AuxFunctionType, AuxNFunction, AuxOFunction, BasicTractorEcuOptions,
-    FILE_SERVER_BUSY_STATUS_INTERVAL_MS, FILE_SERVER_STATUS_INTERVAL_MS, FS_REQUEST_TIMEOUT_MS,
-    FileAttribute, FileOperation, FileProperties, FileServerConfig as LegacyFileServerConfig,
-    FileTransferError, Functionalities, Functionality, FunctionalityData, GroupFunctionError,
+    Functionalities, Functionality, FunctionalityData, GroupFunctionError,
     GroupFunctionMsg, GroupFunctionType, MinimumControlFunctionOptions,
     TractorImplementManagementOptions,
 };
@@ -79,7 +77,7 @@ use machbus::j1939::{
     Vep1, VolumeUnit,
 };
 use machbus::net::constants::{
-    BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
+    ADDRESS_CLAIM_TIMEOUT_MS, BROADCAST_ADDRESS, ETP_TIMEOUT_T1_MS, ETP_TIMEOUT_T2_MS, NULL_ADDRESS, TP_BAM_INTER_PACKET_MS,
     TP_MAX_PACKETS_PER_CTS, TP_TIMEOUT_T1_MS, TP_TIMEOUT_T3_MS,
 };
 use machbus::net::error::Error;
@@ -95,7 +93,7 @@ use machbus::net::pgn_defs::{
     PGN_FRONT_HITCH, PGN_FRONT_HITCH_CMD, PGN_FRONT_HITCH_ROLL_PITCH_CMD, PGN_FRONT_PTO,
     PGN_FRONT_PTO_CMD, PGN_GNSS_COG_SOG_RAPID, PGN_GNSS_DOPS, PGN_GNSS_POSITION_DATA,
     PGN_GNSS_POSITION_RAPID, PGN_GNSS_SATELLITES_IN_VIEW, PGN_GROUND_BASED_SPEED_DIST,
-    PGN_GUIDANCE_CURVATURE_CMD, PGN_GUIDANCE_MACHINE_INFO, PGN_GUIDANCE_SYSTEM,
+    PGN_GUIDANCE_MACHINE_INFO,
     PGN_GUIDANCE_SYSTEM_CMD, PGN_HEADING_TRACK, PGN_HEARTBEAT,
     PGN_HEARTBEAT_N2K, PGN_HITCH_PTO_COMBINED_CMD, PGN_HUMIDITY, PGN_LANGUAGE_COMMAND,
     PGN_LIGHTING_DATA, PGN_MACHINE_SELECTED_SPEED, PGN_MACHINE_SELECTED_SPEED_CMD,
@@ -165,8 +163,6 @@ const ISOBUS_FS_CODECS_HEX: &str = include_str!("../fixtures/isobus/fs_codecs.he
 const ISOBUS_CAN_BUS_CONFIG: &str = include_str!("../fixtures/isobus/can_bus_config.txt");
 const ISOBUS_CAN_FRAME_WRAPPER_HEX: &str = include_str!("../fixtures/isobus/can_frame_wrapper.hex");
 const ISOBUS_NAME_MANAGEMENT_HEX: &str = include_str!("../fixtures/isobus/name_management.hex");
-const ISOBUS_LEGACY_FILE_TRANSFER_HEX: &str =
-    include_str!("../fixtures/isobus/legacy_file_transfer.hex");
 const ISOBUS_AUX_GROUP_CODECS_HEX: &str = include_str!("../fixtures/isobus/aux_group_codecs.hex");
 const ISOBUS_NIU_CONTROL_HEX: &str = include_str!("../fixtures/isobus/niu_control.hex");
 const REAR_HITCH_RAISE: &[u8; 8] = include_bytes!("../fixtures/isobus/rear_hitch_raise.bin");
@@ -316,8 +312,8 @@ const NMEA_GNSS_POSITION_DATA_REFERENCE_STATION_LENGTHS_HEX: &str =
     include_str!("../fixtures/nmea/gnss_position_data_reference_station_lengths.hex");
 const NMEA_GNSS_DOPS_AUTO_3D_HDOP0_85_VDOP1_10_TDOP0_50_HEX: &str =
     include_str!("../fixtures/nmea/gnss_dops_auto_3d_hdop0_85_vdop1_10_tdop0_50.hex");
-const NMEA_GNSS_DOPS_BAD_RESERVED_BITS_HEX: &str =
-    include_str!("../fixtures/nmea/gnss_dops_bad_reserved_bits.hex");
+const NMEA_GNSS_DOPS_BAD_SEQUENCE_ID_HEX: &str =
+    include_str!("../fixtures/nmea/gnss_dops_bad_sequence_id.hex");
 const NMEA_GNSS_DOPS_BAD_RESERVED_MODE_HEX: &str =
     include_str!("../fixtures/nmea/gnss_dops_bad_reserved_mode.hex");
 const NMEA_ATTITUDE_YAW1_PITCH_NEG0_1_ROLL0_25_HEX: &str =
@@ -391,12 +387,9 @@ fn fixture_isobus_can_physical_config_values_are_stable() {
     assert!(lower.overall_ok);
     assert!(upper.overall_ok);
 
-    let bad_bitrate = validate_can_bus_config(&CanBusConfig::default().bitrate(500_000));
+    let bad_bitrate = validate_can_bus_config(&CanBusConfig::default().bitrate(125_000));
     assert!(!bad_bitrate.overall_ok);
-    assert_eq!(
-        bad_bitrate.error_message,
-        parse_named_text_value(ISOBUS_CAN_BUS_CONFIG, "wrong_bitrate_error")
-    );
+    assert!(bad_bitrate.error_message.contains("bitrate must be"));
 
     let bad_sample_point =
         validate_can_bus_config(&CanBusConfig::default().sample_point(ISO_SAMPLE_POINT_MIN - 0.01));
@@ -699,18 +692,18 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
     );
     let mixed_language_data = LanguageData {
         language_code: [b'd', b'e'],
-        decimal: DecimalSymbol::Comma,
-        time_format: TimeFormat::TwelveHour,
-        date_format: DateFormat::YyyyMmDd,
-        distance: DistanceUnit::Imperial,
-        area: AreaUnit::Us,
-        volume: VolumeUnit::Imperial,
-        mass: MassUnit::Us,
-        temperature: TemperatureUnit::Imperial,
-        pressure: PressureUnit::Imperial,
-        force: ForceUnit::Imperial,
+        decimal: Some(DecimalSymbol::Comma),
+        time_format: Some(TimeFormat::TwelveHour),
+        date_format: Some(DateFormat::YyyyMmDd),
+        distance: Some(DistanceUnit::Imperial),
+        area: Some(AreaUnit::Us),
+        volume: Some(VolumeUnit::Imperial),
+        mass: Some(MassUnit::Us),
+        temperature: Some(TemperatureUnit::Imperial),
+        pressure: Some(PressureUnit::Imperial),
+        force: Some(ForceUnit::Imperial),
         country_code: [b'D', b'E'],
-        generic: UnitSystem::Us,
+        generic: Some(UnitSystem::Us),
     };
     assert_eq!(mixed_language_data.encode(), mixed_language);
     assert_eq!(
@@ -737,16 +730,24 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in [
-        "language_bad_reserved_bits",
-        "language_bad_reserved_unit3",
-        "language_bad_reserved_tail",
+    // G3 / G4 — §5.4 makes the reserved nibble don't-care on receive, and an
+    // unrecognised 2-bit unit code says nothing about the language code in
+    // bytes 1-2. Dropping the whole PG meant the plugin emitted no event at
+    // all, so the application never learned the operator's language or any of
+    // the units the terminal *did* specify.
+    for tolerated in [
+        "undefined_bits_language_reserved",
+        "undefined_bits_language_unit3",
+        "undefined_bits_language_tail",
     ] {
-        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, malformed);
-        assert!(
-            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0x80,))
-                .is_none(),
-            "{malformed} must be rejected"
+        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, tolerated);
+        let decoded =
+            LanguageData::decode(&Message::new(PGN_LANGUAGE_COMMAND, payload.to_vec(), 0x80))
+                .unwrap_or_else(|| panic!("{tolerated} must still decode"));
+        assert_eq!(
+            decoded.language_code,
+            [b'e', b'n'],
+            "{tolerated}: the operator's language selection survives"
         );
     }
 
@@ -814,12 +815,26 @@ fn fixture_j1939_language_shortcut_request2_and_transfer_codecs_are_stable() {
         ))
         .is_none()
     );
-    for malformed in ["shortcut_bad_reserved_bits", "shortcut_bad_reserved_tail"] {
-        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, malformed);
-        assert!(
-            shortcut_button::decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x80,))
-                .is_none(),
-            "{malformed} must be rejected"
+    // G3 / ISO 11783-7 §5.4 — these two were filed as malformed and asserted
+    // to be rejected. They are conformant: one sets an unassigned bit in the
+    // state byte, the other zero-fills the reserved prefix. On the one decoder
+    // in the crate that actuates a stop, rejecting them discarded the
+    // operator's STOP and left the silence watchdog unarmed as well.
+    for (name, expected) in [
+        (
+            "undefined_bits_shortcut_unassigned_state_bit",
+            shortcut_button::ShortcutButtonState::StopImplementOperations,
+        ),
+        (
+            "undefined_bits_shortcut_zero_filled_prefix",
+            shortcut_button::ShortcutButtonState::StopImplementOperations,
+        ),
+    ] {
+        let payload = parse_named_hex_frame(J1939_LANGUAGE_SHORTCUT_REQUEST2_HEX, name);
+        assert_eq!(
+            shortcut_button::decode(&Message::new(PGN_SHORTCUT_BUTTON, payload.to_vec(), 0x80)),
+            Some(expected),
+            "{name} must decode: the stop has to get through"
         );
     }
 
@@ -1033,7 +1048,10 @@ fn fixture_j1939_address_claim_frame_bytes_are_stable() {
     let name = Name::from_raw(u64::from_le_bytes(*NAME_MAGIC_RAW_LE));
     let mut cf = InternalCf::new(name, 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
-    let frames = claimer.start(&mut cf);
+    // §4.5.1 a): the request goes out first and the claim only after the
+    // 250 ms + RTxD listen window. The wire bytes of both are unchanged.
+    let mut frames = claimer.start(&mut cf);
+    frames.extend(claimer.update(&mut cf, ADDRESS_CLAIM_TIMEOUT_MS));
 
     assert_eq!(frames.len(), 2);
 
@@ -1258,94 +1276,6 @@ fn fixture_j1939_proprietary_single_frame_codecs_are_stable() {
     assert_eq!(decoded_b.group_extension(), 0x42);
 }
 
-#[test]
-fn fixture_isobus_legacy_file_transfer_enums_are_stable() {
-    let operation_codes = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "operation_codes");
-    let expected_ops = [
-        FileOperation::Read,
-        FileOperation::Write,
-        FileOperation::Delete,
-        FileOperation::List,
-        FileOperation::GetAttributes,
-        FileOperation::SetAttributes,
-        FileOperation::OpenFile,
-        FileOperation::CloseFile,
-        FileOperation::ReadData,
-        FileOperation::WriteData,
-        FileOperation::SeekFile,
-        FileOperation::GetCurrentDir,
-        FileOperation::ChangeCurrentDir,
-        FileOperation::MakeDir,
-        FileOperation::RemoveDir,
-        FileOperation::MoveFile,
-        FileOperation::CopyFile,
-        FileOperation::GetFileSize,
-        FileOperation::GetFreeSpace,
-        FileOperation::GetVolumeInfo,
-        FileOperation::GetServerStatus,
-    ];
-    assert_eq!(operation_codes.len(), expected_ops.len());
-    for (&raw, &op) in operation_codes.iter().zip(expected_ops.iter()) {
-        assert_eq!(raw, op.as_u8());
-        assert_eq!(FileOperation::from_u8(raw), Some(op));
-    }
-    for reserved in [0x00, 0x07, 0x0F, 0x15, 0x24, 0x32, 0x42, 0x51, 0xFF] {
-        assert_eq!(FileOperation::from_u8(reserved), None);
-    }
-
-    let error_codes = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "error_codes");
-    let expected_errors = [
-        FileTransferError::NoError,
-        FileTransferError::FileNotFound,
-        FileTransferError::AccessDenied,
-        FileTransferError::DiskFull,
-        FileTransferError::InvalidFilename,
-        FileTransferError::ServerBusy,
-        FileTransferError::InvalidHandle,
-        FileTransferError::EndOfFile,
-        FileTransferError::VolumeNotMounted,
-        FileTransferError::IoError,
-        FileTransferError::InvalidSeekPosition,
-        FileTransferError::InvalidParameter,
-        FileTransferError::FileAlreadyOpen,
-        FileTransferError::DirectoryNotEmpty,
-        FileTransferError::Unknown,
-    ];
-    assert_eq!(error_codes.len(), expected_errors.len());
-    for (&raw, &err) in error_codes.iter().zip(expected_errors.iter()) {
-        assert_eq!(FileTransferError::from_u8(raw), err);
-        assert_eq!(err.as_u8(), raw);
-    }
-    assert_eq!(FileTransferError::from_u8(0xAA), FileTransferError::Unknown);
-
-    let attr_mask = parse_named_hex_bytes(
-        ISOBUS_LEGACY_FILE_TRANSFER_HEX,
-        "attribute_mask_readonly_hidden_dir_archive",
-    )[0];
-    assert_eq!(
-        attr_mask,
-        FileAttribute::ReadOnly.as_u8()
-            | FileAttribute::Hidden.as_u8()
-            | FileAttribute::Directory.as_u8()
-            | FileAttribute::Archive.as_u8()
-    );
-    let props = FileProperties {
-        name: "LOGS".into(),
-        attributes: attr_mask,
-        ..Default::default()
-    };
-    assert!(props.is_read_only());
-    assert!(props.is_hidden());
-    assert!(props.is_directory());
-
-    let default_config = parse_named_hex_bytes(ISOBUS_LEGACY_FILE_TRANSFER_HEX, "default_config");
-    let cfg = LegacyFileServerConfig::default();
-    assert_eq!(default_config[0], 0x00);
-    assert_eq!(default_config[1], cfg.max_open_files);
-    assert_eq!(cfg.status_interval_ms, FILE_SERVER_STATUS_INTERVAL_MS);
-    assert_eq!(FILE_SERVER_BUSY_STATUS_INTERVAL_MS, 200);
-    assert_eq!(FS_REQUEST_TIMEOUT_MS, 6_000);
-}
 
 #[test]
 fn fixture_isobus_aux_and_group_function_codecs_are_stable() {
@@ -1553,8 +1483,8 @@ fn fixture_j1939_dtc_and_dm1_bytes_are_stable() {
             J1939_DIAGNOSTIC_VARIABLE_CODECS_HEX,
             "dtc_reserved_occurrence_bit",
         ))
-        .is_none(),
-        "DTC occurrence-count reserved high bit must be rejected"
+        .is_some(),
+        "DTC occurrence-count Conversion Method bit 7 is valid"
     );
 
     let expected_dm1 = DmDtcList {
@@ -1566,6 +1496,7 @@ fn fixture_j1939_dtc_and_dm1_bytes_are_stable() {
             spn: 523_312,
             fmi: Fmi::AboveNormal,
             occurrence_count: 0,
+            conversion_method: false,
         }],
     };
     let dm1 = DmDtcList::decode(DM1_AMBER_SPN523312).expect("DM1 fixture decodes");
@@ -1602,11 +1533,13 @@ fn fixture_j1939_dm2_previous_dtc_payload_is_stable() {
                 spn: 100,
                 fmi: Fmi::AboveNormal,
                 occurrence_count: 1,
+                conversion_method: false,
             },
             Dtc {
                 spn: 200,
                 fmi: Fmi::VoltageHigh,
                 occurrence_count: 5,
+                conversion_method: false,
             },
         ]
     );
@@ -1631,6 +1564,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x1234,
             fmi: Fmi::CurrentLow,
             occurrence_count: 2,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm6.encode(), dm6_bytes);
@@ -1647,6 +1581,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x56,
             fmi: Fmi::VoltageLow,
             occurrence_count: 1,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm12.encode(), dm12_bytes);
@@ -1663,6 +1598,7 @@ fn fixture_j1939_dm6_dm12_dm23_alias_payloads_are_stable() {
             spn: 0x789,
             fmi: Fmi::VoltageHigh,
             occurrence_count: 4,
+            conversion_method: false,
         }]
     );
     assert_eq!(dm23.encode(), dm23_bytes);
@@ -1720,3 +1656,39 @@ fn fixture_j1939_dm3_and_dm11_clear_requests_use_reserved_ff_payloads() {
     assert_eq!(dm11_frame.data, *DM11_CLEAR_ACTIVE_REQUEST);
 }
 
+
+/// X4 — the published coverage ledgers name source files and are read by
+/// anyone auditing this crate. Two of them pointed at `src/isobus/guidance.rs`,
+/// a path that does not exist, so the guidance surface looked audited when the
+/// real codec lives elsewhere. Keep every cited path real.
+#[test]
+fn coverage_ledgers_only_cite_paths_that_exist() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut missing = Vec::new();
+
+    for ledger in [
+        "book/src/reference/assets/protocol_matrix.csv",
+        "book/src/reference/assets/standard_gap_matrix.csv",
+    ] {
+        let Ok(text) = std::fs::read_to_string(repo.join(ledger)) else {
+            continue;
+        };
+        for (lineno, line) in text.lines().enumerate().skip(1) {
+            // Cells may list several paths separated by semicolons.
+            for field in line.split([',', ';']) {
+                let field = field.trim().trim_matches('"');
+                let looks_like_source = field.starts_with("src/")
+                    && (field.ends_with(".rs") || field.ends_with(".toml"));
+                if looks_like_source && !repo.join(field).exists() {
+                    missing.push(format!("{ledger}:{}: {field}", lineno + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "coverage ledgers cite non-existent source paths:\n  {}",
+        missing.join("\n  ")
+    );
+}

@@ -603,9 +603,9 @@ fn main() {
         let mut niu = Niu::new(
             NiuConfig::default()
                 .name("demo-niu")
-                .mode(NiuFilterMode::BlockAll), // block-all baseline
+                .mode(NiuFilterMode::PassSpecific), // pass-specific: default block, listed PGNs forwarded
         );
-        niu.set_filter_mode(NiuFilterMode::BlockAll);
+        niu.set_filter_mode(NiuFilterMode::PassSpecific);
         niu.allow_pgn(PGN_HEARTBEAT, true);
         niu.allow_pgn_rate_limited(PGN_DM1, 100, true);
         niu.block_pgn(PGN_REQUEST, true);
@@ -688,18 +688,19 @@ fn main() {
 
         // Engine status round-trip.
         let eec1 = Eec1 {
-            engine_torque_percent: 50.0,
-            driver_demand_percent: 75.0,
-            actual_engine_percent: 45.0,
-            engine_speed_rpm: 1500.0,
+            engine_torque_percent: machbus::isobus::implement::Signal::Value(50.0),
+            driver_demand_percent: machbus::isobus::implement::Signal::Value(75.0),
+            actual_engine_percent: machbus::isobus::implement::Signal::Value(45.0),
+            engine_speed_rpm: machbus::isobus::implement::Signal::Value(1500.0),
             starter_mode: 1,
             source_address: 0x10,
         };
         let bytes = eec1.encode();
         let decoded = Eec1::decode(&bytes).unwrap();
         println!(
-            "  EEC1: {} rpm round-trip OK ({:.1} rpm)",
-            eec1.engine_speed_rpm, decoded.engine_speed_rpm
+            "  EEC1: {:?} rpm round-trip OK ({:?} rpm)",
+            eec1.engine_speed_rpm.value(),
+            decoded.engine_speed_rpm.value()
         );
 
         // DTC round-trip.
@@ -707,6 +708,7 @@ fn main() {
             spn: 0x1_2345,
             fmi: Fmi::AbnormalRateChange,
             occurrence_count: 7,
+            conversion_method: false,
         };
         let dtc_bytes = dtc.encode();
         let dtc_decoded = Dtc::decode(&dtc_bytes).unwrap();

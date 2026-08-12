@@ -20,7 +20,7 @@ fn physical_layer_accepts_only_the_supported_iso_bus_profile() {
 
 #[test]
 fn physical_layer_rejects_unsupported_bitrate_before_runtime_use() {
-    let config = CanBusConfig::default().bitrate(500_000);
+    let config = CanBusConfig::default().bitrate(125_000);
     let validation = validate_can_bus_config(&config);
     assert!(!validation.bitrate_ok);
     assert!(!validation.overall_ok);

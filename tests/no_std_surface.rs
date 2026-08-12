@@ -20,10 +20,10 @@ use machbus::isobus::vt::{
     VTState, WorkingSet, WorkingSetBody, create_data_mask, create_working_set,
 };
 use machbus::isobus::{
-    AuxFunctionState, AuxFunctionType, AuxNFunction, CurvatureCommand, Functionalities,
-    GroundBasedSpeedDist, GroupFunctionMsg, LightState, LightingState,
-    MachineSpeedCommandMsg, SCD_LABEL_NONE, SCSequenceState, ScdAction, SequenceRecorder,
-    SequenceTanTracker, TimOption, TimOptionSet, TractorFacilities, scd_action,
+    AuxFunctionState, AuxFunctionType, AuxNFunction, Functionalities, GroundBasedSpeedDist,
+    GroupFunctionMsg, LightState, LightingState, MachineSpeedCommandMsg, SCD_LABEL_NONE,
+    SCSequenceState, ScdAction, SequenceRecorder, SequenceTanTracker, TimOption, TimOptionSet,
+    TractorFacilities, scd_action,
 };
 use machbus::j1939::{Fmi, diagnostic::Dtc};
 use machbus::net::{
@@ -31,6 +31,7 @@ use machbus::net::{
     parse_iop_data, pgn_defs::PGN_REQUEST,
 };
 use machbus::nmea::{GNSSPosition, NMEAInterface};
+use machbus::safety::{SafeStopTrigger, StopLatch};
 use machbus::session::{Session, Transport};
 use machbus::time::Instant;
 use machbus::vt_storage::StoredPoolVersion;
@@ -90,10 +91,25 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         ..Default::default()
     };
     let _position_payload = NMEAInterface::build_position(&gnss);
+    // C34 — the autonomy safe state must exist on the target it protects. The
+    // whole round-1 safety layer sat behind the hosted `session` gate, so an
+    // embedded autosteer node had no stop latch at all.
+    let mut latch = StopLatch::new();
+    assert!(!latch.is_latched());
+    assert!(latch.trip(SafeStopTrigger::BusOff));
+    assert_eq!(latch.reason(), Some(SafeStopTrigger::BusOff));
+    // The first cause is kept, not the consequences that follow it.
+    assert!(!latch.trip(SafeStopTrigger::AddressClaimLost));
+    assert_eq!(latch.reason(), Some(SafeStopTrigger::BusOff));
+    assert_eq!(SafeStopTrigger::BusOff.as_str(), "bus_off");
+    latch.clear();
+    assert!(!latch.is_latched());
+
     let _dtc = Dtc {
         spn: 123,
         fmi: Fmi::AboveNormal,
         occurrence_count: 1,
+        conversion_method: false,
     };
 
     let iop = [0x01, 0x00, 21, 0x0D, 0xF0, 0xFE, 0xCA];
@@ -107,7 +123,6 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         setpoint: 42,
     };
     assert_eq!(aux.encode().len(), 8);
-    assert_eq!(CurvatureCommand::default().encode().len(), 8);
     assert!(!Functionalities::new().with_min_cf(1).serialize().is_empty());
     assert!(
         GroupFunctionMsg::acknowledge(PGN_REQUEST, Default::default())
@@ -122,7 +137,6 @@ fn embedded_public_surface_imports_and_runs_minimal_loop() -> machbus::net::Resu
         GroundBasedSpeedDist::decode(&GroundBasedSpeedDist::default().encode()),
         Some(GroundBasedSpeedDist::default())
     );
-    assert_eq!(CurvatureCommand::default().encode().len(), 8);
     assert_eq!(
         LightingState {
             front_work: LightState::On,

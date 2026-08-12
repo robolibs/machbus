@@ -13,6 +13,11 @@ GENERATE_C_ABI_PUBLIC_HEADER := bash $(TOP_DIR)/tools/generate_c_abi_public_head
 EXAMPLE ?= main
 NO_STD_TARGET ?= thumbv7em-none-eabihf
 
+# Every optional feature the hosted gates must cover. `tim-auth` was outside all
+# of them, so 1200 lines of certificate-chain validation were never type-checked,
+# linted or run by any command a developer or CI invokes.
+HOSTED_FEATURES ?= async,tim-auth
+
 HAS_REL := $(shell command -v git-rel 2>/dev/null)
 
 $(info ------------------------------------------)
@@ -65,20 +70,20 @@ embedded-examples-check:
 	@$(CARGO) check --no-default-features --features embedded --example embedded_hal_adapter
 	@$(CARGO) check --no-default-features --features embedded --example embedded_fixed_queue
 
-check-all:
-	@$(CARGO) check --all-targets --features async
+check-all: no-std-surface-check
+	@$(CARGO) check --all-targets --features $(HOSTED_FEATURES)
 
 fmt:
 	@$(CARGO) fmt --all
 
 clippy:
-	@$(CARGO) clippy --all-targets --features async -- -D warnings
+	@$(CARGO) clippy --all-targets --features $(HOSTED_FEATURES) -- -D warnings
 
 rustdoc:
-	@RUSTDOCFLAGS="-Dwarnings" $(CARGO) doc --features async --no-deps
+	@RUSTDOCFLAGS="-Dwarnings" $(CARGO) doc --features $(HOSTED_FEATURES) --no-deps
 
 test-all:
-	@$(CARGO) test --all-targets --features async
+	@$(CARGO) test --all-targets --features $(HOSTED_FEATURES)
 
 clean:
 	@$(CARGO) clean
@@ -233,8 +238,8 @@ help:
 	@echo "  no-std-target-check Check no_std on NO_STD_TARGET (default thumbv7em-none-eabihf)"
 	@echo "  no-std-surface-check Check embedded public imports in a dedicated test"
 	@echo "  embedded-examples-check Check embedded-shaped examples"
-	@echo "  check-all    Run cargo check on all targets/all features"
-	@echo "  test-all     Run cargo test on all targets/all features"
+	@echo "  check-all    Run cargo check on all targets with $(HOSTED_FEATURES)"
+	@echo "  test-all     Run cargo test on all targets with $(HOSTED_FEATURES)"
 	@echo "  clippy       Run clippy with warnings denied"
 	@echo "  rustdoc      Build docs with warnings denied"
 	@echo "  fmt          Format the workspace"

@@ -1173,6 +1173,7 @@ mod tests {
                 NodeKind::OutputString {
                     text: "x".into(),
                     transparent_bg: false,
+                auto_wrap: true,
                     justification: 0,
                 },
                 ObjectType::OutputString,

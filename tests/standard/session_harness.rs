@@ -10,7 +10,9 @@
 
 use machbus::Instant;
 use machbus::net::{Address, Name, Result};
-use machbus::session::{Controls, Driver, EndpointTransport, Event, Plugin, Session};
+use machbus::session::{
+    Controls, DriveCommand, Driver, EndpointTransport, Event, Plugin, Session,
+};
 use wirebit::ShmLink;
 use wirebit::topology::{Built, Topology};
 
@@ -94,6 +96,20 @@ impl TwoNode {
         Ok(())
     }
 
+    /// Advance the clock and poll both drivers *without* pumping the bus, so no
+    /// frame crosses between the nodes. Models a link dropout — a terminal
+    /// power-cycled, or a bus segment saturated for longer than a timeout.
+    pub fn step_severed(&mut self, dt_ms: u64) -> Result<()> {
+        self.now = self.now.add_millis(dt_ms);
+        while let Some(e) = self.da.poll_at(self.now)? {
+            self.ea.push(e);
+        }
+        while let Some(e) = self.db.poll_at(self.now)? {
+            self.eb.push(e);
+        }
+        Ok(())
+    }
+
     /// Run `steps` iterations of `dt_ms`.
     pub fn run(&mut self, steps: usize, dt_ms: u64) -> Result<()> {
         for _ in 0..steps {
@@ -133,7 +149,7 @@ impl TwoNode {
 // ─────────────────────────────────────────────────────────────────────
 
 use machbus::geo::Wgs;
-use machbus::isobus::implement::{HitchStatus, PtoStatus, WheelBasedSpeedDist};
+use machbus::isobus::implement::{HitchStatus, PtoStatus, Signal, WheelBasedSpeedDist};
 use machbus::isobus::tc::{
     DDOP, DeviceElement, DeviceElementType, DeviceObject, TCClientConfig, TCServerConfig,
     TCServerState, TCState,
@@ -145,7 +161,7 @@ use machbus::isobus::vt::{
 use machbus::j1939::diagnostic::{Dtc, Fmi};
 use machbus::nmea::{GNSSPosition, NMEAConfig};
 use machbus::session::plugins::{
-    Diagnostics, Gnss, Guidance, Heartbeat, Implement, TcClient, TcServer, VtClient, VtServer,
+    AutoDrive, Diagnostics, Gnss, Heartbeat, Implement, TcClient, TcServer, VtClient, VtServer,
 };
 use machbus::session::{
     DiagEvent, GnssEvent, GuidanceEvent, HeartbeatEvent, Hitch, ImplementEvent, Pto, TcServerEvent,
@@ -175,6 +191,7 @@ fn diagnostics_dm1_crosses_to_peer() {
             spn: 1234,
             fmi: Fmi::BelowNormal,
             occurrence_count: 1,
+            conversion_method: false,
         });
     });
 
@@ -209,20 +226,20 @@ fn implement_status_broadcast_reaches_peer() {
         imp.broadcast_hitch_status(
             Hitch::Front,
             HitchStatus {
-                position_percent: 50,
+                position_percent: Signal::Value(20.0),
                 ..HitchStatus::default()
             },
         );
         imp.broadcast_pto_status(
             Pto::Rear,
             PtoStatus {
-                shaft_speed_rpm: 540.0,
+                shaft_speed_rpm: Signal::Value(540.0),
                 ..PtoStatus::default()
             },
         );
         imp.broadcast_wheel_speed(WheelBasedSpeedDist {
-            speed_mps: 2.0,
-            distance_m: 100.0,
+            speed_mps: 2.0.into(),
+            distance_m: 100.0.into(),
             ..WheelBasedSpeedDist::default()
         });
     });
@@ -255,7 +272,7 @@ fn implement_status_broadcast_reaches_peer() {
         .with::<Implement, _>(|imp| imp.last_wheel_speed())
         .flatten();
     assert!(
-        cached.is_some_and(|w| (w.speed_mps - 2.0).abs() < 0.01),
+        cached.is_some_and(|w| (w.speed_mps.unwrap_or(f64::NAN) - 2.0).abs() < 0.01),
         "peer Implement cache should hold the broadcast wheel speed"
     );
 }
@@ -350,6 +367,67 @@ fn vt_client_connects_to_server() {
     );
 }
 
+/// C5 — §4.6.9 lets a working set restart initialisation after a VT shutdown,
+/// but `VTState::Disconnected` had no tick arm and the plugin consumes its
+/// `connect_requested` flag exactly once. An operator power-cycling the
+/// terminal, or a >3 s dropout under load, left the implement absent from the
+/// VT for the rest of the session while every other plugin kept running.
+#[test]
+fn a_vt_client_reconnects_after_the_terminal_goes_away() {
+    let server = VtServer::new(VTServerConfig::default()).expect("vt server config");
+    let pool = ObjectPool::default()
+        .with_object(create_working_set(1, &WorkingSetBody::default()).with_children([10u16]))
+        .with_object(create_data_mask(10, &DataMaskBody::default()));
+    let client = VtClient::new(VTClientConfig::default(), pool, WorkingSet::default());
+
+    let mut bus = TwoNode::new(
+        make_name(0x104, 0x80),
+        0x80,
+        vec![boxed(server)],
+        make_name(0x204, 0x80),
+        0x81,
+        vec![boxed(client)],
+    )
+    .expect("build two-node bus");
+    assert!(bus.run_until_claimed().expect("claim"));
+
+    bus.a
+        .with_mut::<VtServer, _>(|s| s.start())
+        .expect("plugin present")
+        .expect("server start");
+    let target = bus.a.address();
+    bus.b.with_mut::<VtClient, _>(|c| c.connect_to(target));
+    bus.run(40, 100).expect("run");
+
+    let connected = bus.b.with::<VtClient, _>(VtClient::state).expect("client");
+    assert_ne!(
+        connected,
+        VTState::Disconnected,
+        "precondition: the client reached the VT"
+    );
+
+    // The terminal drops off the bus for well over the 3 s §4.6.9 window.
+    for _ in 0..50 {
+        bus.step_severed(100).expect("severed step");
+    }
+    // The session is dropped and immediately re-armed: the client is back at
+    // WaitForVTStatus, waiting for a terminal that is not there.
+    assert_eq!(
+        bus.b.with::<VtClient, _>(VtClient::state).expect("client"),
+        VTState::WaitForVTStatus,
+        "3 s without a VT Status is a VT shutdown, and §4.6.9 restarts init"
+    );
+
+    // It comes back. Nothing in the crate, the FFI examples or the book calls
+    // `connect_to` again, so the client has to restart on its own.
+    bus.run(60, 100).expect("run");
+    assert_eq!(
+        bus.b.with::<VtClient, _>(VtClient::state).expect("client"),
+        VTState::Connected,
+        "the working set must re-upload its pool and reconnect once the VT is back"
+    );
+}
+
 /// 5. ISO 11783-10 TC: A = server, B = client. The server registers the
 ///    client's version (DDOP handshake start); the client advances past idle.
 #[test]
@@ -359,7 +437,7 @@ fn tc_client_handshakes_with_server() {
     let ddop = DDOP::default()
         .with_device(
             DeviceObject::default()
-                .with_id(1)
+                .with_id(0u16)
                 .with_designator("Implement"),
         )
         .with_element(
@@ -419,6 +497,83 @@ fn tc_client_handshakes_with_server() {
         server_state,
         TCServerState::Disconnected,
         "TC server should be active after start"
+    );
+}
+
+/// F1 — §6.6.3: the client must send a Client Task every 2 s and the TC drops
+/// it after 6 s without one. The client half landed and the server half did
+/// not, so the fix that was meant to *stop* the TC declaring an uncontrolled
+/// shutdown guaranteed it on machbus's own stack: at t+6 s the server dropped
+/// the `TCClientInfo`, taking `ddop` and `pool_activated` with it, and from then
+/// on answered every Activate `ThereAreErrorsInTheDDOP`. Nothing fed the
+/// client's bytes to the in-crate server, so the suite stayed green.
+#[test]
+fn a_tc_server_keeps_a_client_alive_past_the_six_second_shutdown_window() {
+    let server = TcServer::new(TCServerConfig::default().with_booms(1).with_sections(1))
+        .expect("tc server config");
+    let ddop = DDOP::default()
+        .with_device(
+            DeviceObject::default()
+                .with_id(0u16)
+                .with_designator("Implement"),
+        )
+        .with_element(
+            DeviceElement::default()
+                .with_id(2)
+                .with_type(DeviceElementType::Device)
+                .with_designator("Root"),
+        );
+    let client = TcClient::new(TCClientConfig::default(), ddop);
+
+    let mut bus = TwoNode::new(
+        make_name(0x105, 0x80),
+        0x80,
+        vec![boxed(server)],
+        make_name(0x205, 0x80),
+        0x81,
+        vec![boxed(client)],
+    )
+    .expect("build two-node bus");
+    assert!(bus.run_until_claimed().expect("claim"));
+
+    bus.a
+        .with_mut::<TcServer, _>(|s| s.server_mut().start())
+        .expect("plugin present")
+        .expect("server start");
+    bus.b
+        .with_mut::<TcClient, _>(TcClient::connect)
+        .expect("plugin present")
+        .expect("client connect");
+
+    bus.run(60, 100).expect("run");
+    assert_eq!(
+        bus.a
+            .with_mut::<TcServer, _>(|s| s.server_mut().clients().len())
+            .expect("server"),
+        1,
+        "precondition: the handshake registered the client"
+    );
+
+    // Twenty seconds — more than three shutdown windows — of the client doing
+    // nothing but keeping its connection alive.
+    for _ in 0..200 {
+        bus.step(100).expect("step");
+        assert_eq!(
+            bus.a
+                .with_mut::<TcServer, _>(|s| s.server_mut().clients().len())
+                .expect("server"),
+            1,
+            "a client sending its cyclic Client Task must never be declared dead"
+        );
+    }
+    assert!(
+        !bus.events_a()
+            .iter()
+            .any(|e| matches!(
+                e,
+                Event::TcServer(TcServerEvent::ClientDisconnected { .. })
+            )),
+        "no uncontrolled shutdown should have been declared"
     );
 }
 
@@ -500,7 +655,7 @@ fn guidance_machine_info_reaches_the_controller() {
     let mut bus = TwoNode::new(
         make_name(0x110, 0x80),
         0x80,
-        vec![boxed(Guidance::new())],
+        vec![boxed(AutoDrive::new())],
         make_name(0x210, 0x80),
         0x81,
         Vec::new(),
@@ -508,12 +663,16 @@ fn guidance_machine_info_reaches_the_controller() {
     .expect("build two-node bus");
     assert!(bus.run_until_claimed().expect("claim"));
 
-    // A commands the steering system to follow a curvature (PGN 0xAD00 goes out).
-    bus.a.with_mut::<Guidance, _>(|g| g.command_curvature(2.5));
+    // A commands the steering system to follow a curvature (PGN 0xAD00 goes
+    // out). The command is refused until a steering ECU is answering — that is
+    // the precondition this test then satisfies from node B.
+    let _ = bus
+        .a
+        .with_mut::<AutoDrive, _>(|d| d.command(DriveCommand::steer(2.5)));
 
     // B acts as the steering ECU and broadcasts machine info (PGN 0xAC00).
     let info = GuidanceMachineInfo {
-        estimated_curvature: 1.25,
+        estimated_curvature: Signal::Value(1.25),
         steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
         ..Default::default()
     };
@@ -540,7 +699,7 @@ fn guidance_machine_info_reaches_the_controller() {
     assert!(got, "controller should receive guidance machine info");
     assert!(
         bus.a
-            .with::<Guidance, _>(|g| g.estimated_curvature().is_some())
+            .with::<AutoDrive, _>(|d| d.estimated_curvature().value().is_some())
             .unwrap_or(false),
         "controller should cache the steering ECU's estimated curvature"
     );

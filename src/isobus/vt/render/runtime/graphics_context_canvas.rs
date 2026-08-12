@@ -227,8 +227,8 @@ impl GraphicsContextCanvasState {
         if w == 0 || h == 0 {
             return;
         }
-        let w_i = i64::from(w);
-        let h_i = i64::from(h);
+        let w_i = i128::from(w);
+        let h_i = i128::from(h);
         let threshold = w_i * w_i * h_i * h_i;
         let cx2 = i64::from(x)
             .saturating_mul(2)
@@ -240,8 +240,8 @@ impl GraphicsContextCanvasState {
             for xx in 0..w {
                 let px = x.saturating_add(i32::from(xx));
                 let py = y.saturating_add(i32::from(yy));
-                let dx2 = i64::from(px).saturating_mul(2).saturating_sub(cx2);
-                let dy2 = i64::from(py).saturating_mul(2).saturating_sub(cy2);
+                let dx2 = i128::from(px).saturating_mul(2).saturating_sub(i128::from(cx2));
+                let dy2 = i128::from(py).saturating_mul(2).saturating_sub(i128::from(cy2));
                 let value = dx2
                     .saturating_mul(dx2)
                     .saturating_mul(h_i)
@@ -582,12 +582,12 @@ impl GraphicsContextCanvasState {
         py: i32,
         cx2: i64,
         cy2: i64,
-        w: i64,
-        h: i64,
-        threshold: i64,
+        w: i128,
+        h: i128,
+        threshold: i128,
     ) -> bool {
-        let dx2 = i64::from(px).saturating_mul(2).saturating_sub(cx2);
-        let dy2 = i64::from(py).saturating_mul(2).saturating_sub(cy2);
+        let dx2 = i128::from(px).saturating_mul(2).saturating_sub(i128::from(cx2));
+        let dy2 = i128::from(py).saturating_mul(2).saturating_sub(i128::from(cy2));
         dx2.saturating_mul(dx2)
             .saturating_mul(h)
             .saturating_mul(h)
@@ -646,8 +646,8 @@ impl GraphicsContextCanvasState {
             return;
         }
         if ellipse_type == 0 {
-            let w_i = i64::from(rect.w);
-            let h_i = i64::from(rect.h);
+            let w_i = i128::from(rect.w);
+            let h_i = i128::from(rect.h);
             let threshold = w_i * w_i * h_i * h_i;
             let cx2 = i64::from(rect.x)
                 .saturating_mul(2)

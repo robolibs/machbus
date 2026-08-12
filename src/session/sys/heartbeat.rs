@@ -17,4 +17,16 @@ pub enum HeartbeatEvent {
     Missed { source: Address, missed_count: u32 },
     /// This stack broadcast a heartbeat sequence.
     Sent { sequence: u8 },
+    /// A peer's sequence broke the ISO 11783-7 §8.3.3 rules — repeated, or
+    /// advanced by more than 3. The previous tracker stored the sequence
+    /// without validating it, so a peer jumping by 50 read as healthy.
+    SequenceError { source: Address, sequence: u8 },
+    /// No valid heartbeat from a peer within the §8.3.4 300 ms window.
+    CommError { source: Address },
+    /// A peer reported its own fault (sequence 254).
+    SenderError { source: Address },
+    /// A peer announced an orderly shutdown (sequence 255).
+    GracefulShutdown { source: Address },
+    /// A peer recovered: 8 consecutive correct heartbeats after an error.
+    Recovered { source: Address },
 }

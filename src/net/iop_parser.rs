@@ -271,7 +271,7 @@ fn leaf_has_macro_tail_byte(type_byte: u8) -> bool {
 }
 
 /// Length of a leaf object body excluding any trailing macro list.
-fn leaf_body_only(type_byte: u8, data: &[u8], off: usize) -> Result<usize> {
+pub(crate) fn leaf_body_only(type_byte: u8, data: &[u8], off: usize) -> Result<usize> {
     match type_byte {
         // Fixed-length leaves.
         7 => Ok(9),   // InputBoolean
@@ -282,8 +282,13 @@ fn leaf_body_only(type_byte: u8, data: &[u8], off: usize) -> Result<usize> {
         14 => Ok(9),  // Rectangle
         15 => Ok(11), // Ellipse
         17 => Ok(17), // Meter
-        18 => Ok(16), // LinearBarGraph
-        19 => Ok(19), // ArchedBarGraph
+        // Tables B.37 / B.39. These read 16 and 19 here while the object
+        // codec used 20 and 23, so the two pool walkers disagreed and a pool
+        // containing either type parsed differently depending on which entry
+        // point read it. `iop_walkers_agree_with_the_object_codec` now pins
+        // them together.
+        18 => Ok(20), // LinearBarGraph
+        19 => Ok(23), // ArchedBarGraph
         21 => Ok(4),  // NumberVariable
         23 => Ok(4),  // FontAttributes
         24 => Ok(4),  // LineAttributes
@@ -766,5 +771,43 @@ mod tests {
             prop_assert_eq!(version.len(), 7);
             prop_assert!(version.bytes().all(|b| (b'A'..=b'P').contains(&b)));
         }
+    }
+
+    /// 6C — `iop_parser` and the object codec are two independent walkers over
+    /// the same Annex B object records. They disagreed on Linear and Arched Bar
+    /// Graph (16/19 vs 20/23), so a pool containing either type parsed
+    /// differently depending on which entry point read it. Neither is more
+    /// authoritative than the other by construction, so pin them together.
+    #[test]
+    fn iop_walkers_agree_with_the_object_codec() {
+        use crate::isobus::vt::objects::ObjectType;
+
+        // Both walkers panic for parent types, which are handled elsewhere;
+        // only the fixed-size leaves are comparable here.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let mut mismatches = Vec::new();
+        for type_byte in 0u8..=48 {
+            let iop = std::panic::catch_unwind(|| super::leaf_body_only(type_byte, &[], 0));
+            let codec = std::panic::catch_unwind(|| {
+                crate::isobus::vt::objects::leaf_body_only_len(
+                    ObjectType::from_u8(type_byte),
+                    &[],
+                    0,
+                )
+            });
+            if let (Ok(Ok(a)), Ok(Ok(b))) = (iop, codec)
+                && a != b
+            {
+                mismatches.push(alloc::format!("type {type_byte}: iop={a} codec={b}"));
+            }
+        }
+
+        std::panic::set_hook(previous_hook);
+        assert!(
+            mismatches.is_empty(),
+            "the two object-pool walkers disagree: {mismatches:?}"
+        );
     }
 }

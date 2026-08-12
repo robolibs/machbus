@@ -2,10 +2,10 @@ use machbus::j1939::pgn_request;
 use machbus::net::pgn_defs::{PGN_ADDRESS_CLAIMED, PGN_REQUEST};
 use machbus::net::pgn_defs::{PGN_COMMANDED_ADDRESS, PGN_NAME_MANAGEMENT};
 use machbus::net::{
-    ADDRESS_CLAIM_RTXD_MAX_MS, AddressClaimer, BROADCAST_ADDRESS, CfState, ClaimState, Frame,
-    Identifier, InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS, Name, NameFilter,
-    NameFilterField, NameManagementMsg, NameManager, NameMgmtMode, NameNackReason, NetworkConfig,
-    Priority,
+    ADDRESS_CLAIM_RTXD_MAX_MS, ADDRESS_CLAIM_TIMEOUT_MS, AddressClaimer, BROADCAST_ADDRESS,
+    CfState, ClaimState, Frame, Identifier, InternalCf, IsoNet, MAX_ADDRESS, Message, NULL_ADDRESS,
+    Name, NameFilter, NameFilterField, NameManagementMsg, NameManager, NameMgmtMode,
+    NameNackReason, NetworkConfig, Priority,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -120,6 +120,10 @@ fn network_management_request_address_claim_response_follows_claim_state() {
     assert_eq!(cf.cf().state, CfState::Offline);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let contest_window_reply = claimer.handle_request_for_claim(&mut cf);
     assert_eq!(contest_window_reply.len(), 1);
     assert_eq!(contest_window_reply[0].pgn(), PGN_ADDRESS_CLAIMED);
@@ -141,7 +145,10 @@ fn network_management_request_address_claim_response_follows_claim_state() {
     assert_eq!(cf.claim_state(), ClaimState::Failed);
     assert_eq!(cf.address(), NULL_ADDRESS);
 
-    let failed_reply = claimer.handle_request_for_claim(&mut cf);
+    // §4.4.2.4 defers the cannot-claim response by RTxD so that several failed
+    // CFs do not answer one global request in the same instant.
+    assert!(claimer.handle_request_for_claim(&mut cf).is_empty());
+    let failed_reply = claimer.update(&mut cf, ADDRESS_CLAIM_RTXD_MAX_MS);
     assert_eq!(failed_reply.len(), 1);
     assert_eq!(failed_reply[0].source(), NULL_ADDRESS);
     assert_eq!(failed_reply[0].payload(), &cf.name().to_bytes());
@@ -158,6 +165,10 @@ fn network_management_address_claim_contest_is_name_ordered_and_state_safe() {
         .subscribe(move |_| *lost_log.borrow_mut() += 1);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let unrelated = claimer.handle_claim(&mut cf, 0x42, name_with_identity(0x001, true));
     assert!(
         unrelated.is_empty(),
@@ -193,10 +204,16 @@ fn network_management_address_claim_loser_reclaims_after_delay_without_going_onl
     let mut cf = InternalCf::new(name_with_identity(0x999, true), 0, 0x80);
     let mut claimer = AddressClaimer::new(50);
 
-    let start_frames = claimer.start(&mut cf);
-    assert_eq!(start_frames.len(), 2);
-    assert_eq!(start_frames[0].pgn(), PGN_REQUEST);
-    assert_eq!(start_frames[1].pgn(), PGN_ADDRESS_CLAIMED);
+    // §4.5.1 a): request, listen 250 ms + RTxD, then claim.
+    let request = claimer.start(&mut cf);
+    assert_eq!(request.len(), 1);
+    assert_eq!(request[0].pgn(), PGN_REQUEST);
+    let claim = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
+    assert_eq!(claim.len(), 1);
+    assert_eq!(claim[0].pgn(), PGN_ADDRESS_CLAIMED);
     assert_eq!(cf.claim_state(), ClaimState::WaitForContest);
 
     let winner = name_with_identity(0x100, true);
@@ -234,6 +251,10 @@ fn network_management_delayed_reclaim_does_not_answer_with_yielded_address() {
     let mut claimer = AddressClaimer::new(25);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let winner = name_with_identity(0x100, true);
     assert!(
         claimer.handle_claim(&mut cf, 0x80, winner).is_empty(),
@@ -275,6 +296,10 @@ fn network_management_reclaim_random_delay_is_clamped_to_standard_window() {
     let mut claimer = AddressClaimer::new(ADDRESS_CLAIM_RTXD_MAX_MS + 500);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let better_name = name_with_identity(0x001, true);
     assert!(
         claimer.handle_claim(&mut cf, 0x80, better_name).is_empty(),
@@ -307,6 +332,10 @@ fn network_management_pending_reclaim_rechecks_newly_occupied_address_before_tra
     let mut claimer = AddressClaimer::new(10);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     assert!(
         claimer
             .handle_claim(&mut cf, 0x80, name_with_identity(0x001, true))
@@ -341,6 +370,10 @@ fn network_management_pending_reclaim_fails_if_all_later_addresses_become_occupi
     let mut claimer = AddressClaimer::new(10);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let _ = claimer.handle_claim(&mut cf, 0x80, name_with_identity(0x001, true));
 
     for address in 0..=MAX_ADDRESS {
@@ -365,6 +398,10 @@ fn network_management_cannot_claim_paths_use_null_source_and_do_not_retry() {
     let mut fixed = InternalCf::new(name_with_identity(0x999, false), 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
     let _ = claimer.start(&mut fixed);
+    let _ = claimer.update(
+        &mut fixed,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
 
     let cannot_claim = claimer.handle_claim(&mut fixed, 0x80, name_with_identity(0x100, false));
     assert_eq!(cannot_claim.len(), 1);
@@ -390,6 +427,10 @@ fn network_management_cannot_claim_paths_use_null_source_and_do_not_retry() {
     let mut duplicate = InternalCf::new(duplicate_name, 0, 0x90);
     let mut duplicate_claimer = AddressClaimer::new(25);
     let _ = duplicate_claimer.start(&mut duplicate);
+    let _ = duplicate_claimer.update(
+        &mut duplicate,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     let cannot_resolve = duplicate_claimer.handle_duplicate_name(&mut duplicate);
     assert_eq!(cannot_resolve.len(), 1);
     assert_eq!(cannot_resolve[0].source(), NULL_ADDRESS);
@@ -409,6 +450,10 @@ fn network_management_duplicate_name_cancels_pending_reclaim_without_retry() {
     let mut claimer = AddressClaimer::new(25);
 
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
     assert!(
         claimer
             .handle_claim(&mut cf, 0x80, name_with_identity(0x100, true))
@@ -468,7 +513,8 @@ fn network_management_rejects_unclaimable_local_preferred_addresses_before_claim
             "invalid preferred-address startup must not retry by timer"
         );
 
-        let request_reply = claimer.handle_request_for_claim(&mut cf);
+        assert!(claimer.handle_request_for_claim(&mut cf).is_empty());
+        let request_reply = claimer.update(&mut cf, ADDRESS_CLAIM_RTXD_MAX_MS);
         assert_eq!(request_reply.len(), 1);
         assert_eq!(request_reply[0].source(), NULL_ADDRESS);
         assert_eq!(request_reply[0].payload(), &local_name.to_bytes());
@@ -480,6 +526,10 @@ fn network_management_saturated_self_configurable_loser_does_not_reuse_observed_
     let mut cf = InternalCf::new(name_with_identity(0xFFFF, true), 0, 0x80);
     let mut claimer = AddressClaimer::new(0);
     let _ = claimer.start(&mut cf);
+    let _ = claimer.update(
+        &mut cf,
+        ADDRESS_CLAIM_TIMEOUT_MS + ADDRESS_CLAIM_RTXD_MAX_MS,
+    );
 
     for addr in 0..=MAX_ADDRESS {
         if addr != 0x80 {
@@ -502,7 +552,7 @@ fn network_management_restart_claiming_after_claimed_reuses_same_name_and_addres
 
     local.start_address_claiming().unwrap();
     assert!(
-        pump_net_pair_until(&mut local, &mut observer, &mut topology, 50, 10, |a, _| {
+        pump_net_pair_until(&mut local, &mut observer, &mut topology, 120, 10, |a, _| {
             a.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
         }),
         "initial address claim did not settle"
@@ -513,7 +563,8 @@ fn network_management_restart_claiming_after_claimed_reuses_same_name_and_addres
 
     local.start_address_claiming().unwrap();
     let restarted = local.internal_cf(local_cf).unwrap();
-    assert_eq!(restarted.claim_state(), ClaimState::WaitForContest);
+    // §4.5.1 a): a restart re-opens the listen window before re-claiming.
+    assert_eq!(restarted.claim_state(), ClaimState::SendRequest);
     assert_eq!(
         restarted.address(),
         0x80,
@@ -522,7 +573,7 @@ fn network_management_restart_claiming_after_claimed_reuses_same_name_and_addres
     assert_eq!(restarted.name(), local_name);
 
     assert!(
-        pump_net_pair_until(&mut local, &mut observer, &mut topology, 50, 10, |a, _| {
+        pump_net_pair_until(&mut local, &mut observer, &mut topology, 120, 10, |a, _| {
             a.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
         }),
         "restarted address claim did not settle"
@@ -541,9 +592,14 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
 
     local.start_address_claiming().unwrap();
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 50, 10, |_, b| {
-            b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "local CF did not claim its preferred address"
     );
     assert_eq!(local.internal_cf(local_cf).unwrap().address(), 0x80);
@@ -555,11 +611,20 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
             0,
         )
         .unwrap();
+    // The CF re-claims at a different address only after its RTxD delay
+    // (§4.4.3), which is now derived per-CF from the NAME instead of being
+    // hard-wired to 0. The delay is capped at ADDRESS_CLAIM_RTXD_MAX_MS, so
+    // pumping past that is enough for any NAME.
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 10, 1, |_, b| {
-            b.internal_cf(local_cf).unwrap().address() == 0x81
-        }),
-        "a claimed CF that loses to a lower NAME must immediately reclaim a different address when RTxD is zero"
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            machbus::net::ADDRESS_CLAIM_RTXD_MAX_MS as usize + 10,
+            1,
+            |_, b| { b.internal_cf(local_cf).unwrap().address() == 0x81 }
+        ),
+        "a claimed CF that loses to a lower NAME must reclaim a different address once RTxD elapses"
     );
     let reclaiming = local.internal_cf(local_cf).unwrap();
     assert_eq!(reclaiming.claim_state(), ClaimState::WaitForContest);
@@ -571,9 +636,14 @@ fn network_management_claimed_cf_loses_to_later_lower_name_and_reclaims_next_add
     );
 
     assert!(
-        pump_net_pair_until(&mut contender, &mut local, &mut topology, 50, 10, |_, b| {
-            b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed
-        }),
+        pump_net_pair_until(
+            &mut contender,
+            &mut local,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(local_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
         "reclaimed address did not settle after the contest window"
     );
     let claimed = local.internal_cf(local_cf).unwrap();
@@ -1225,4 +1295,179 @@ fn commanded_address_to_occupied_address_is_refused_with_current_claim() {
     );
     assert_eq!(internal_cf.claim_state(), ClaimState::Claimed);
     assert!(internal_cf.cf().is_online());
+}
+
+/// ISO 11783-5 §4.5.5 lists the commanded-address response among the messages
+/// a CF that cannot claim may send: it is the one recovery path the standard
+/// leaves a node that is off the bus. Acceptance used to require
+/// `ClaimState::Claimed`, so exactly the CF that needed the command was the one
+/// that ignored it.
+///
+/// (Support for the message is optional per §4.4.2.5, so this is a restored
+/// optional recovery path rather than a `shall`.)
+#[test]
+fn network_management_commanded_address_recovers_a_cf_that_cannot_claim() {
+    let (mut commander, mut stranded, mut topology) = two_node_net_pair();
+
+    // A non-self-configurable CF that loses its only address has no fallback
+    // and ends in cannot-claim.
+    let stranded_name = name_with_identity(0xE01, false);
+    let stranded_cf = stranded.create_internal(stranded_name, 0, 0x80).unwrap();
+    stranded.start_address_claiming().unwrap();
+    assert!(
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
+        "the CF did not claim its preferred address"
+    );
+
+    commander
+        .send_frame(
+            &address_claim_frame(name_with_identity(0x001, false), 0x80),
+            0,
+        )
+        .unwrap();
+    assert!(
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().claim_state() == ClaimState::Failed }
+        ),
+        "a non-self-configurable CF that loses arbitration must end in cannot-claim"
+    );
+    assert_eq!(
+        stranded.internal_cf(stranded_cf).unwrap().address(),
+        NULL_ADDRESS
+    );
+
+    // The commanded address is the way back on.
+    let commander_cf = commander
+        .create_internal(name_with_identity(0xE02, true), 0, 0x40)
+        .unwrap();
+    commander.start_address_claiming().unwrap();
+    assert!(
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            120,
+            10,
+            |a, _| { a.internal_cf(commander_cf).unwrap().claim_state() == ClaimState::Claimed }
+        ),
+        "the commander did not claim"
+    );
+
+    let mut commanded = stranded_name.to_bytes().to_vec();
+    commanded.push(0x8A);
+    commander
+        .send(
+            PGN_COMMANDED_ADDRESS,
+            &commanded,
+            commander_cf,
+            BROADCAST_ADDRESS,
+            Priority::Lowest,
+        )
+        .unwrap();
+    assert!(
+        pump_net_pair_until(
+            &mut commander,
+            &mut stranded,
+            &mut topology,
+            200,
+            10,
+            |_, b| { b.internal_cf(stranded_cf).unwrap().address() == 0x8A }
+        ),
+        "a cannot-claim CF must act on a commanded address"
+    );
+
+    let recovered = stranded.internal_cf(stranded_cf).unwrap();
+    assert_eq!(recovered.claim_state(), ClaimState::Claimed);
+    // Mutation guard: the pre-fix code required ClaimState::Claimed to accept
+    // the command, so this address would still be NULL_ADDRESS.
+    assert_ne!(recovered.address(), NULL_ADDRESS);
+    assert!(recovered.cf().is_online());
+    assert_eq!(recovered.name(), stranded_name);
+}
+
+/// G2 — ISO 11783-5 §4.5.3: a CF that loses arbitration "shall discontinue
+/// using the address", and §4.4.2.4 restricts a CF that cannot claim to
+/// cannot-claim and request-for-address-claimed. Two ECUs sharing a NAME (an
+/// unprogrammed identity number is a routine field fault) put the local CF into
+/// cannot-claim: it correctly emitted Cannot Claim and went offline, and then
+/// kept transmitting, because `update` unconditionally pumps the transport
+/// engines and routes their frames by address. An in-flight VT pool or TC DDOP
+/// upload went on emitting DT frames from the renounced address for as long as
+/// the transfer lasted, and a BAM needs no peer cooperation at all.
+#[test]
+fn a_duplicate_name_tears_down_transports_on_the_address_it_vacates() {
+    let name = name_with_identity(0x777, false);
+
+    let mut net: IsoNet<ShmLink> = IsoNet::new(NetworkConfig::default());
+    net.set_capture_outbound(true);
+    let cf = net.create_internal(name, 0, 0x43).unwrap();
+    net.start_address_claiming().unwrap();
+    for _ in 0..40 {
+        net.update(50);
+        while net.take_outbound().is_some() {}
+        if net.internal_cf(cf).unwrap().claim_state() == ClaimState::Claimed {
+            break;
+        }
+    }
+    assert_eq!(net.internal_cf(cf).unwrap().address(), 0x43);
+
+    // A BAM: no peer cooperation, so it runs on its own.
+    net.send(
+        0xEF00,
+        &[0xA5u8; 40],
+        cf,
+        BROADCAST_ADDRESS,
+        Priority::Lowest,
+    )
+    .unwrap();
+    net.update(0);
+    assert!(
+        !net.transport_protocol().active_sessions().is_empty(),
+        "precondition: a broadcast transfer is in flight"
+    );
+    while net.take_outbound().is_some() {}
+
+    // Somebody else on the bus is transmitting our own NAME, from 0x50.
+    let mut claim = [0xFFu8; 8];
+    claim.copy_from_slice(&name.to_bytes());
+    net.feed(
+        &Frame::new(
+            Identifier::encode(Priority::Lowest, PGN_ADDRESS_CLAIMED, 0x50, BROADCAST_ADDRESS),
+            claim,
+            8,
+        ),
+        0,
+    );
+
+    assert!(
+        net.transport_protocol().active_sessions().is_empty(),
+        "the transfer on the vacated address must be torn down"
+    );
+
+    // And nothing further leaves from the address we just gave up, except the
+    // Cannot Claim / Address Claimed frames §4.4.2.4 still allows.
+    for _ in 0..20 {
+        net.update(50);
+    }
+    while let Some((_, frame)) = net.take_outbound() {
+        if frame.source() == 0x43 {
+            assert_eq!(
+                frame.pgn(),
+                PGN_ADDRESS_CLAIMED,
+                "only address-claim traffic may leave a surrendered address"
+            );
+        }
+    }
 }

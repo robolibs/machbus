@@ -12,7 +12,7 @@ use alloc::{string::String, vec::Vec};
 use core::result::Result as CoreResult;
 
 use crate::isobus::fs::{
-    FSError, FileHandle, FileServerProperties, FileServerStatus, TAN, VolumeState,
+    FSError, FileHandle, FileServerProperties, TAN, VolumeState,
 };
 
 /// File-server client events on the unified queue.
@@ -32,11 +32,6 @@ pub enum FsEvent {
         tan: TAN,
         result: CoreResult<FileServerProperties, FSError>,
     },
-    /// `file_server_status` response.
-    StatusResponse {
-        tan: TAN,
-        result: CoreResult<FileServerStatus, FSError>,
-    },
     /// `close_file` response.
     CloseResponse {
         tan: TAN,
@@ -52,10 +47,10 @@ pub enum FsEvent {
         tan: TAN,
         result: CoreResult<u16, FSError>,
     },
-    /// `seek_file` response.
+    /// `seek_file` response — `Ok(new_position)` per ISO 11783-13 C.3.3.3.
     SeekResponse {
         tan: TAN,
-        result: CoreResult<(), FSError>,
+        result: CoreResult<u32, FSError>,
     },
     /// `get_current_directory` response.
     CurrentDirectoryResponse {

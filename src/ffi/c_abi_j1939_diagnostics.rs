@@ -79,20 +79,22 @@ pod_codec!(
 /// PGN). Returns true on a valid DM9 request.
 #[unsafe(no_mangle)]
 pub extern "C" fn machbus_j1939_dm9_request_decode(data: *const u8, len: usize) -> bool {
-    let bytes = match read_bytes(data, len) {
-        Ok(b) => b,
-        Err(e) => {
-            set_last_error(e);
-            return false;
+    catch_unwind_ffi(false, || {
+        let bytes = match read_bytes(data, len) {
+            Ok(b) => b,
+            Err(e) => {
+                set_last_error(e);
+                return false;
+            }
+        };
+        if crate::j1939::Dm9VehicleIdentificationRequest::decode(bytes).is_some() {
+            clear_last_error();
+            true
+        } else {
+            set_last_error("Dm9 request decode failed");
+            false
         }
-    };
-    if crate::j1939::Dm9VehicleIdentificationRequest::decode(bytes).is_some() {
-        clear_last_error();
-        true
-    } else {
-        set_last_error("Dm9 request decode failed");
-        false
-    }
+    })
 }
 
 /// Encode a DM9 Vehicle Identification request into the caller's 3-byte buffer.
@@ -1106,18 +1108,18 @@ impl From<crate::j1939::LanguageData> for MachbusLanguageData {
     fn from(l: crate::j1939::LanguageData) -> Self {
         Self {
             language_code: l.language_code,
-            decimal: l.decimal.as_u8(),
-            time_format: l.time_format.as_u8(),
-            date_format: l.date_format.as_u8(),
-            distance: l.distance.as_u8(),
-            area: l.area.as_u8(),
-            volume: l.volume.as_u8(),
-            mass: l.mass.as_u8(),
-            temperature: l.temperature.as_u8(),
-            pressure: l.pressure.as_u8(),
-            force: l.force.as_u8(),
+            decimal: l.decimal.map_or(0xFF, |v| v.as_u8()),
+            time_format: l.time_format.map_or(0xFF, |v| v.as_u8()),
+            date_format: l.date_format.map_or(0xFF, |v| v.as_u8()),
+            distance: l.distance.map_or(0xFF, |v| v.as_u8()),
+            area: l.area.map_or(0xFF, |v| v.as_u8()),
+            volume: l.volume.map_or(0xFF, |v| v.as_u8()),
+            mass: l.mass.map_or(0xFF, |v| v.as_u8()),
+            temperature: l.temperature.map_or(0xFF, |v| v.as_u8()),
+            pressure: l.pressure.map_or(0xFF, |v| v.as_u8()),
+            force: l.force.map_or(0xFF, |v| v.as_u8()),
             country_code: l.country_code,
-            generic: l.generic.as_u8(),
+            generic: l.generic.map_or(0xFF, |v| v.as_u8()),
         }
     }
 }
@@ -1130,18 +1132,18 @@ impl From<MachbusLanguageData> for crate::j1939::LanguageData {
         };
         Self {
             language_code: l.language_code,
-            decimal: DecimalSymbol::try_from_u8(l.decimal).unwrap_or_default(),
-            time_format: TimeFormat::try_from_u8(l.time_format).unwrap_or_default(),
-            date_format: DateFormat::try_from_u8(l.date_format).unwrap_or_default(),
-            distance: DistanceUnit::try_from_u8(l.distance).unwrap_or_default(),
-            area: AreaUnit::try_from_u8(l.area).unwrap_or_default(),
-            volume: VolumeUnit::try_from_u8(l.volume).unwrap_or_default(),
-            mass: MassUnit::try_from_u8(l.mass).unwrap_or_default(),
-            temperature: TemperatureUnit::try_from_u8(l.temperature).unwrap_or_default(),
-            pressure: PressureUnit::try_from_u8(l.pressure).unwrap_or_default(),
-            force: ForceUnit::try_from_u8(l.force).unwrap_or_default(),
+            decimal: DecimalSymbol::try_from_u8(l.decimal),
+            time_format: TimeFormat::try_from_u8(l.time_format),
+            date_format: DateFormat::try_from_u8(l.date_format),
+            distance: DistanceUnit::try_from_u8(l.distance),
+            area: AreaUnit::try_from_u8(l.area),
+            volume: VolumeUnit::try_from_u8(l.volume),
+            mass: MassUnit::try_from_u8(l.mass),
+            temperature: TemperatureUnit::try_from_u8(l.temperature),
+            pressure: PressureUnit::try_from_u8(l.pressure),
+            force: ForceUnit::try_from_u8(l.force),
             country_code: l.country_code,
-            generic: UnitSystem::try_from_u8(l.generic).unwrap_or_default(),
+            generic: UnitSystem::try_from_u8(l.generic),
         }
     }
 }

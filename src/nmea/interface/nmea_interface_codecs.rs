@@ -1,12 +1,12 @@
 use super::definitions::{
     BatteryStatusData, COG_RESOLUTION, CURRENT_RESOLUTION, DEPTH_RESOLUTION, DOP_RESOLUTION,
     DistanceCalculationType, EngineData, FLUID_CAPACITY_RESOLUTION, FLUID_LEVEL_RESOLUTION,
-    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSSystem,
+    FluidLevelData, FluidType, GNSSDOPData, GNSSDOPMode, GNSSFixType, GNSSIntegrity, GNSSSystem,
     GnssSatsInViewData, HEADING_RESOLUTION, HUMIDITY_RESOLUTION, HeadingReference, HumidityData,
     HumiditySource, LAT_LON_RESOLUTION, LocalTimeOffsetData, MagneticVariationSource,
     NavigationData, OutsideEnvironmentalData, POSITION_DELTA_RESOLUTION,
     POSITION_DELTA_TIME_RESOLUTION, PRESSURE_RESOLUTION, PositionDeltaHighPrecisionRapidUpdateData,
-    PressureData, PressureSource, ROT_RESOLUTION, RPM_RESOLUTION, ReferenceStationType, RudderData,
+    PressureData, PressureSource, ROT_RESOLUTION, RPM_RESOLUTION, RudderData,
     RudderDirection, SPEED_RESOLUTION, SatelliteInfo, SpeedWaterData, SpeedWaterRefType,
     SystemTimeData, TEMPERATURE_RESOLUTION, TemperatureData, TemperatureSource, TimeSource,
     VOLTAGE_RESOLUTION, WIND_DIR_RESOLUTION, WIND_SPEED_RESOLUTION, WaterDepthData, WindData,
@@ -404,6 +404,14 @@ impl NMEAConfig {
 pub struct NMEAInterface {
     config: NMEAConfig,
     latest_position: Option<GNSSPosition>,
+    /// Bumped every time a *decoded* fix quality lands (PGN 129029 only).
+    ///
+    /// A plugin watchdog on fix quality cannot key off PGN arrival: this
+    /// handler has eight early-return paths, so a run of malformed 129029
+    /// frames would keep feeding the watchdog while the quality it guards never
+    /// changed. PGN 129025 then re-emits the frozen quality at 10 Hz and
+    /// autosteer keeps running on a value nothing is re-confirming.
+    quality_generation: u64,
 
     pub on_position: Event<GNSSPosition>,
     pub on_cog: Event<f64>,
@@ -438,6 +446,7 @@ impl NMEAInterface {
         Self {
             config,
             latest_position: None,
+            quality_generation: 0,
             on_position: Event::new(),
             on_cog: Event::new(),
             on_sog: Event::new(),
@@ -465,8 +474,13 @@ impl NMEAInterface {
         }
     }
 
+    /// Counts fix qualities that actually decoded, for staleness watchdogs.
     #[inline]
     #[must_use]
+    pub const fn quality_generation(&self) -> u64 {
+        self.quality_generation
+    }
+
     pub fn latest_position(&self) -> Option<GNSSPosition> {
         self.latest_position
     }
@@ -489,7 +503,8 @@ impl NMEAInterface {
     pub fn build_cog_sog(cog_rad: f64, sog_mps: f64) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
         data[0] = 0xFF;
-        data[1] = 0x00;
+        // [COG Reference: 2 bits = True][NMEA Reserved: 6 bits, all 1].
+        data[1] = 0xFC | HeadingReference::True.as_u8();
         let cog_raw = scaled_circular_angle_u16(cog_rad, COG_RESOLUTION);
         data[2..4].copy_from_slice(&cog_raw.to_le_bytes());
         let sog_raw = scaled_u16(sog_mps, SPEED_RESOLUTION);
@@ -577,7 +592,8 @@ impl NMEAInterface {
         data[3..5].copy_from_slice(&(d_raw as u16).to_le_bytes());
         let v_raw = scaled_i16(variation_rad, HEADING_RESOLUTION);
         data[5..7].copy_from_slice(&(v_raw as u16).to_le_bytes());
-        data[7] = 0x00;
+        // [Reference: 2 bits = True][NMEA Reserved: 6 bits, all 1].
+        data[7] = 0xFC | HeadingReference::True.as_u8();
         data
     }
 
@@ -782,23 +798,16 @@ impl NMEAInterface {
         {
             return;
         }
-        let mut pos = GNSSPosition {
-            wgs: Wgs::new(
-                lat_raw as f64 * LAT_LON_RESOLUTION,
-                lon_raw as f64 * LAT_LON_RESOLUTION,
-                0.0,
-            ),
-            timestamp_us: msg.timestamp_us,
-            fix_type: GNSSFixType::GNSSFix,
-            ..Default::default()
-        };
-        if let Some(prev) = self.latest_position {
-            pos.heading_rad = prev.heading_rad;
-            pos.speed_mps = prev.speed_mps;
-            pos.satellites_used = prev.satellites_used;
-            pos.hdop = prev.hdop;
-            pos.pdop = prev.pdop;
-        }
+        // Appendix B.1 gives PGN 129025 two fields — latitude and longitude.
+        // It carries no quality of any kind, so claiming `GNSSFix` here
+        // overwrote the real method from 129029 field 9 twice a second: a gate
+        // written as `if pos.has_fix()` never opened, and one on `is_rtk()`
+        // chattered, while the machine kept steering on a receiver that had
+        // dropped to dead reckoning. Carry everything else forward untouched.
+        let mut pos = self.latest_position.unwrap_or_default();
+        pos.wgs.latitude = lat_raw as f64 * LAT_LON_RESOLUTION;
+        pos.wgs.longitude = lon_raw as f64 * LAT_LON_RESOLUTION;
+        pos.timestamp_us = msg.timestamp_us;
         self.latest_position = Some(pos);
         self.on_position.emit(&pos);
     }
@@ -807,10 +816,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
-        if HeadingReference::try_from_u8(data[1]).is_none() {
+        // Byte 2 is [COG Reference: 2 bits][NMEA Reserved: 6 bits]. Appendix B
+        // specifies "Variable number of reserved bits, all set to logic 1", so
+        // reading the whole byte as the enum rejected every conformant frame —
+        // a transmitter sending reference True (0) sends 0xFC, not 0x00.
+        if HeadingReference::try_from_u8(data[1] & 0x03).is_none() {
             return;
         }
         let cog_raw = u16::from_le_bytes([data[2], data[3]]);
@@ -841,9 +851,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let time_raw = data[1];
         let lat_raw = i24_from_le_bytes([data[2], data[3], data[4]]);
         let lon_raw = i24_from_le_bytes([data[5], data[6], data[7]]);
@@ -856,7 +863,7 @@ impl NMEAInterface {
             return;
         }
         let delta = PositionDeltaHighPrecisionRapidUpdateData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             time_delta_s: time_raw as f64 * POSITION_DELTA_TIME_RESOLUTION,
             latitude_delta_deg: lat_raw as f64 * POSITION_DELTA_RESOLUTION,
             longitude_delta_deg: lon_raw as f64 * POSITION_DELTA_RESOLUTION,
@@ -878,9 +885,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let yaw_raw = i16::from_le_bytes([data[1], data[2]]);
         let pitch_raw = i16::from_le_bytes([data[3], data[4]]);
         let roll_raw = i16::from_le_bytes([data[5], data[6]]);
@@ -908,9 +912,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 5) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let rot_raw = i32::from_le_bytes(data[1..5].try_into().unwrap());
         if signed_i32_data_is_reserved(rot_raw) {
             return;
@@ -927,14 +928,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(reference) = WindReference::try_from_u8(data[5]) else {
             return;
         };
         let mut wind = WindData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             reference,
             ..Default::default()
         };
@@ -959,14 +957,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = TemperatureSource::try_from_u8(data[2]) else {
             return;
         };
         let mut temp = TemperatureData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1015,11 +1010,8 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let mut depth = WaterDepthData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             ..Default::default()
         };
         let depth_raw = u32::from_le_bytes(data[1..5].try_into().unwrap());
@@ -1047,10 +1039,9 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
-        if HeadingReference::try_from_u8(data[7]).is_none() {
+        // As for 129026: the reference occupies the low 2 bits and the rest of
+        // the byte is reserved, transmitted as 1s.
+        if HeadingReference::try_from_u8(data[7] & 0x03).is_none() {
             return;
         }
         let heading_raw = u16::from_le_bytes([data[1], data[2]]);
@@ -1076,9 +1067,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = TimeSource::try_from_u8(data[1]) else {
             return;
         };
@@ -1088,7 +1076,7 @@ impl NMEAInterface {
             return;
         }
         let mut time = SystemTimeData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             source,
             days_since_epoch: if days_raw == 0xFFFF { 0 } else { days_raw },
             ..Default::default()
@@ -1135,7 +1123,7 @@ impl NMEAInterface {
             return;
         }
         let mut out = GnssSatsInViewData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             sats_in_view: data[2],
             satellites: Vec::new(),
         };
@@ -1168,7 +1156,7 @@ impl NMEAInterface {
         }
         let flags = data[5];
         let nav = NavigationData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             distance_to_wp_m: u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as f64
                 * 0.01,
             bearing_reference: HeadingReference::try_from_u8(flags & 0x03).unwrap_or_default(),
@@ -1195,12 +1183,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload(msg) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
-        if data[1] & 0xC0 != 0 {
-            return;
-        }
+        // Byte 2 is [Set Mode: 3 bits][Mode, GNSS: 3 bits][NMEA Reserved: 2
+        // bits]. NMEA reserved fields are *transmitted as 1s*, so requiring the
+        // top two bits to be zero rejected every conformant frame — the whole
+        // PG was dropped and no DOP ever reached a consumer. Reserved bits are
+        // written as 1 and ignored on receive.
         let Some(desired_mode) = GNSSDOPMode::try_from_u8(data[1] & 0x07) else {
             return;
         };
@@ -1208,21 +1195,23 @@ impl NMEAInterface {
             return;
         };
         let mut dops = GNSSDOPData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             desired_mode,
             actual_mode,
             ..Default::default()
         };
-        let hdop_raw = u16::from_le_bytes([data[2], data[3]]);
-        let vdop_raw = u16::from_le_bytes([data[4], data[5]]);
-        let tdop_raw = u16::from_le_bytes([data[6], data[7]]);
-        let Some(hdop) = nmea_u16_scaled_field(hdop_raw, DOP_RESOLUTION) else {
+        // The DOPs are signed (+/-327.64 at 1x10E-2), so the unavailable and
+        // error sentinels live at the top of the *signed* range.
+        let hdop_raw = i16::from_le_bytes([data[2], data[3]]);
+        let vdop_raw = i16::from_le_bytes([data[4], data[5]]);
+        let tdop_raw = i16::from_le_bytes([data[6], data[7]]);
+        let Some(hdop) = nmea_dop_field(hdop_raw, DOP_RESOLUTION) else {
             return;
         };
-        let Some(vdop) = nmea_u16_scaled_field(vdop_raw, DOP_RESOLUTION) else {
+        let Some(vdop) = nmea_dop_field(vdop_raw, DOP_RESOLUTION) else {
             return;
         };
-        let Some(tdop) = nmea_u16_scaled_field(tdop_raw, DOP_RESOLUTION) else {
+        let Some(tdop) = nmea_dop_field(tdop_raw, DOP_RESOLUTION) else {
             return;
         };
         if let Some(hdop) = hdop {
@@ -1249,9 +1238,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         if MagneticVariationSource::try_from_u8(data[1]).is_none() {
             return;
         }
@@ -1356,14 +1342,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(reference) = SpeedWaterRefType::try_from_u8(data[5]) else {
             return;
         };
         let mut spd = SpeedWaterData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             reference,
             ..Default::default()
         };
@@ -1385,9 +1368,6 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 6) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         if data[1] & !0x4F != 0 {
             return;
         }
@@ -1395,7 +1375,7 @@ impl NMEAInterface {
             return;
         };
         let mut xte = XTEData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             mode,
             navigation_terminated: data[1] & 0x40 != 0,
             ..Default::default()
@@ -1414,14 +1394,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = HumiditySource::try_from_u8(data[2]) else {
             return;
         };
         let mut hum = HumidityData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1447,14 +1424,11 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let Some(source) = PressureSource::try_from_u8(data[2]) else {
             return;
         };
         let mut pres = PressureData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             instance: data[1],
             source,
             ..Default::default()
@@ -1473,11 +1447,8 @@ impl NMEAInterface {
         let Some(data) = classic_can_payload_with_ff_tail(msg, 7) else {
             return;
         };
-        if !nmea_sequence_id_is_canonical(data[0]) {
-            return;
-        }
         let mut env = OutsideEnvironmentalData {
-            sid: data[0],
+            sid: nmea_sequence_id_on_receive(data[0]),
             ..Default::default()
         };
         let water = u16::from_le_bytes([data[1], data[2]]);
@@ -1504,9 +1475,6 @@ impl NMEAInterface {
     /// PGN 129029 — fast-packet GNSS Position Data.
     fn handle_position_detail(&mut self, msg: &Message) {
         if !gnss_position_detail_payload_len_is_canonical(&msg.data) {
-            return;
-        }
-        if !nmea_sequence_id_is_canonical(msg.data[0]) {
             return;
         }
         let position_days_raw = u16::from_le_bytes([msg.data[1], msg.data[2]]);
@@ -1539,43 +1507,80 @@ impl NMEAInterface {
             return;
         }
         if signed_i64_data_is_available(alt_raw) {
-            pos.altitude_m = Some(alt_raw as f64 * 1e-6);
+            // Both fields, from one read. `wgs.altitude` was left at the
+            // literal 0.0 above, and `GNSSPosition::to_enu`/`to_ned`/`to_ecf`
+            // all read `self.wgs` and never `self.altitude_m` — so an NMEA 2000
+            // receiver lost its vertical axis entirely while the C ABI and
+            // Python constructors, which set both, kept it. The vertical
+            // channel silently worked or did not depending on the input path.
+            let altitude = alt_raw as f64 * 1e-6;
+            pos.altitude_m = Some(altitude);
+            pos.wgs.altitude = altitude;
         }
+        // G4: one unrecognised sub-signal must not discard the whole PG. A
+        // receiver reporting a constellation or method this crate predates used
+        // to produce *no position event at all*, so a consumer silently kept
+        // using the last cached fix — strictly worse than reporting a degraded
+        // one. An unknown method is surfaced as `Error`, which a quality gate
+        // refuses, while the coordinates still reach the application.
         let type_byte = msg.data[31];
         let gnss_system_raw = type_byte & 0x0F;
-        let Some(gnss_system) = GNSSSystem::try_from_u8(gnss_system_raw) else {
-            return;
-        };
+        // An unrecognised constellation must not be reported as GPS — that
+        // invents information. Keep whatever the receiver last told us.
+        let gnss_system = GNSSSystem::try_from_u8(gnss_system_raw).unwrap_or_else(|| {
+            self.latest_position
+                .map_or_else(GNSSSystem::default, |p| p.gnss_system)
+        });
         let fix_method = (type_byte >> 4) & 0x0F;
-        let Some(fix_type) = GNSSFixType::try_from_u8(fix_method) else {
-            return;
-        };
-        if !gnss_position_detail_integrity_byte_is_canonical(msg.data[32]) {
-            return;
-        }
+        let fix_type = GNSSFixType::try_from_u8(fix_method).unwrap_or(GNSSFixType::Error);
+        // DD209 sits in the low two bits of byte 33 (field 9). It used to be
+        // validated and then discarded, so a Caution/Unsafe RTK Fixed reached
+        // the steer gate looking exactly like a Safe one.
+        //
+        // G3 — the six reserved bits above it are read as don't-care, matching
+        // `handle_gnss_dops` two hundred lines up, which already reads
+        // `data[1] & 0x07` without inspecting its reserved bits. Requiring them
+        // to be all-ones dropped the *entire* position PG from any transmitter
+        // that zero-fills reserved bits, so latitude and longitude went with
+        // them and the operator was told "fix degraded" rather than "frame
+        // rejected". This file states the receive-side rule for its siblings at
+        // the 129539 and 129026 handlers; this decoder was the miss.
+        let integrity = GNSSIntegrity::try_from_u8(msg.data[32] & 0x03)
+            .expect("two-bit field covers every DD209 value");
         if !nmea_u8_count_raw_is_canonical(msg.data[33]) {
             return;
         }
         pos.gnss_system = gnss_system;
         pos.fix_type = fix_type;
+        pos.integrity = integrity;
         pos.satellites_used = if msg.data[33] == 0xFF {
             0
         } else {
             msg.data[33]
         };
-        let hdop_raw = u16::from_le_bytes([msg.data[34], msg.data[35]]);
-        let pdop_raw = u16::from_le_bytes([msg.data[36], msg.data[37]]);
-        let Some(hdop) = nmea_u16_scaled_field(hdop_raw, 0.01) else {
-            return;
-        };
-        let Some(pdop) = nmea_u16_scaled_field(pdop_raw, 0.01) else {
-            return;
-        };
-        pos.hdop = hdop;
-        pos.pdop = pdop;
+        // The DOPs are signed here too (DD055, +/-327.64 at 1x10E-2), exactly
+        // as in 129539 above. Read as unsigned, the 0x7FFF "no DOP available"
+        // sentinel scaled to a real-looking 327.67 and any steer gate written
+        // as `hdop < 2.0` refused to engage on a healthy receiver.
+        let hdop_raw = i16::from_le_bytes([msg.data[34], msg.data[35]]);
+        let pdop_raw = i16::from_le_bytes([msg.data[36], msg.data[37]]);
         let geoidal_raw = i32::from_le_bytes(msg.data[38..42].try_into().unwrap());
         if signed_i32_data_is_reserved(geoidal_raw) {
             return;
+        }
+        // A reserved raw has no defined meaning, which points at a misaligned
+        // frame rather than a missing reading — drop it, as the geoidal
+        // separation below already does. Anything else, including a negative
+        // ratio, is reported as an absent DOP: unlike 129539, which is nothing
+        // but DOPs, this PG carries the fix itself and must not take latitude
+        // and longitude down with one bad sub-signal (G4).
+        if signed_i16_data_is_reserved(hdop_raw) || signed_i16_data_is_reserved(pdop_raw) {
+            return;
+        }
+        pos.hdop = nmea_dop_field(hdop_raw, DOP_RESOLUTION).flatten();
+        pos.pdop = nmea_dop_field(pdop_raw, DOP_RESOLUTION).flatten();
+        if signed_i32_data_is_available(geoidal_raw) {
+            pos.geoidal_separation_m = Some(geoidal_raw as f64 * 0.01);
         }
         if let Some(prev) = self.latest_position {
             pos.heading_rad = prev.heading_rad;
@@ -1583,6 +1588,7 @@ impl NMEAInterface {
             pos.cog_rad = prev.cog_rad;
         }
         self.latest_position = Some(pos);
+        self.quality_generation = self.quality_generation.wrapping_add(1);
         self.on_position.emit(&pos);
     }
 }
@@ -1615,10 +1621,12 @@ fn gnss_position_detail_payload_len_is_canonical(data: &[u8]) -> bool {
 
     for station_index in 0..reference_station_count {
         let type_offset = BASE_LEN + station_index * REFERENCE_STATION_LEN;
-        let station_type = data[type_offset] & 0x0F;
-        if !gnss_reference_station_type_is_defined(station_type) {
-            return false;
-        }
+        // G4 — an unrecognised 4-bit station type is one sub-signal, not a
+        // reason to discard the fix. This ran inside the *length* gate, so a
+        // nibble outside {0,1,14,15} returned before latitude or longitude were
+        // read at all: an RTK rover lost its entire detailed fix from the
+        // moment its base came online. The same function applies G4 correctly
+        // to the GNSS-system nibble ninety lines up.
         let age_offset = type_offset + 2;
         let correction_age_raw = u16::from_le_bytes([data[age_offset], data[age_offset + 1]]);
         if matches!(correction_age_raw, 0xFFFD | 0xFFFE) {
@@ -1627,16 +1635,6 @@ fn gnss_position_detail_payload_len_is_canonical(data: &[u8]) -> bool {
     }
 
     true
-}
-
-#[inline]
-const fn gnss_reference_station_type_is_defined(station_type: u8) -> bool {
-    ReferenceStationType::try_from_u8(station_type).is_some()
-}
-
-#[inline]
-const fn gnss_position_detail_integrity_byte_is_canonical(value: u8) -> bool {
-    value & 0xFC == 0xFC
 }
 
 #[inline]
@@ -1649,9 +1647,44 @@ const fn nmea_time_of_day_raw_is_canonical(value: u32) -> bool {
     value <= MAX_TIME_OF_DAY_RAW || value == 0xFFFF_FFFF
 }
 
+/// DD056/DF53 Sequence ID: "0 - 252 = binding available … 253 - 254 = reserved
+/// for future use, 255 = No binding provided."
+///
+/// Used on the **transmit** side, where the standard's own ranges bind us:
+/// [`nmea_sequence_id_to_wire`] coerces anything else to `0xFF`.
 #[inline]
 const fn nmea_sequence_id_is_canonical(value: u8) -> bool {
     value <= 0xFC || value == 0xFF
+}
+
+/// Normalize a received Sequence ID, mapping the reserved 253-254 band onto
+/// `0xFF` — "No binding provided".
+///
+/// Every handler used to *reject* the whole parameter group on a reserved SID.
+/// That threw away the measurement to punish its label: DD056 describes the SID
+/// purely as a correlation tag — "identical SID values within two or more
+/// different PGN transmissions identifies those PGN transmissions as a single
+/// related data set" — so it carries no position, no DOP, no heading. A
+/// receiver that used one lost its entire fix rather than just its ability to
+/// bind that fix to a matching COG/SOG.
+///
+/// Degrading instead of dropping is what the standard already asks of the
+/// transmit path, and it matches NMEA 2000 A-4's stated intent that the
+/// per-field special states let "devices … provide partial information within a
+/// Parameter Group when the value for all the Data Fields within the Parameter
+/// Group are not known, not available, or not yet measured". An unusable
+/// correlation tag is exactly that: one field unknown, the rest good.
+///
+/// `0xFF` is the honest landing place — the value the standard already defines
+/// for "this data set cannot be bound to another" — so a consumer correlating
+/// on SID still refuses to pair it, and only the correlation is lost.
+#[inline]
+const fn nmea_sequence_id_on_receive(value: u8) -> u8 {
+    if nmea_sequence_id_is_canonical(value) {
+        value
+    } else {
+        0xFF
+    }
 }
 
 #[inline]
@@ -1665,6 +1698,33 @@ fn nmea_u16_scaled_field(raw: u16, resolution: f64) -> Option<Option<f64>> {
         0xFFFD | 0xFFFE => None,
         0xFFFF => Some(None),
         value => Some(Some(f64::from(value) * resolution)),
+    }
+}
+
+/// Scale a **signed** 16-bit NMEA field, honouring the signed sentinel band.
+///
+/// The DOPs in PGN 129539 are documented as "Range: +/-327.64" with a 1x10E-2
+/// resolution — that is `int16`, so "data not available" is `0x7FFF` and not
+/// `0xFFFF`. Decoding them as unsigned made an unavailable DOP read as a
+/// perfectly plausible 327.67, which a quality gate then treated as a real
+/// (very poor) value rather than as no value at all.
+fn nmea_i16_scaled_field(raw: i16, resolution: f64) -> Option<Option<f64>> {
+    if signed_i16_data_is_reserved(raw) {
+        return None;
+    }
+    if !signed_i16_data_is_available(raw) {
+        return Some(None);
+    }
+    Some(Some(f64::from(raw) * resolution))
+}
+
+/// A dilution-of-precision value, which is a ratio and so cannot be negative
+/// however the field is encoded. A negative raw is a corrupt frame, not a
+/// measurement.
+fn nmea_dop_field(raw: i16, resolution: f64) -> Option<Option<f64>> {
+    match nmea_i16_scaled_field(raw, resolution)? {
+        Some(value) if value < 0.0 => None,
+        other => Some(other),
     }
 }
 

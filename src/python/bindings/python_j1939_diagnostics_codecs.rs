@@ -1,12 +1,12 @@
 #[pymethods]
 impl PyEec1 {
     #[new]
-    #[pyo3(signature = (engine_speed_rpm=0.0, driver_demand_percent=0.0, actual_engine_percent=0.0, engine_torque_percent=0.0, starter_mode=0, source_address=0))]
+    #[pyo3(signature = (engine_speed_rpm=None, driver_demand_percent=None, actual_engine_percent=None, engine_torque_percent=None, starter_mode=0, source_address=0))]
     fn new(
-        engine_speed_rpm: f64,
-        driver_demand_percent: f64,
-        actual_engine_percent: f64,
-        engine_torque_percent: f64,
+        engine_speed_rpm: Option<f64>,
+        driver_demand_percent: Option<f64>,
+        actual_engine_percent: Option<f64>,
+        engine_torque_percent: Option<f64>,
         starter_mode: u8,
         source_address: u8,
     ) -> Self {
@@ -24,10 +24,10 @@ impl PyEec1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec1::decode(&data).map(|e| Self {
-            engine_torque_percent: e.engine_torque_percent,
-            driver_demand_percent: e.driver_demand_percent,
-            actual_engine_percent: e.actual_engine_percent,
-            engine_speed_rpm: e.engine_speed_rpm,
+            engine_torque_percent: e.engine_torque_percent.value(),
+            driver_demand_percent: e.driver_demand_percent.value(),
+            actual_engine_percent: e.actual_engine_percent.value(),
+            engine_speed_rpm: e.engine_speed_rpm.value(),
             starter_mode: e.starter_mode,
             source_address: e.source_address,
         })
@@ -36,10 +36,10 @@ impl PyEec1 {
     /// Encode to the 8-byte wire payload.
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec1 {
-            engine_torque_percent: self.engine_torque_percent,
-            driver_demand_percent: self.driver_demand_percent,
-            actual_engine_percent: self.actual_engine_percent,
-            engine_speed_rpm: self.engine_speed_rpm,
+            engine_torque_percent: py_signal(self.engine_torque_percent),
+            driver_demand_percent: py_signal(self.driver_demand_percent),
+            actual_engine_percent: py_signal(self.actual_engine_percent),
+            engine_speed_rpm: py_signal(self.engine_speed_rpm),
             starter_mode: self.starter_mode,
             source_address: self.source_address,
         }
@@ -49,7 +49,7 @@ impl PyEec1 {
 
     fn __repr__(&self) -> String {
         format!(
-            "Eec1(engine_speed_rpm={:.1}, driver_demand_percent={:.1})",
+            "Eec1(engine_speed_rpm={:?}, driver_demand_percent={:?})",
             self.engine_speed_rpm, self.driver_demand_percent
         )
     }
@@ -61,23 +61,25 @@ impl PyEec1 {
 #[pyclass(name = "Eec2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec2 {
-    pub accel_pedal_position: u8,
-    pub engine_load_percent: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub accel_pedal_position: Option<f64>,
+    pub engine_load_percent: Option<f64>,
     pub accel_pedal_low_idle: u8,
     pub accel_pedal_kickdown: u8,
-    pub road_speed_limit: u8,
+    pub road_speed_limit: Option<f64>,
 }
 
 #[pymethods]
 impl PyEec2 {
     #[new]
-    #[pyo3(signature = (accel_pedal_position=0xFF, engine_load_percent=0.0, accel_pedal_low_idle=0x03, accel_pedal_kickdown=0x03, road_speed_limit=0xFF))]
+    #[pyo3(signature = (accel_pedal_position=None, engine_load_percent=None, accel_pedal_low_idle=0x03, accel_pedal_kickdown=0x03, road_speed_limit=None))]
     fn new(
-        accel_pedal_position: u8,
-        engine_load_percent: f64,
+        accel_pedal_position: Option<f64>,
+        engine_load_percent: Option<f64>,
         accel_pedal_low_idle: u8,
         accel_pedal_kickdown: u8,
-        road_speed_limit: u8,
+        road_speed_limit: Option<f64>,
     ) -> Self {
         Self {
             accel_pedal_position,
@@ -90,27 +92,27 @@ impl PyEec2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec2::decode(&data).map(|e| Self {
-            accel_pedal_position: e.accel_pedal_position,
-            engine_load_percent: e.engine_load_percent,
+            accel_pedal_position: e.accel_pedal_position.value(),
+            engine_load_percent: e.engine_load_percent.value(),
             accel_pedal_low_idle: e.accel_pedal_low_idle,
             accel_pedal_kickdown: e.accel_pedal_kickdown,
-            road_speed_limit: e.road_speed_limit,
+            road_speed_limit: e.road_speed_limit.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec2 {
-            accel_pedal_position: self.accel_pedal_position,
-            engine_load_percent: self.engine_load_percent,
+            accel_pedal_position: py_signal(self.accel_pedal_position),
+            engine_load_percent: py_signal(self.engine_load_percent),
             accel_pedal_low_idle: self.accel_pedal_low_idle,
             accel_pedal_kickdown: self.accel_pedal_kickdown,
-            road_speed_limit: self.road_speed_limit,
+            road_speed_limit: py_signal(self.road_speed_limit),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Eec2(engine_load_percent={:.1}, accel_pedal_position={})",
+            "Eec2(engine_load_percent={:?}, accel_pedal_position={:?})",
             self.engine_load_percent, self.accel_pedal_position
         )
     }
@@ -120,19 +122,21 @@ impl PyEec2 {
 #[pyclass(name = "Eec3", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEec3 {
-    pub nominal_friction_percent: f64,
-    pub desired_operating_speed_rpm: f64,
-    pub operating_speed_asymmetry: u8,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub nominal_friction_percent: Option<f64>,
+    pub desired_operating_speed_rpm: Option<f64>,
+    pub operating_speed_asymmetry: Option<f64>,
 }
 
 #[pymethods]
 impl PyEec3 {
     #[new]
-    #[pyo3(signature = (nominal_friction_percent=0.0, desired_operating_speed_rpm=0.0, operating_speed_asymmetry=0xFF))]
+    #[pyo3(signature = (nominal_friction_percent=None, desired_operating_speed_rpm=None, operating_speed_asymmetry=None))]
     fn new(
-        nominal_friction_percent: f64,
-        desired_operating_speed_rpm: f64,
-        operating_speed_asymmetry: u8,
+        nominal_friction_percent: Option<f64>,
+        desired_operating_speed_rpm: Option<f64>,
+        operating_speed_asymmetry: Option<f64>,
     ) -> Self {
         Self {
             nominal_friction_percent,
@@ -143,23 +147,23 @@ impl PyEec3 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Eec3::decode(&data).map(|e| Self {
-            nominal_friction_percent: e.nominal_friction_percent,
-            desired_operating_speed_rpm: e.desired_operating_speed_rpm,
-            operating_speed_asymmetry: e.operating_speed_asymmetry,
+            nominal_friction_percent: e.nominal_friction_percent.value(),
+            desired_operating_speed_rpm: e.desired_operating_speed_rpm.value(),
+            operating_speed_asymmetry: e.operating_speed_asymmetry.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Eec3 {
-            nominal_friction_percent: self.nominal_friction_percent,
-            desired_operating_speed_rpm: self.desired_operating_speed_rpm,
-            operating_speed_asymmetry: self.operating_speed_asymmetry,
+            nominal_friction_percent: py_signal(self.nominal_friction_percent),
+            desired_operating_speed_rpm: py_signal(self.desired_operating_speed_rpm),
+            operating_speed_asymmetry: py_signal(self.operating_speed_asymmetry),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Eec3(desired_operating_speed_rpm={:.1})",
+            "Eec3(desired_operating_speed_rpm={:?})",
             self.desired_operating_speed_rpm
         )
     }
@@ -169,23 +173,25 @@ impl PyEec3 {
 #[pyclass(name = "EngineTemp1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineTemp1 {
-    pub coolant_temp_c: f64,
-    pub fuel_temp_c: f64,
-    pub oil_temp_c: f64,
-    pub turbo_oil_temp_c: f64,
-    pub intercooler_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub coolant_temp_c: Option<f64>,
+    pub fuel_temp_c: Option<f64>,
+    pub oil_temp_c: Option<f64>,
+    pub turbo_oil_temp_c: Option<f64>,
+    pub intercooler_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineTemp1 {
     #[new]
-    #[pyo3(signature = (coolant_temp_c=-40.0, fuel_temp_c=-40.0, oil_temp_c=-40.0, turbo_oil_temp_c=-40.0, intercooler_temp_c=-40.0))]
+    #[pyo3(signature = (coolant_temp_c=None, fuel_temp_c=None, oil_temp_c=None, turbo_oil_temp_c=None, intercooler_temp_c=None))]
     fn new(
-        coolant_temp_c: f64,
-        fuel_temp_c: f64,
-        oil_temp_c: f64,
-        turbo_oil_temp_c: f64,
-        intercooler_temp_c: f64,
+        coolant_temp_c: Option<f64>,
+        fuel_temp_c: Option<f64>,
+        oil_temp_c: Option<f64>,
+        turbo_oil_temp_c: Option<f64>,
+        intercooler_temp_c: Option<f64>,
     ) -> Self {
         Self {
             coolant_temp_c,
@@ -198,26 +204,26 @@ impl PyEngineTemp1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineTemp1::decode(&data).map(|e| Self {
-            coolant_temp_c: e.coolant_temp_c,
-            fuel_temp_c: e.fuel_temp_c,
-            oil_temp_c: e.oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            intercooler_temp_c: e.intercooler_temp_c,
+            coolant_temp_c: e.coolant_temp_c.value(),
+            fuel_temp_c: e.fuel_temp_c.value(),
+            oil_temp_c: e.oil_temp_c.value(),
+            turbo_oil_temp_c: e.turbo_oil_temp_c.value(),
+            intercooler_temp_c: e.intercooler_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineTemp1 {
-            coolant_temp_c: self.coolant_temp_c,
-            fuel_temp_c: self.fuel_temp_c,
-            oil_temp_c: self.oil_temp_c,
-            turbo_oil_temp_c: self.turbo_oil_temp_c,
-            intercooler_temp_c: self.intercooler_temp_c,
+            coolant_temp_c: py_signal(self.coolant_temp_c),
+            fuel_temp_c: py_signal(self.fuel_temp_c),
+            oil_temp_c: py_signal(self.oil_temp_c),
+            turbo_oil_temp_c: py_signal(self.turbo_oil_temp_c),
+            intercooler_temp_c: py_signal(self.intercooler_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("EngineTemp1(coolant_temp_c={:.1})", self.coolant_temp_c)
+        format!("EngineTemp1(coolant_temp_c={:?})", self.coolant_temp_c)
     }
 }
 
@@ -225,21 +231,23 @@ impl PyEngineTemp1 {
 #[pyclass(name = "EngineTemp2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineTemp2 {
-    pub engine_oil_temp_c: f64,
-    pub turbo_oil_temp_c: f64,
-    pub engine_intercooler_temp_c: f64,
-    pub turbo_1_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub engine_oil_temp_c: Option<f64>,
+    pub turbo_oil_temp_c: Option<f64>,
+    pub engine_intercooler_temp_c: Option<f64>,
+    pub turbo_1_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineTemp2 {
     #[new]
-    #[pyo3(signature = (engine_oil_temp_c=-40.0, turbo_oil_temp_c=-40.0, engine_intercooler_temp_c=-40.0, turbo_1_temp_c=-40.0))]
+    #[pyo3(signature = (engine_oil_temp_c=None, turbo_oil_temp_c=None, engine_intercooler_temp_c=None, turbo_1_temp_c=None))]
     fn new(
-        engine_oil_temp_c: f64,
-        turbo_oil_temp_c: f64,
-        engine_intercooler_temp_c: f64,
-        turbo_1_temp_c: f64,
+        engine_oil_temp_c: Option<f64>,
+        turbo_oil_temp_c: Option<f64>,
+        engine_intercooler_temp_c: Option<f64>,
+        turbo_1_temp_c: Option<f64>,
     ) -> Self {
         Self {
             engine_oil_temp_c,
@@ -251,25 +259,25 @@ impl PyEngineTemp2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineTemp2::decode(&data).map(|e| Self {
-            engine_oil_temp_c: e.engine_oil_temp_c,
-            turbo_oil_temp_c: e.turbo_oil_temp_c,
-            engine_intercooler_temp_c: e.engine_intercooler_temp_c,
-            turbo_1_temp_c: e.turbo_1_temp_c,
+            engine_oil_temp_c: e.engine_oil_temp_c.value(),
+            turbo_oil_temp_c: e.turbo_oil_temp_c.value(),
+            engine_intercooler_temp_c: e.engine_intercooler_temp_c.value(),
+            turbo_1_temp_c: e.turbo_1_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineTemp2 {
-            engine_oil_temp_c: self.engine_oil_temp_c,
-            turbo_oil_temp_c: self.turbo_oil_temp_c,
-            engine_intercooler_temp_c: self.engine_intercooler_temp_c,
-            turbo_1_temp_c: self.turbo_1_temp_c,
+            engine_oil_temp_c: py_signal(self.engine_oil_temp_c),
+            turbo_oil_temp_c: py_signal(self.turbo_oil_temp_c),
+            engine_intercooler_temp_c: py_signal(self.engine_intercooler_temp_c),
+            turbo_1_temp_c: py_signal(self.turbo_1_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "EngineTemp2(engine_oil_temp_c={:.1})",
+            "EngineTemp2(engine_oil_temp_c={:?})",
             self.engine_oil_temp_c
         )
     }
@@ -279,25 +287,27 @@ impl PyEngineTemp2 {
 #[pyclass(name = "EngineFluidLp", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineFluidLp {
-    pub oil_pressure_kpa: f64,
-    pub coolant_pressure_kpa: f64,
-    pub oil_level_percent: u8,
-    pub coolant_level_percent: u8,
-    pub fuel_delivery_pressure_kpa: f64,
-    pub crankcase_pressure_kpa: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub oil_pressure_kpa: Option<f64>,
+    pub coolant_pressure_kpa: Option<f64>,
+    pub oil_level_percent: Option<f64>,
+    pub coolant_level_percent: Option<f64>,
+    pub fuel_delivery_pressure_kpa: Option<f64>,
+    pub crankcase_pressure_kpa: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineFluidLp {
     #[new]
-    #[pyo3(signature = (oil_pressure_kpa=0.0, coolant_pressure_kpa=0.0, oil_level_percent=0xFF, coolant_level_percent=0xFF, fuel_delivery_pressure_kpa=0.0, crankcase_pressure_kpa=0.0))]
+    #[pyo3(signature = (oil_pressure_kpa=None, coolant_pressure_kpa=None, oil_level_percent=None, coolant_level_percent=None, fuel_delivery_pressure_kpa=None, crankcase_pressure_kpa=None))]
     fn new(
-        oil_pressure_kpa: f64,
-        coolant_pressure_kpa: f64,
-        oil_level_percent: u8,
-        coolant_level_percent: u8,
-        fuel_delivery_pressure_kpa: f64,
-        crankcase_pressure_kpa: f64,
+        oil_pressure_kpa: Option<f64>,
+        coolant_pressure_kpa: Option<f64>,
+        oil_level_percent: Option<f64>,
+        coolant_level_percent: Option<f64>,
+        fuel_delivery_pressure_kpa: Option<f64>,
+        crankcase_pressure_kpa: Option<f64>,
     ) -> Self {
         Self {
             oil_pressure_kpa,
@@ -311,29 +321,29 @@ impl PyEngineFluidLp {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineFluidLp::decode(&data).map(|e| Self {
-            oil_pressure_kpa: e.oil_pressure_kpa,
-            coolant_pressure_kpa: e.coolant_pressure_kpa,
-            oil_level_percent: e.oil_level_percent,
-            coolant_level_percent: e.coolant_level_percent,
-            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: e.crankcase_pressure_kpa,
+            oil_pressure_kpa: e.oil_pressure_kpa.value(),
+            coolant_pressure_kpa: e.coolant_pressure_kpa.value(),
+            oil_level_percent: e.oil_level_percent.value(),
+            coolant_level_percent: e.coolant_level_percent.value(),
+            fuel_delivery_pressure_kpa: e.fuel_delivery_pressure_kpa.value(),
+            crankcase_pressure_kpa: e.crankcase_pressure_kpa.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineFluidLp {
-            oil_pressure_kpa: self.oil_pressure_kpa,
-            coolant_pressure_kpa: self.coolant_pressure_kpa,
-            oil_level_percent: self.oil_level_percent,
-            coolant_level_percent: self.coolant_level_percent,
-            fuel_delivery_pressure_kpa: self.fuel_delivery_pressure_kpa,
-            crankcase_pressure_kpa: self.crankcase_pressure_kpa,
+            oil_pressure_kpa: py_signal(self.oil_pressure_kpa),
+            coolant_pressure_kpa: py_signal(self.coolant_pressure_kpa),
+            oil_level_percent: py_signal(self.oil_level_percent),
+            coolant_level_percent: py_signal(self.coolant_level_percent),
+            fuel_delivery_pressure_kpa: py_signal(self.fuel_delivery_pressure_kpa),
+            crankcase_pressure_kpa: py_signal(self.crankcase_pressure_kpa),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "EngineFluidLp(oil_pressure_kpa={:.1})",
+            "EngineFluidLp(oil_pressure_kpa={:?})",
             self.oil_pressure_kpa
         )
     }
@@ -343,15 +353,17 @@ impl PyEngineFluidLp {
 #[pyclass(name = "EngineHours", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyEngineHours {
-    pub total_hours: f64,
-    pub total_revolutions: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub total_hours: Option<f64>,
+    pub total_revolutions: Option<f64>,
 }
 
 #[pymethods]
 impl PyEngineHours {
     #[new]
-    #[pyo3(signature = (total_hours=0.0, total_revolutions=0.0))]
-    fn new(total_hours: f64, total_revolutions: f64) -> Self {
+    #[pyo3(signature = (total_hours=None, total_revolutions=None))]
+    fn new(total_hours: Option<f64>, total_revolutions: Option<f64>) -> Self {
         Self {
             total_hours,
             total_revolutions,
@@ -360,20 +372,20 @@ impl PyEngineHours {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::EngineHours::decode(&data).map(|e| Self {
-            total_hours: e.total_hours,
-            total_revolutions: e.total_revolutions,
+            total_hours: e.total_hours.value(),
+            total_revolutions: e.total_revolutions.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::EngineHours {
-            total_hours: self.total_hours,
-            total_revolutions: self.total_revolutions,
+            total_hours: py_signal(self.total_hours),
+            total_revolutions: py_signal(self.total_revolutions),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("EngineHours(total_hours={:.2})", self.total_hours)
+        format!("EngineHours(total_hours={:?})", self.total_hours)
     }
 }
 
@@ -381,16 +393,22 @@ impl PyEngineHours {
 #[pyclass(name = "FuelEconomy", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyFuelEconomy {
-    pub fuel_rate_lph: f64,
-    pub instantaneous_lph: f64,
-    pub throttle_position: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub fuel_rate_lph: Option<f64>,
+    pub instantaneous_lph: Option<f64>,
+    pub throttle_position: Option<f64>,
 }
 
 #[pymethods]
 impl PyFuelEconomy {
     #[new]
-    #[pyo3(signature = (fuel_rate_lph=0.0, instantaneous_lph=0.0, throttle_position=0.0))]
-    fn new(fuel_rate_lph: f64, instantaneous_lph: f64, throttle_position: f64) -> Self {
+    #[pyo3(signature = (fuel_rate_lph=None, instantaneous_lph=None, throttle_position=None))]
+    fn new(
+        fuel_rate_lph: Option<f64>,
+        instantaneous_lph: Option<f64>,
+        throttle_position: Option<f64>,
+    ) -> Self {
         Self {
             fuel_rate_lph,
             instantaneous_lph,
@@ -400,22 +418,22 @@ impl PyFuelEconomy {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::FuelEconomy::decode(&data).map(|e| Self {
-            fuel_rate_lph: e.fuel_rate_lph,
-            instantaneous_lph: e.instantaneous_lph,
-            throttle_position: e.throttle_position,
+            fuel_rate_lph: e.fuel_rate_lph.value(),
+            instantaneous_lph: e.instantaneous_lph.value(),
+            throttle_position: e.throttle_position.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::FuelEconomy {
-            fuel_rate_lph: self.fuel_rate_lph,
-            instantaneous_lph: self.instantaneous_lph,
-            throttle_position: self.throttle_position,
+            fuel_rate_lph: py_signal(self.fuel_rate_lph),
+            instantaneous_lph: py_signal(self.instantaneous_lph),
+            throttle_position: py_signal(self.throttle_position),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("FuelEconomy(fuel_rate_lph={:.2})", self.fuel_rate_lph)
+        format!("FuelEconomy(fuel_rate_lph={:?})", self.fuel_rate_lph)
     }
 }
 
@@ -424,16 +442,22 @@ impl PyFuelEconomy {
 #[pyclass(name = "Tsc1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyTsc1 {
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
     pub override_mode: u8,
-    pub requested_speed_rpm: f64,
-    pub requested_torque_percent: f64,
+    pub requested_speed_rpm: Option<f64>,
+    pub requested_torque_percent: Option<f64>,
 }
 
 #[pymethods]
 impl PyTsc1 {
     #[new]
-    #[pyo3(signature = (override_mode=0, requested_speed_rpm=0.0, requested_torque_percent=0.0))]
-    fn new(override_mode: u8, requested_speed_rpm: f64, requested_torque_percent: f64) -> Self {
+    #[pyo3(signature = (override_mode=0, requested_speed_rpm=None, requested_torque_percent=None))]
+    fn new(
+        override_mode: u8,
+        requested_speed_rpm: Option<f64>,
+        requested_torque_percent: Option<f64>,
+    ) -> Self {
         Self {
             override_mode,
             requested_speed_rpm,
@@ -444,22 +468,22 @@ impl PyTsc1 {
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Tsc1::decode(&data).map(|e| Self {
             override_mode: e.override_mode.as_u8(),
-            requested_speed_rpm: e.requested_speed_rpm,
-            requested_torque_percent: e.requested_torque_percent,
+            requested_speed_rpm: e.requested_speed_rpm.value(),
+            requested_torque_percent: e.requested_torque_percent.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Tsc1 {
             override_mode: crate::j1939::OverrideControlMode::from_u8(self.override_mode),
-            requested_speed_rpm: self.requested_speed_rpm,
-            requested_torque_percent: self.requested_torque_percent,
+            requested_speed_rpm: py_signal(self.requested_speed_rpm),
+            requested_torque_percent: py_signal(self.requested_torque_percent),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "Tsc1(override_mode={}, requested_speed_rpm={:.1})",
+            "Tsc1(override_mode={}, requested_speed_rpm={:?})",
             self.override_mode, self.requested_speed_rpm
         )
     }
@@ -469,21 +493,23 @@ impl PyTsc1 {
 #[pyclass(name = "Vep1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyVep1 {
-    pub battery_voltage_v: f64,
-    pub alternator_current_a: f64,
-    pub charging_system_voltage_v: f64,
-    pub key_switch_voltage_v: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub battery_voltage_v: Option<f64>,
+    pub alternator_current_a: Option<f64>,
+    pub charging_system_voltage_v: Option<f64>,
+    pub key_switch_voltage_v: Option<f64>,
 }
 
 #[pymethods]
 impl PyVep1 {
     #[new]
-    #[pyo3(signature = (battery_voltage_v=0.0, alternator_current_a=0.0, charging_system_voltage_v=0.0, key_switch_voltage_v=0.0))]
+    #[pyo3(signature = (battery_voltage_v=None, alternator_current_a=None, charging_system_voltage_v=None, key_switch_voltage_v=None))]
     fn new(
-        battery_voltage_v: f64,
-        alternator_current_a: f64,
-        charging_system_voltage_v: f64,
-        key_switch_voltage_v: f64,
+        battery_voltage_v: Option<f64>,
+        alternator_current_a: Option<f64>,
+        charging_system_voltage_v: Option<f64>,
+        key_switch_voltage_v: Option<f64>,
     ) -> Self {
         Self {
             battery_voltage_v,
@@ -495,24 +521,24 @@ impl PyVep1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Vep1::decode(&data).map(|e| Self {
-            battery_voltage_v: e.battery_voltage_v,
-            alternator_current_a: e.alternator_current_a,
-            charging_system_voltage_v: e.charging_system_voltage_v,
-            key_switch_voltage_v: e.key_switch_voltage_v,
+            battery_voltage_v: e.battery_voltage_v.value(),
+            alternator_current_a: e.alternator_current_a.value(),
+            charging_system_voltage_v: e.charging_system_voltage_v.value(),
+            key_switch_voltage_v: e.key_switch_voltage_v.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Vep1 {
-            battery_voltage_v: self.battery_voltage_v,
-            alternator_current_a: self.alternator_current_a,
-            charging_system_voltage_v: self.charging_system_voltage_v,
-            key_switch_voltage_v: self.key_switch_voltage_v,
+            battery_voltage_v: py_signal(self.battery_voltage_v),
+            alternator_current_a: py_signal(self.alternator_current_a),
+            charging_system_voltage_v: py_signal(self.charging_system_voltage_v),
+            key_switch_voltage_v: py_signal(self.key_switch_voltage_v),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("Vep1(battery_voltage_v={:.2})", self.battery_voltage_v)
+        format!("Vep1(battery_voltage_v={:?})", self.battery_voltage_v)
     }
 }
 
@@ -520,21 +546,23 @@ impl PyVep1 {
 #[pyclass(name = "AmbientConditions", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAmbientConditions {
-    pub barometric_pressure_kpa: f64,
-    pub ambient_air_temp_c: f64,
-    pub intake_air_temp_c: f64,
-    pub road_surface_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub barometric_pressure_kpa: Option<f64>,
+    pub ambient_air_temp_c: Option<f64>,
+    pub intake_air_temp_c: Option<f64>,
+    pub road_surface_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyAmbientConditions {
     #[new]
-    #[pyo3(signature = (barometric_pressure_kpa=0.0, ambient_air_temp_c=-40.0, intake_air_temp_c=-40.0, road_surface_temp_c=-40.0))]
+    #[pyo3(signature = (barometric_pressure_kpa=None, ambient_air_temp_c=None, intake_air_temp_c=None, road_surface_temp_c=None))]
     fn new(
-        barometric_pressure_kpa: f64,
-        ambient_air_temp_c: f64,
-        intake_air_temp_c: f64,
-        road_surface_temp_c: f64,
+        barometric_pressure_kpa: Option<f64>,
+        ambient_air_temp_c: Option<f64>,
+        intake_air_temp_c: Option<f64>,
+        road_surface_temp_c: Option<f64>,
     ) -> Self {
         Self {
             barometric_pressure_kpa,
@@ -546,25 +574,25 @@ impl PyAmbientConditions {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::AmbientConditions::decode(&data).map(|e| Self {
-            barometric_pressure_kpa: e.barometric_pressure_kpa,
-            ambient_air_temp_c: e.ambient_air_temp_c,
-            intake_air_temp_c: e.intake_air_temp_c,
-            road_surface_temp_c: e.road_surface_temp_c,
+            barometric_pressure_kpa: e.barometric_pressure_kpa.value(),
+            ambient_air_temp_c: e.ambient_air_temp_c.value(),
+            intake_air_temp_c: e.intake_air_temp_c.value(),
+            road_surface_temp_c: e.road_surface_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::AmbientConditions {
-            barometric_pressure_kpa: self.barometric_pressure_kpa,
-            ambient_air_temp_c: self.ambient_air_temp_c,
-            intake_air_temp_c: self.intake_air_temp_c,
-            road_surface_temp_c: self.road_surface_temp_c,
+            barometric_pressure_kpa: py_signal(self.barometric_pressure_kpa),
+            ambient_air_temp_c: py_signal(self.ambient_air_temp_c),
+            intake_air_temp_c: py_signal(self.intake_air_temp_c),
+            road_surface_temp_c: py_signal(self.road_surface_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "AmbientConditions(barometric_pressure_kpa={:.1})",
+            "AmbientConditions(barometric_pressure_kpa={:?})",
             self.barometric_pressure_kpa
         )
     }
@@ -574,23 +602,25 @@ impl PyAmbientConditions {
 #[pyclass(name = "DashDisplay", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyDashDisplay {
-    pub fuel_level_percent: u8,
-    pub washer_fluid_level: u8,
-    pub fuel_filter_diff_kpa: f64,
-    pub oil_filter_diff_kpa: f64,
-    pub cargo_ambient_temp_c: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub fuel_level_percent: Option<f64>,
+    pub washer_fluid_level: Option<f64>,
+    pub fuel_filter_diff_kpa: Option<f64>,
+    pub oil_filter_diff_kpa: Option<f64>,
+    pub cargo_ambient_temp_c: Option<f64>,
 }
 
 #[pymethods]
 impl PyDashDisplay {
     #[new]
-    #[pyo3(signature = (fuel_level_percent=0xFF, washer_fluid_level=0xFF, fuel_filter_diff_kpa=0.0, oil_filter_diff_kpa=0.0, cargo_ambient_temp_c=-40.0))]
+    #[pyo3(signature = (fuel_level_percent=None, washer_fluid_level=None, fuel_filter_diff_kpa=None, oil_filter_diff_kpa=None, cargo_ambient_temp_c=None))]
     fn new(
-        fuel_level_percent: u8,
-        washer_fluid_level: u8,
-        fuel_filter_diff_kpa: f64,
-        oil_filter_diff_kpa: f64,
-        cargo_ambient_temp_c: f64,
+        fuel_level_percent: Option<f64>,
+        washer_fluid_level: Option<f64>,
+        fuel_filter_diff_kpa: Option<f64>,
+        oil_filter_diff_kpa: Option<f64>,
+        cargo_ambient_temp_c: Option<f64>,
     ) -> Self {
         Self {
             fuel_level_percent,
@@ -603,27 +633,27 @@ impl PyDashDisplay {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::DashDisplay::decode(&data).map(|e| Self {
-            fuel_level_percent: e.fuel_level_percent,
-            washer_fluid_level: e.washer_fluid_level,
-            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: e.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: e.cargo_ambient_temp_c,
+            fuel_level_percent: e.fuel_level_percent.value(),
+            washer_fluid_level: e.washer_fluid_level.value(),
+            fuel_filter_diff_kpa: e.fuel_filter_diff_kpa.value(),
+            oil_filter_diff_kpa: e.oil_filter_diff_kpa.value(),
+            cargo_ambient_temp_c: e.cargo_ambient_temp_c.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::DashDisplay {
-            fuel_level_percent: self.fuel_level_percent,
-            washer_fluid_level: self.washer_fluid_level,
-            fuel_filter_diff_kpa: self.fuel_filter_diff_kpa,
-            oil_filter_diff_kpa: self.oil_filter_diff_kpa,
-            cargo_ambient_temp_c: self.cargo_ambient_temp_c,
+            fuel_level_percent: py_signal(self.fuel_level_percent),
+            washer_fluid_level: py_signal(self.washer_fluid_level),
+            fuel_filter_diff_kpa: py_signal(self.fuel_filter_diff_kpa),
+            oil_filter_diff_kpa: py_signal(self.oil_filter_diff_kpa),
+            cargo_ambient_temp_c: py_signal(self.cargo_ambient_temp_c),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "DashDisplay(fuel_level_percent={})",
+            "DashDisplay(fuel_level_percent={:?})",
             self.fuel_level_percent
         )
     }
@@ -633,15 +663,17 @@ impl PyDashDisplay {
 #[pyclass(name = "VehiclePosition", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyVehiclePosition {
-    pub latitude_deg: f64,
-    pub longitude_deg: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub latitude_deg: Option<f64>,
+    pub longitude_deg: Option<f64>,
 }
 
 #[pymethods]
 impl PyVehiclePosition {
     #[new]
-    #[pyo3(signature = (latitude_deg=0.0, longitude_deg=0.0))]
-    fn new(latitude_deg: f64, longitude_deg: f64) -> Self {
+    #[pyo3(signature = (latitude_deg=None, longitude_deg=None))]
+    fn new(latitude_deg: Option<f64>, longitude_deg: Option<f64>) -> Self {
         Self {
             latitude_deg,
             longitude_deg,
@@ -650,21 +682,21 @@ impl PyVehiclePosition {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::VehiclePosition::decode(&data).map(|e| Self {
-            latitude_deg: e.latitude_deg,
-            longitude_deg: e.longitude_deg,
+            latitude_deg: e.latitude_deg.value(),
+            longitude_deg: e.longitude_deg.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::VehiclePosition {
-            latitude_deg: self.latitude_deg,
-            longitude_deg: self.longitude_deg,
+            latitude_deg: py_signal(self.latitude_deg),
+            longitude_deg: py_signal(self.longitude_deg),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
         format!(
-            "VehiclePosition(latitude_deg={:.6}, longitude_deg={:.6})",
+            "VehiclePosition(latitude_deg={:?}, longitude_deg={:?})",
             self.latitude_deg, self.longitude_deg
         )
     }
@@ -674,15 +706,17 @@ impl PyVehiclePosition {
 #[pyclass(name = "FuelConsumption", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyFuelConsumption {
-    pub trip_fuel_l: f64,
-    pub total_fuel_l: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub trip_fuel_l: Option<f64>,
+    pub total_fuel_l: Option<f64>,
 }
 
 #[pymethods]
 impl PyFuelConsumption {
     #[new]
-    #[pyo3(signature = (trip_fuel_l=0.0, total_fuel_l=0.0))]
-    fn new(trip_fuel_l: f64, total_fuel_l: f64) -> Self {
+    #[pyo3(signature = (trip_fuel_l=None, total_fuel_l=None))]
+    fn new(trip_fuel_l: Option<f64>, total_fuel_l: Option<f64>) -> Self {
         Self {
             trip_fuel_l,
             total_fuel_l,
@@ -691,20 +725,20 @@ impl PyFuelConsumption {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::FuelConsumption::decode(&data).map(|e| Self {
-            trip_fuel_l: e.trip_fuel_l,
-            total_fuel_l: e.total_fuel_l,
+            trip_fuel_l: e.trip_fuel_l.value(),
+            total_fuel_l: e.total_fuel_l.value(),
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::FuelConsumption {
-            trip_fuel_l: self.trip_fuel_l,
-            total_fuel_l: self.total_fuel_l,
+            trip_fuel_l: py_signal(self.trip_fuel_l),
+            total_fuel_l: py_signal(self.total_fuel_l),
         }
         .encode()
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("FuelConsumption(total_fuel_l={:.1})", self.total_fuel_l)
+        format!("FuelConsumption(total_fuel_l={:?})", self.total_fuel_l)
     }
 }
 
@@ -712,9 +746,11 @@ impl PyFuelConsumption {
 #[pyclass(name = "Aftertreatment1", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAftertreatment1 {
-    pub def_tank_level: f64,
-    pub intake_nox_ppm: f64,
-    pub outlet_nox_ppm: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub def_tank_level: Option<f64>,
+    pub intake_nox_ppm: Option<f64>,
+    pub outlet_nox_ppm: Option<f64>,
     pub intake_nox_reading_status: u8,
     pub outlet_nox_reading_status: u8,
 }
@@ -722,11 +758,11 @@ pub struct PyAftertreatment1 {
 #[pymethods]
 impl PyAftertreatment1 {
     #[new]
-    #[pyo3(signature = (def_tank_level=0.0, intake_nox_ppm=0.0, outlet_nox_ppm=0.0, intake_nox_reading_status=0, outlet_nox_reading_status=0))]
+    #[pyo3(signature = (def_tank_level=None, intake_nox_ppm=None, outlet_nox_ppm=None, intake_nox_reading_status=0, outlet_nox_reading_status=0))]
     fn new(
-        def_tank_level: f64,
-        intake_nox_ppm: f64,
-        outlet_nox_ppm: f64,
+        def_tank_level: Option<f64>,
+        intake_nox_ppm: Option<f64>,
+        outlet_nox_ppm: Option<f64>,
         intake_nox_reading_status: u8,
         outlet_nox_reading_status: u8,
     ) -> Self {
@@ -741,18 +777,18 @@ impl PyAftertreatment1 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Aftertreatment1::decode(&data).map(|e| Self {
-            def_tank_level: e.def_tank_level,
-            intake_nox_ppm: e.intake_nox_ppm,
-            outlet_nox_ppm: e.outlet_nox_ppm,
+            def_tank_level: e.def_tank_level.value(),
+            intake_nox_ppm: e.intake_nox_ppm.value(),
+            outlet_nox_ppm: e.outlet_nox_ppm.value(),
             intake_nox_reading_status: e.intake_nox_reading_status,
             outlet_nox_reading_status: e.outlet_nox_reading_status,
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Aftertreatment1 {
-            def_tank_level: self.def_tank_level,
-            intake_nox_ppm: self.intake_nox_ppm,
-            outlet_nox_ppm: self.outlet_nox_ppm,
+            def_tank_level: py_signal(self.def_tank_level),
+            intake_nox_ppm: py_signal(self.intake_nox_ppm),
+            outlet_nox_ppm: py_signal(self.outlet_nox_ppm),
             intake_nox_reading_status: self.intake_nox_reading_status,
             outlet_nox_reading_status: self.outlet_nox_reading_status,
         }
@@ -760,7 +796,7 @@ impl PyAftertreatment1 {
         .to_vec()
     }
     fn __repr__(&self) -> String {
-        format!("Aftertreatment1(def_tank_level={:.1})", self.def_tank_level)
+        format!("Aftertreatment1(def_tank_level={:?})", self.def_tank_level)
     }
 }
 
@@ -768,9 +804,11 @@ impl PyAftertreatment1 {
 #[pyclass(name = "Aftertreatment2", get_all, set_all)]
 #[derive(Clone)]
 pub struct PyAftertreatment2 {
-    pub dpf_differential_pressure_kpa: f64,
-    pub def_concentration: f64,
-    pub dpf_soot_load_percent: f64,
+    /// `None` when the ECU reports the parameter as error or
+    /// not-available; one absent parameter no longer drops the PG (G4).
+    pub dpf_differential_pressure_kpa: Option<f64>,
+    pub def_concentration: Option<f64>,
+    pub dpf_soot_load_percent: Option<f64>,
     pub dpf_active_regeneration_status: u8,
     pub dpf_passive_regeneration_status: u8,
 }
@@ -778,11 +816,11 @@ pub struct PyAftertreatment2 {
 #[pymethods]
 impl PyAftertreatment2 {
     #[new]
-    #[pyo3(signature = (dpf_differential_pressure_kpa=0.0, def_concentration=0.0, dpf_soot_load_percent=0.0, dpf_active_regeneration_status=0, dpf_passive_regeneration_status=0))]
+    #[pyo3(signature = (dpf_differential_pressure_kpa=None, def_concentration=None, dpf_soot_load_percent=None, dpf_active_regeneration_status=0, dpf_passive_regeneration_status=0))]
     fn new(
-        dpf_differential_pressure_kpa: f64,
-        def_concentration: f64,
-        dpf_soot_load_percent: f64,
+        dpf_differential_pressure_kpa: Option<f64>,
+        def_concentration: Option<f64>,
+        dpf_soot_load_percent: Option<f64>,
         dpf_active_regeneration_status: u8,
         dpf_passive_regeneration_status: u8,
     ) -> Self {
@@ -797,18 +835,18 @@ impl PyAftertreatment2 {
     #[staticmethod]
     fn decode(data: Vec<u8>) -> Option<Self> {
         crate::j1939::Aftertreatment2::decode(&data).map(|e| Self {
-            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa,
-            def_concentration: e.def_concentration,
-            dpf_soot_load_percent: e.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: e.dpf_differential_pressure_kpa.value(),
+            def_concentration: e.def_concentration.value(),
+            dpf_soot_load_percent: e.dpf_soot_load_percent.value(),
             dpf_active_regeneration_status: e.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: e.dpf_passive_regeneration_status,
         })
     }
     fn encode(&self) -> Vec<u8> {
         crate::j1939::Aftertreatment2 {
-            dpf_differential_pressure_kpa: self.dpf_differential_pressure_kpa,
-            def_concentration: self.def_concentration,
-            dpf_soot_load_percent: self.dpf_soot_load_percent,
+            dpf_differential_pressure_kpa: py_signal(self.dpf_differential_pressure_kpa),
+            def_concentration: py_signal(self.def_concentration),
+            dpf_soot_load_percent: py_signal(self.dpf_soot_load_percent),
             dpf_active_regeneration_status: self.dpf_active_regeneration_status,
             dpf_passive_regeneration_status: self.dpf_passive_regeneration_status,
         }
@@ -817,7 +855,7 @@ impl PyAftertreatment2 {
     }
     fn __repr__(&self) -> String {
         format!(
-            "Aftertreatment2(dpf_soot_load_percent={:.1})",
+            "Aftertreatment2(dpf_soot_load_percent={:?})",
             self.dpf_soot_load_percent
         )
     }
@@ -985,6 +1023,7 @@ impl PyDtc {
             spn: self.spn,
             fmi: Fmi::from_u8(self.fmi),
             occurrence_count: self.occurrence_count,
+            conversion_method: false,
         }
     }
     fn from_rust(d: Dtc) -> Self {

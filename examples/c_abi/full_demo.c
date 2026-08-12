@@ -51,7 +51,7 @@ static size_t drain_transmit(MachbusSession *h) {
 }
 
 int main(void) {
-    if (machbus_session_abi_version() != 3) {
+    if (machbus_session_abi_version() != 5) {
         fprintf(stderr, "unexpected machbus C ABI version: %u\n",
                 machbus_session_abi_version());
         return 1;

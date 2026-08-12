@@ -318,6 +318,23 @@ mod tests {
         );
     }
 
+    /// `view::render` was never exercised at all. The drive TUI had a panic on
+    /// a standard 80x24 from drawing at fixed offsets without bounds checks, so
+    /// every TUI in the tool now has to prove it survives a cramped terminal
+    /// rather than only the author's.
+    #[test]
+    fn the_term_tui_renders_at_hostile_sizes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = TermApp::load(sample_args()).expect("load");
+        for (w, h) in [(110u16, 32u16), (80, 24), (40, 12), (20, 8)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| super::view::render(f, &mut app))
+                .unwrap_or_else(|e| panic!("term TUI at {w}x{h}: {e}"));
+        }
+    }
+
     #[test]
     fn switching_masks_re_renders() {
         let mut app = TermApp::load(sample_args()).expect("load");

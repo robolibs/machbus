@@ -7,8 +7,9 @@
 use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
 
 use super::objects::{
-    DDI, DeviceElement, DeviceElementType, DeviceObject, DeviceProcessData, DeviceProperty,
-    DeviceValuePresentation, ElementNumber, ObjectID, TCObjectType,
+    DDI, DDOP_VERSION_EXTENDED_STRUCTURE_LABEL, DeviceElement, DeviceElementType, DeviceObject,
+    DeviceProcessData, DeviceProperty, DeviceValuePresentation, ElementNumber, ObjectID,
+    TCObjectType,
 };
 use crate::net::error::{Error, ErrorCode, Result};
 
@@ -28,13 +29,23 @@ impl DDOP {
         self.allocate_next_id().unwrap_or(ObjectID::NULL)
     }
 
+    /// The single DeviceObject always lands on ObjectId 0.
+    ///
+    /// A.7 Figure A.1 labels the DeviceObject node `ObjectId = 0` and
+    /// `validate_object_hierarchy` enforces exactly that, so there is nothing
+    /// for the caller to choose. It used to fall into the shared auto-assign
+    /// path, where `id = 0` means "pick one": a C caller got the required id
+    /// only by the accident of `next_id` starting at 0 *and* calling
+    /// `add_device` first. Adding a value presentation or process-data object
+    /// first — natural, since process data references presentations — put the
+    /// device on ObjectId 1, `validate()` rejected the pool, and
+    /// `machbus_session_tc_connect` returned false with an opaque "DDOP
+    /// validation failed".
     pub fn add_device(&mut self, mut obj: DeviceObject) -> Result<ObjectID> {
         if obj.designator.is_empty() {
             return Err(Error::invalid_state("device designator is required"));
         }
-        if obj.id == 0 {
-            obj.id = self.allocate_next_id()?;
-        }
+        obj.id = ObjectID::from(0u16);
         let id = obj.id;
         self.devices.push(obj);
         Ok(id)
@@ -110,11 +121,25 @@ impl DDOP {
     /// non-ASCII and overlong strings instead of emitting payloads that cannot
     /// be decoded back into the same bytes.
     pub fn serialize(&self) -> Result<Vec<u8>> {
+        self.serialize_for_version(DDOP_VERSION_EXTENDED_STRUCTURE_LABEL - 1)
+    }
+
+    /// Serialize the pool for a negotiated DDOP `version`.
+    ///
+    /// Only the DeviceObject record differs between versions: A.2 adds the two
+    /// extended-structure-label attributes at version 4. Serializing a
+    /// version-3 DeviceObject while advertising version 4 shifts every field
+    /// after record byte 31+N+M+O, so a version-4 Task Controller cannot parse
+    /// the pool at all — no section control, no rate control, no logging.
+    ///
+    /// # Errors
+    /// Propagates text-field encoding and validation failures.
+    pub fn serialize_for_version(&self, version: u8) -> Result<Vec<u8>> {
         self.validate_serializable()?;
 
         let mut data = Vec::new();
         for d in &self.devices {
-            data.extend(d.serialize()?);
+            data.extend(d.serialize_for_version(version)?);
         }
         for e in &self.elements {
             data.extend(e.serialize()?);
@@ -131,6 +156,60 @@ impl DDOP {
         Ok(data)
     }
 
+    /// Enforce the Annex A.7 object hierarchy.
+    ///
+    /// A.7: "A device descriptor object pool shall contain only a single device
+    /// object and can have multiple DeviceElement, DeviceProcessData,
+    /// DeviceProperty, and DeviceValuePresentation objects." Figure A.1 labels
+    /// the DeviceObject node `ObjectId = 0`, and A.3 gives exactly one
+    /// DeviceElement of type `device`, numbered 0, as the root.
+    ///
+    /// None of this was checked, so every DDOP the crate built in its own tests
+    /// and examples — device at ObjectId 1, root element at 2 — validated
+    /// clean and was invalid on the wire.
+    fn validate_object_hierarchy(&self) -> Result<()> {
+        if self.devices.len() != 1 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.7: a DDOP shall contain exactly one DeviceObject",
+            ));
+        }
+        if self.devices[0].id != ObjectID::from(0u16) {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.7 Figure A.1: the DeviceObject has ObjectId 0",
+            ));
+        }
+
+        let roots: Vec<&DeviceElement> = self
+            .elements
+            .iter()
+            .filter(|e| matches!(e.r#type, DeviceElementType::Device))
+            .collect();
+        if roots.len() != 1 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.3: a DDOP shall contain exactly one DeviceElement of type device",
+            ));
+        }
+        if u16::from(roots[0].number) != 0 {
+            return Err(Error::with_message(
+                ErrorCode::PoolValidation,
+                "A.3: the device-type DeviceElement is element number 0",
+            ));
+        }
+
+        for elem in &self.elements {
+            if u16::from(elem.number) > crate::isobus::tc::server::MAX_PROCESS_DATA_ELEMENT_NUMBER {
+                return Err(Error::with_message(
+                    ErrorCode::PoolValidation,
+                    "element number exceeds the 12-bit process-data field",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Validate parent / child / presentation references.
     pub fn validate(&self) -> Result<()> {
         if self.devices.is_empty() {
@@ -143,6 +222,7 @@ impl DDOP {
         }
         self.validate_serializable()?;
         self.validate_unique_object_ids()?;
+        self.validate_object_hierarchy()?;
         for elem in &self.elements {
             if elem.parent_id == elem.id {
                 return Err(Error::with_message(
@@ -150,7 +230,10 @@ impl DDOP {
                     "element parent references itself",
                 ));
             }
-            if elem.parent_id != 0 {
+            // 0xFFFF is "no parent"; 0 is the DeviceObject, which is a
+            // perfectly ordinary parent for the root element. Treating 0 as the
+            // sentinel skipped validating exactly that reference.
+            if elem.parent_id != 0xFFFF {
                 match self.object_kind(elem.parent_id) {
                     Some(TCObjectType::Device | TCObjectType::DeviceElement) => {}
                     Some(_) => {
@@ -197,7 +280,6 @@ impl DDOP {
         }
         for pd in &self.process_data {
             if pd.presentation_object_id != 0xFFFF
-                && pd.presentation_object_id != 0
                 && !self.vp_exists(pd.presentation_object_id)
             {
                 return Err(Error::with_message(
@@ -360,38 +442,38 @@ impl DDOP {
         let mut ddop = Self::default();
         let mut offset = 0usize;
         while offset < data.len() {
-            if offset + 3 > data.len() {
+            // Record bytes 1-3 are the ASCII Table ID, 4-5 the object ID.
+            if offset + 5 > data.len() {
                 return Err(truncated_error());
             }
-            let obj_type_byte = data[offset];
-            let obj_id = ObjectID((data[offset + 1] as u16) | ((data[offset + 2] as u16) << 8));
-            offset += 3;
-            match obj_type_byte {
-                t if t == TCObjectType::Device.as_u8() => {
+            let Some(object_type) = TCObjectType::from_table_id(&data[offset..offset + 3]) else {
+                return Err(Error::with_message(
+                    ErrorCode::PoolValidation,
+                    "unknown TC object table ID in DDOP",
+                ));
+            };
+            let obj_id = ObjectID((data[offset + 3] as u16) | ((data[offset + 4] as u16) << 8));
+            offset += 5;
+            match object_type {
+                TCObjectType::Device => {
                     let dev = parse_device(data, &mut offset, obj_id)?;
                     ddop.devices.push(dev);
                 }
-                t if t == TCObjectType::DeviceElement.as_u8() => {
+                TCObjectType::DeviceElement => {
                     let e = parse_element(data, &mut offset, obj_id)?;
                     ddop.elements.push(e);
                 }
-                t if t == TCObjectType::DeviceProcessData.as_u8() => {
+                TCObjectType::DeviceProcessData => {
                     let pd = parse_process_data(data, &mut offset, obj_id)?;
                     ddop.process_data.push(pd);
                 }
-                t if t == TCObjectType::DeviceProperty.as_u8() => {
+                TCObjectType::DeviceProperty => {
                     let p = parse_property(data, &mut offset, obj_id)?;
                     ddop.properties.push(p);
                 }
-                t if t == TCObjectType::DeviceValuePresentation.as_u8() => {
+                TCObjectType::DeviceValuePresentation => {
                     let vp = parse_value_presentation(data, &mut offset, obj_id)?;
                     ddop.value_presentations.push(vp);
-                }
-                _ => {
-                    return Err(Error::with_message(
-                        ErrorCode::PoolValidation,
-                        "unknown TC object type in DDOP",
-                    ));
                 }
             }
             if obj_id >= ddop.next_id {
@@ -463,9 +545,9 @@ impl DDOP {
             for pd in &self.process_data {
                 if pd.id == cid {
                     xml.push_str(&format!(
-                        "      <DPD A=\"DPD-{}\" B=\"{}\" C=\"{}\" D=\"{}\"",
+                        "      <DPD A=\"DPD-{}\" B=\"{:04X}\" C=\"{}\" D=\"{}\"",
                         pd.id,
-                        pd.ddi,
+                        pd.ddi.raw(),
                         u32::from(pd.trigger_methods),
                         xml_escape(&pd.designator),
                     ));
@@ -539,17 +621,9 @@ fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
         return Err(truncated_error());
     }
     let bytes = &data[*offset..*offset + len];
-    if !bytes.iter().all(|b| b.is_ascii()) {
-        return Err(Error::with_message(
-            ErrorCode::PoolValidation,
-            "DDOP text contains unsupported non-ASCII bytes",
-        ));
-    }
     let s = core::str::from_utf8(bytes)
-        .map_err(|_| {
-            Error::with_message(ErrorCode::PoolValidation, "DDOP text is not valid UTF-8")
-        })?
-        .to_owned();
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect());
     *offset += len;
     Ok(s)
 }
@@ -557,6 +631,15 @@ fn read_string(data: &[u8], offset: &mut usize) -> Result<String> {
 fn parse_device(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceObject> {
     let designator = read_string(data, offset)?;
     let software_version = read_string(data, offset)?;
+    // ClientNAME (Table A.1): 8 bytes between the software version and the
+    // serial number.
+    if *offset + 8 > data.len() {
+        return Err(truncated_error());
+    }
+    let mut name_bytes = [0u8; 8];
+    name_bytes.copy_from_slice(&data[*offset..*offset + 8]);
+    let client_name = u64::from_le_bytes(name_bytes);
+    *offset += 8;
     let serial_number = read_string(data, offset)?;
     if *offset + 14 > data.len() {
         return Err(truncated_error());
@@ -567,13 +650,25 @@ fn parse_device(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceO
     let mut localization_label = [0u8; 7];
     localization_label.copy_from_slice(&data[*offset..*offset + 7]);
     *offset += 7;
+    // Version 4 appends a length-prefixed Extended Structure Label. A
+    // version-3 pool simply ends here, so its absence is not an error.
+    let mut extended_structure_label = Vec::new();
+    if *offset < data.len() {
+        let len = usize::from(data[*offset]);
+        if len <= 32 && *offset + 1 + len <= data.len() {
+            extended_structure_label.extend_from_slice(&data[*offset + 1..*offset + 1 + len]);
+            *offset += 1 + len;
+        }
+    }
     Ok(DeviceObject {
         id,
         designator,
         software_version,
+        client_name,
         serial_number,
         structure_label,
         localization_label,
+        extended_structure_label,
     })
 }
 
@@ -628,24 +723,47 @@ fn parse_element(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<Device
 }
 
 fn parse_process_data(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceProcessData> {
+    // DDI(2) + properties(1) + triggers(1) + designator length(1).
     if *offset + 5 > data.len() {
         return Err(truncated_error());
     }
     let ddi = DDI((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
+    if ddi.raw() == 0 || ddi.raw() == 0xFFFF {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP process data DDI 0 and 65535 are reserved NULL DDIs",
+        ));
+    }
     *offset += 2;
-    let trigger_methods = data[*offset];
+    // Table A.3 record byte 8.
+    let properties = data[*offset];
     *offset += 1;
+    let trigger_methods = data[*offset];
+    if trigger_methods & 0xE0 != 0 {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP trigger method reserved bits 5..7 must be zero",
+        ));
+    }
+    *offset += 1;
+    // Table A.3: the designator precedes the DVP reference.
+    let designator = read_string(data, offset)?;
+    if *offset + 2 > data.len() {
+        return Err(truncated_error());
+    }
     let presentation_object_id =
         ObjectID((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
     *offset += 2;
-    let designator = read_string(data, offset)?;
-    Ok(DeviceProcessData {
+    let process_data = DeviceProcessData {
         id,
         ddi,
+        properties,
         trigger_methods,
         presentation_object_id,
         designator,
-    })
+    };
+    process_data.validate_properties()?;
+    Ok(process_data)
 }
 
 fn parse_property(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<DeviceProperty> {
@@ -653,13 +771,23 @@ fn parse_property(data: &[u8], offset: &mut usize, id: ObjectID) -> Result<Devic
         return Err(truncated_error());
     }
     let ddi = DDI((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
+    if ddi.raw() == 0 || ddi.raw() == 0xFFFF {
+        return Err(Error::with_message(
+            ErrorCode::PoolValidation,
+            "DDOP property DDI 0 and 65535 are reserved NULL DDIs",
+        ));
+    }
     *offset += 2;
     let value = i32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap());
     *offset += 4;
+    // Table A.4: designator at record byte 13, DVP reference at 13+N.
+    let designator = read_string(data, offset)?;
+    if *offset + 2 > data.len() {
+        return Err(truncated_error());
+    }
     let presentation_object_id =
         ObjectID((data[*offset] as u16) | ((data[*offset + 1] as u16) << 8));
     *offset += 2;
-    let designator = read_string(data, offset)?;
     Ok(DeviceProperty {
         id,
         ddi,
@@ -716,17 +844,34 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
+/// Tables A.1-A.5 size every DDOP text field "0 to 128" bytes — the normative
+/// Range column, whose header is literally "Size bytes". The footnote records
+/// that this "was extended from 32 to 128 in ISO 11783-10 version 4".
+///
+/// The Description column of the same rows adds a second, looser statement:
+/// "The maximum number of characters of the designator is 32". Both are
+/// intended to hold at once — Annex A's preamble derives one from the other:
+/// "The maximum number of bytes per character of a UTF-8 coded string is
+/// 4 bytes. Therefore, the maximum length of the byte arrays is four times the
+/// length of the UTF-8 coded strings as specified in the corresponding XML
+/// definitions." 32 characters × 4 bytes = 128.
+///
+/// Only the byte limit is enforced here, because that is the normative range
+/// and it is what the one-byte length prefix counts. A 128-character ASCII
+/// designator therefore serializes even though it is four times the character
+/// guidance; keep designators to 32 characters if a strict TC is in scope.
+pub const DDOP_TEXT_MAX_BYTES: usize = 128;
+
+/// Validate a DDOP text field's *byte* length.
+///
+/// Annex A.1 codes these as BOM-less UTF-8, so non-ASCII is not merely allowed
+/// but expected — a localized designator or an "m³" unit is ordinary content.
+/// Rejecting it made those pools unserializable.
 fn validate_wire_text(field: &'static str, value: &str) -> Result<()> {
-    if value.len() > u8::MAX as usize {
+    if value.len() > DDOP_TEXT_MAX_BYTES {
         return Err(Error::with_message(
             ErrorCode::PoolValidation,
-            format!("{field} exceeds the DDOP one-byte text length limit"),
-        ));
-    }
-    if !value.is_ascii() {
-        return Err(Error::with_message(
-            ErrorCode::PoolValidation,
-            format!("{field} contains unsupported non-ASCII text"),
+            format!("{field} exceeds the {DDOP_TEXT_MAX_BYTES}-byte DDOP text limit"),
         ));
     }
     Ok(())
@@ -757,7 +902,7 @@ mod tests {
         DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("Sprayer")
                     .with_software_version("1.0")
                     .with_serial_number("SN1"),
@@ -789,11 +934,13 @@ mod tests {
 
     #[test]
     fn auto_id_allocator_skips_used_and_reserved_identifiers() {
+        // The DeviceObject is always ObjectId 0 (A.7 Figure A.1), so occupy
+        // 0xFFFE with an object that *is* auto-assignable.
         let mut ddop = DDOP {
             next_id: ObjectID(0xFFFE),
             ..Default::default()
         };
-        ddop.add_device(DeviceObject::default().with_id(0xFFFE).with_designator("X"))
+        ddop.add_element(DeviceElement::default().with_id(0xFFFE))
             .unwrap();
 
         let id = ddop.add_element(DeviceElement::default()).unwrap();
@@ -818,7 +965,7 @@ mod tests {
         assert!(ddop.validate().is_err());
 
         let ddop =
-            DDOP::default().with_device(DeviceObject::default().with_id(1).with_designator("D"));
+            DDOP::default().with_device(DeviceObject::default().with_id(0u16).with_designator("D"));
         assert!(ddop.validate().is_err()); // no elements
 
         let ddop = dummy_ddop();
@@ -828,7 +975,7 @@ mod tests {
     #[test]
     fn validate_catches_bad_parent_ref() {
         let ddop = DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(
                 DeviceElement::default().with_id(2).with_parent(999), // non-existent
             );
@@ -838,7 +985,7 @@ mod tests {
     #[test]
     fn validate_catches_bad_child_ref() {
         let ddop = DDOP::default()
-            .with_device(DeviceObject::default().with_id(1).with_designator("D"))
+            .with_device(DeviceObject::default().with_id(0u16).with_designator("D"))
             .with_element(DeviceElement::default().with_id(2).with_children(vec![999]));
         assert!(ddop.validate().is_err());
     }
@@ -848,7 +995,7 @@ mod tests {
         let original = DDOP::default()
             .with_device(
                 DeviceObject::default()
-                    .with_id(1)
+                    .with_id(0u16)
                     .with_designator("Sprayer")
                     .with_software_version("1.0")
                     .with_serial_number("SN-1234")
@@ -964,7 +1111,7 @@ mod tests {
         let ddop = dummy_ddop();
         let xml = ddop.to_isoxml();
         assert!(xml.starts_with("<?xml version=\"1.0\""));
-        assert!(xml.contains("<DVC A=\"DVC-1\""));
+        assert!(xml.contains("<DVC A=\"DVC-0\""));
         assert!(xml.contains("Sprayer"));
         assert!(xml.contains("</ISO11783_TaskData>"));
     }

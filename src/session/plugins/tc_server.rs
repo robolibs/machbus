@@ -2,9 +2,11 @@
 //! routes `PGN_ECU_TO_TC` and `PGN_WORKING_SET_MASTER`, broadcasts status on
 //! tick, and surfaces client/peer-control activity as [`TcServerEvent`].
 
-use crate::isobus::tc::{PeerControlAssignment, TCOutbound, TCServerConfig, TaskControllerServer};
+use crate::isobus::tc::{
+    PeerControlAssignment, ProcessDataCommands, TCOutbound, TCServerConfig, TaskControllerServer,
+};
 use crate::net::pgn_defs::{PGN_ECU_TO_TC, PGN_TC_TO_ECU, PGN_WORKING_SET_MASTER};
-use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Priority, Result};
+use crate::net::{BROADCAST_ADDRESS, Message, Pgn, Result};
 use crate::session::plugin::{Plugin, PluginCtx};
 use crate::session::sys::{Event, TcServerEvent};
 use crate::time::Instant;
@@ -43,11 +45,14 @@ impl TcServer {
     }
 
     fn ship(out: TCOutbound, ctx: &mut PluginCtx<'_>) {
+        // ISO 11783-10 B.2 sets the Process Data priority per command value,
+        // not per PG — see `ProcessDataCommands::priority`.
+        let priority = ProcessDataCommands::priority_for_payload(&out.data);
         ctx.send(
             out.pgn,
             out.data,
             out.dest.unwrap_or(BROADCAST_ADDRESS),
-            Priority::Default,
+            priority,
         );
     }
 
@@ -89,8 +94,7 @@ impl Plugin for TcServer {
 
     fn on_tick(&mut self, ctx: &mut PluginCtx<'_>) -> Option<Instant> {
         let now = ctx.now();
-        let elapsed = self.last_tick.map_or(0, |last| now.millis_since(last));
-        self.last_tick = Some(now);
+        let elapsed = crate::time::advance_millis(&mut self.last_tick, now);
 
         let measurements: Vec<_> = self
             .server
@@ -101,12 +105,8 @@ impl Plugin for TcServer {
             Self::ship(out, ctx);
         }
         if let Some(payload) = self.server.update(elapsed) {
-            ctx.send(
-                PGN_TC_TO_ECU,
-                payload.to_vec(),
-                BROADCAST_ADDRESS,
-                Priority::Default,
-            );
+            let priority = ProcessDataCommands::priority_for_payload(&payload);
+            ctx.send(PGN_TC_TO_ECU, payload.to_vec(), BROADCAST_ADDRESS, priority);
         }
         self.drain_events(ctx);
         None
@@ -133,6 +133,11 @@ fn wire_events(server: &mut TaskControllerServer, sink: &Rc<RefCell<Vec<TcServer
             s.borrow_mut()
                 .push(TcServerEvent::ClientVersionReceived { address, version });
         });
+    let s = sink.clone();
+    server.on_client_disconnected.subscribe(move |&address| {
+        s.borrow_mut()
+            .push(TcServerEvent::ClientDisconnected { address });
+    });
     let s = sink.clone();
     server
         .on_peer_control_assignment_received

@@ -13,7 +13,9 @@
 //! ```
 
 use super::Plugin;
-use super::plugins::{Diagnostics, Heartbeat, Implement, Powertrain, TcClient, VtClient};
+use super::plugins::{
+    AutoDrive, Diagnostics, Heartbeat, Implement, Powertrain, ShortcutButton, TcClient, VtClient,
+};
 use crate::isobus::tc::{DDOP, TCClientConfig};
 use crate::isobus::vt::{ObjectPool, VTClientConfig, WorkingSet};
 
@@ -36,6 +38,26 @@ pub fn implement(pool: ObjectPool, ws: WorkingSet, ddop: DDOP) -> Vec<Box<dyn Pl
     vec![
         Box::new(VtClient::new(VTClientConfig::default(), pool, ws)),
         Box::new(TcClient::new(TCClientConfig::default(), ddop)),
+        Box::new(Diagnostics::every(1000)),
+    ]
+}
+
+/// An autonomous vehicle controller: the combined [`AutoDrive`] steering and
+/// speed surface, the implement messages it reads speed and facilities from,
+/// the Auxiliary Shortcut Button it must obey, an ISO 11783-7 §8 heartbeat, and
+/// diagnostics.
+///
+/// The ISB and heartbeat are not optional extras here — they are the two
+/// mechanisms by which an operator and a peer respectively can tell this node
+/// to stop. Grouping them with `AutoDrive` means a caller cannot assemble an
+/// autonomy node that has no way of being stopped.
+#[must_use]
+pub fn autonomous_vehicle() -> Vec<Box<dyn Plugin>> {
+    vec![
+        Box::new(AutoDrive::new()),
+        Box::new(Implement::new()),
+        Box::new(ShortcutButton::new()),
+        Box::new(Heartbeat::every(100)),
         Box::new(Diagnostics::every(1000)),
     ]
 }

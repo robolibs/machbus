@@ -1,57 +1,11 @@
 //! ISO 11783-7 G-addendum guidance commands and status.
 //!
-//! Mirrors the C++ `machbus::isobus::implement::guidance.hpp`. Three
-//! 100 ms messages share the curvature scaling rule (0.25 km⁻¹/bit,
-//! offset −8032):
-//!
-//! - `PGN_GUIDANCE_CURVATURE_CMD` (0xFE46) — controller → steering system
-//! - `PGN_GUIDANCE_MACHINE_INFO` (0xAC00) — agricultural guidance machine info
-//! - `PGN_GUIDANCE_SYSTEM` (0xFE45) — controller status (readiness)
-//!
-//! The C++ `GuidanceCurvatureInterface` (IsoNet-coupled) is not
-//! ported.
+//! `PGN_GUIDANCE_MACHINE_INFO` (0xAC00) is the steering ECU's 100 ms
+//! broadcast. The commanded direction travels on `GuidanceSystemCmd`
+//! (PGN 0xAD00, in `drive_strategy.rs`); both share the curvature scaling
+//! rule (0.25 km⁻¹/bit, offset −8032).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u8)]
-pub enum SteeringReadiness {
-    NotReady = 0,
-    MechanicalReady = 1,
-    FullyReady = 2,
-    Error = 3,
-    #[default]
-    NotAvailable = 7,
-}
-
-impl SteeringReadiness {
-    #[must_use]
-    pub const fn from_u8(v: u8) -> Self {
-        match v & 0x07 {
-            0 => Self::NotReady,
-            1 => Self::MechanicalReady,
-            2 => Self::FullyReady,
-            3 => Self::Error,
-            _ => Self::NotAvailable,
-        }
-    }
-
-    #[must_use]
-    pub const fn try_from_u8(v: u8) -> Option<Self> {
-        match v {
-            0 => Some(Self::NotReady),
-            1 => Some(Self::MechanicalReady),
-            2 => Some(Self::FullyReady),
-            3 => Some(Self::Error),
-            7 => Some(Self::NotAvailable),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    pub const fn as_u8(self) -> u8 {
-        self as u8
-    }
-}
+use crate::isobus::implement::Signal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -230,9 +184,9 @@ const CURVATURE_RESOLUTION_PER_KM: f64 = 0.25;
 const CURVATURE_NOT_AVAILABLE_RAW: u16 = 0xFFFF;
 const CURVATURE_MAX_RAW: u16 = 0xFAFF;
 
-/// `true` if `curvature_per_km` lies within the encodable range, i.e. building a
-/// [`CurvatureCommand`] with it will not silently clamp the value. A non-finite
-/// value is out of range (it encodes as not-available).
+/// `true` if `curvature_per_km` lies within the encodable range, i.e. encoding
+/// it will not silently clamp the value. A non-finite value is out of range
+/// (it encodes as not-available).
 #[must_use]
 pub fn curvature_within_range(curvature_per_km: f64) -> bool {
     curvature_per_km.is_finite()
@@ -248,56 +202,46 @@ fn encode_curvature(curvature_per_km: f64) -> u16 {
     ((clamped + CURVATURE_OFFSET_PER_KM) / CURVATURE_RESOLUTION_PER_KM) as u16
 }
 
+/// Band SPN 1817 per ISO 11783-7 §5.2.4 Table 1 (16-bit row).
 #[inline]
-fn decode_curvature(raw: u16) -> Option<f64> {
-    if raw == CURVATURE_NOT_AVAILABLE_RAW || raw > CURVATURE_MAX_RAW {
-        None
-    } else {
-        Some(raw as f64 * CURVATURE_RESOLUTION_PER_KM - CURVATURE_OFFSET_PER_KM)
-    }
-}
-
-fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
-    data.len() == 8 && data[used..].iter().all(|&byte| byte == 0xFF)
-}
-
-/// Curvature command (PGN 0xFE46) — guidance controller → steering
-/// system. Curvature in 1/km.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct CurvatureCommand {
-    pub curvature: f64,
-    /// Reserved for implementation use. Not standardized on the wire.
-    pub curvature_rate: f64,
-}
-
-impl CurvatureCommand {
-    #[must_use]
-    pub fn encode(&self) -> [u8; 8] {
-        let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.curvature);
-        data[0] = (raw & 0xFF) as u8;
-        data[1] = ((raw >> 8) & 0xFF) as u8;
-        data
-    }
-
-    #[must_use]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_tail(data, 2) {
-            return None;
+fn decode_curvature(raw: u16) -> Signal<f64> {
+    match raw {
+        0..=CURVATURE_MAX_RAW => {
+            Signal::Value(f64::from(raw) * CURVATURE_RESOLUTION_PER_KM - CURVATURE_OFFSET_PER_KM)
         }
-        let raw = (data[0] as u16) | ((data[1] as u16) << 8);
-        Some(Self {
-            curvature: decode_curvature(raw)?,
-            curvature_rate: 0.0,
-        })
+        0xFE00..=0xFEFF => Signal::Error,
+        // Includes the reserved band: nothing meaningful to report.
+        _ => Signal::NotAvailable,
     }
+}
+
+/// A fixed 8-byte payload. The trailing undefined bytes are deliberately *not*
+/// checked: ISO 11783-7 §5.4 makes undefined bits and bytes "don't care" on
+/// receive so they can be assigned in a later revision without breaking
+/// deployed receivers. `used` is kept for documentation of the defined width.
+fn fixed8_with_ff_tail(data: &[u8], used: usize) -> bool {
+    let _ = used;
+    data.len() == 8
 }
 
 /// Agricultural guidance machine info (PGN 0xAC00) — steering ECU broadcast.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuidanceMachineInfo {
     /// 1/km, 0.25/km per bit offset −8032.
-    pub estimated_curvature: f64,
+    /// SPN 1817 estimated curvature.
+    ///
+    /// This used to be a plain `f64` and a not-available reading dropped the
+    /// **whole** PG — so the lockout, readiness, limit status and exit reason
+    /// went with it, and a steering ECU that simply was not steering read as a
+    /// dead link (G4).
+    ///
+    /// It is a `Signal` rather than an `Option` because ISO 11783-7 §5.2.4
+    /// keeps two outcomes apart that an `Option` collapses: the error band
+    /// (`FE00..=FEFF`) is the ECU *declaring a sensor or sub-system fault*,
+    /// while the not-available band (`FF00..=FFFF`) is an idle ECU that simply
+    /// does not populate the parameter. An autonomy supervisor has to treat a
+    /// faulted steering sensor differently from an idle one.
+    pub estimated_curvature: Signal<f64>,
     /// SPN 5243, bits 0..1 of byte 2.
     pub lockout: MechanicalLockout,
     /// SPN 5242, bits 2..3 of byte 2.
@@ -317,7 +261,7 @@ pub struct GuidanceMachineInfo {
 impl Default for GuidanceMachineInfo {
     fn default() -> Self {
         Self {
-            estimated_curvature: 0.0,
+            estimated_curvature: Signal::NotAvailable,
             lockout: MechanicalLockout::NotAvailable,
             steering_system_readiness_state: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
             steering_input_position_status: GenericSaeBs02SlotValue::NotAvailableTakeNoAction,
@@ -333,14 +277,26 @@ impl GuidanceMachineInfo {
     #[must_use]
     pub fn encode(&self) -> [u8; 8] {
         let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.estimated_curvature);
+        // Round-trip the distinction: a declared fault must not read back as
+        // an idle ECU.
+        let raw = match self.estimated_curvature {
+            Signal::Value(v) => encode_curvature(v),
+            Signal::Error => 0xFEFF,
+            Signal::NotAvailable => CURVATURE_NOT_AVAILABLE_RAW,
+        };
         data[0] = (raw & 0xFF) as u8;
         data[1] = ((raw >> 8) & 0xFF) as u8;
         data[2] = (self.lockout.as_u8() & 0x03)
             | ((self.steering_system_readiness_state.as_u8() & 0x03) << 2)
             | ((self.steering_input_position_status.as_u8() & 0x03) << 4)
             | ((self.request_reset_status.as_u8() & 0x03) << 6);
-        data[3] = (self.guidance_limit_status.as_u8() & 0x07) << 5;
+        // G3 — byte 4 bits 1-5 are reserved and transmitted as ones; this
+        // file's own decoder comment and its captured-frame test (byte 3 =
+        // 0xFF off a real tractor) both say so. Assigning the byte wholesale
+        // wiped them to zero, so `encode()` produced a frame no real ECU sends
+        // and a third-party client applying the pre-round-4 machbus rule
+        // discarded it.
+        data[3] = 0x1F | ((self.guidance_limit_status.as_u8() & 0x07) << 5);
         data[4] = (self.guidance_system_command_exit_reason_code & 0x3F)
             | ((self.remote_engage_switch_status.as_u8() & 0x03) << 6);
         data
@@ -351,12 +307,13 @@ impl GuidanceMachineInfo {
         if !fixed8_with_ff_tail(data, 5) {
             return None;
         }
-        if data[3] & 0x1F != 0 {
-            return None;
-        }
+        // Byte 3 bits 0..4 are reserved. Conformant ECUs transmit reserved bits
+        // as 1 (J1939 convention), so a real frame has byte 3 = 0xFF. Ignore
+        // these bits rather than rejecting the frame — only bits 5..7 (guidance
+        // limit status) carry meaning here.
         let raw = (data[0] as u16) | ((data[1] as u16) << 8);
         Some(Self {
-            estimated_curvature: decode_curvature(raw)?,
+            estimated_curvature: decode_curvature(raw),
             lockout: MechanicalLockout::try_from_u8(data[2] & 0x03)?,
             steering_system_readiness_state: GenericSaeBs02SlotValue::try_from_u8(
                 (data[2] >> 2) & 0x03,
@@ -372,56 +329,9 @@ impl GuidanceMachineInfo {
     }
 }
 
-/// System status (PGN 0xFE45) — guidance controller broadcast.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct GuidanceSystemStatus {
-    pub estimated_curvature: f64,
-    pub readiness: SteeringReadiness,
-    /// 2 bits: steering integrity (0 = lowest, 3 = N/A).
-    pub integrity_level: u8,
-}
-
-impl GuidanceSystemStatus {
-    #[must_use]
-    pub fn encode(&self) -> [u8; 8] {
-        let mut data = [0xFFu8; 8];
-        let raw = encode_curvature(self.estimated_curvature);
-        data[0] = (raw & 0xFF) as u8;
-        data[1] = ((raw >> 8) & 0xFF) as u8;
-        data[2] = (self.readiness.as_u8() & 0x07) | ((self.integrity_level & 0x03) << 4);
-        data
-    }
-
-    #[must_use]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        if !fixed8_with_ff_tail(data, 3) {
-            return None;
-        }
-        if data[2] & 0xC8 != 0 {
-            return None;
-        }
-        let raw = (data[0] as u16) | ((data[1] as u16) << 8);
-        Some(Self {
-            estimated_curvature: decode_curvature(raw)?,
-            readiness: SteeringReadiness::try_from_u8(data[2] & 0x07)?,
-            integrity_level: (data[2] >> 4) & 0x03,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn curvature_command_round_trip() {
-        let m = CurvatureCommand {
-            curvature: 0.5, // 1/km
-            curvature_rate: 0.0,
-        };
-        let decoded = CurvatureCommand::decode(&m.encode()).unwrap();
-        assert!((decoded.curvature - 0.5).abs() < 0.25);
-    }
 
     #[test]
     fn curvature_range_check_flags_out_of_range_and_nonfinite() {
@@ -436,9 +346,31 @@ mod tests {
     }
 
     #[test]
+    fn decodes_real_captured_machine_info_with_reserved_bits_set() {
+        // Real Agricultural Guidance Machine Info frames (PGN 0xAC00) captured
+        // off a tractor's ISOBUS. Reserved bits in bytes 3..7 are transmitted
+        // as 1 (byte 3 = 0xFF), per J1939 convention. The decoder must accept
+        // these frames — rejecting on the reserved bits blinds the guidance
+        // plugin to every real machine-info message.
+        let frame = [0x64, 0x7D, 0x3C, 0xFF, 0xC0, 0xFF, 0xFF, 0xFF];
+        let info =
+            GuidanceMachineInfo::decode(&frame).expect("a real captured GMS frame must decode");
+        assert!(
+            info.estimated_curvature
+                .value()
+                .is_some_and(|k| (k + 7.0).abs() < 0.25)
+        );
+        assert_eq!(info.lockout, MechanicalLockout::NotActive);
+        assert_eq!(
+            info.guidance_limit_status,
+            GuidanceLimitStatus::NotAvailable
+        );
+    }
+
+    #[test]
     fn machine_info_round_trip() {
         let m = GuidanceMachineInfo {
-            estimated_curvature: -2.5,
+            estimated_curvature: Signal::Value(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -448,7 +380,12 @@ mod tests {
             remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
         };
         let decoded = GuidanceMachineInfo::decode(&m.encode()).unwrap();
-        assert!((decoded.estimated_curvature - -2.5).abs() < 0.25);
+        assert!(
+            decoded
+                .estimated_curvature
+                .value()
+                .is_some_and(|k| (k + 2.5).abs() < 0.25)
+        );
         assert_eq!(decoded.lockout, MechanicalLockout::Active);
         assert_eq!(
             decoded.steering_system_readiness_state,
@@ -466,43 +403,19 @@ mod tests {
     }
 
     #[test]
-    fn system_status_round_trip() {
-        let m = GuidanceSystemStatus {
-            estimated_curvature: 1.0,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 2,
-        };
-        let decoded = GuidanceSystemStatus::decode(&m.encode()).unwrap();
-        assert_eq!(decoded.readiness, SteeringReadiness::FullyReady);
-        assert_eq!(decoded.integrity_level, 2);
-    }
-
-    #[test]
     fn short_payload_returns_none() {
-        assert!(CurvatureCommand::decode(&[0u8; 7]).is_none());
         assert!(GuidanceMachineInfo::decode(&[0u8; 7]).is_none());
-        assert!(GuidanceSystemStatus::decode(&[0u8; 7]).is_none());
     }
 
     #[test]
     fn overlong_payload_returns_none() {
-        assert!(CurvatureCommand::decode(&[0u8; 9]).is_none());
         assert!(GuidanceMachineInfo::decode(&[0u8; 9]).is_none());
-        assert!(GuidanceSystemStatus::decode(&[0u8; 9]).is_none());
     }
 
     #[test]
     fn fixed_size_decoders_reject_bad_padding_and_reserved_controls() {
-        let mut curvature_bad_tail = CurvatureCommand {
-            curvature: 0.5,
-            curvature_rate: 0.0,
-        }
-        .encode();
-        curvature_bad_tail[2] = 0x00;
-        assert!(CurvatureCommand::decode(&curvature_bad_tail).is_none());
-
         let mut machine_bad_tail = GuidanceMachineInfo {
-            estimated_curvature: -2.5,
+            estimated_curvature: Signal::Value(-2.5),
             lockout: MechanicalLockout::Active,
             steering_system_readiness_state: GenericSaeBs02SlotValue::EnabledOnActive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -512,45 +425,28 @@ mod tests {
             remote_engage_switch_status: GenericSaeBs02SlotValue::EnabledOnActive,
         }
         .encode();
+        // B6 / G3 — ISO 11783-7 §5.4: undefined trailing bytes are "don't care"
+        // on receive. This used to assert rejection.
         machine_bad_tail[5] = 0x00;
-        assert!(GuidanceMachineInfo::decode(&machine_bad_tail).is_none());
+        assert!(GuidanceMachineInfo::decode(&machine_bad_tail).is_some());
 
-        let mut machine_bad_reserved = machine_bad_tail;
-        machine_bad_reserved[5] = 0xFF;
-        machine_bad_reserved[3] |= 0x01;
-        assert!(GuidanceMachineInfo::decode(&machine_bad_reserved).is_none());
-
-        let mut status_bad_tail = GuidanceSystemStatus {
-            estimated_curvature: 1.0,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 2,
-        }
-        .encode();
-        status_bad_tail[3] = 0x00;
-        assert!(GuidanceSystemStatus::decode(&status_bad_tail).is_none());
-
-        let mut status_reserved_readiness = status_bad_tail;
-        status_reserved_readiness[3] = 0xFF;
-        status_reserved_readiness[2] = (2 << 4) | 4;
-        assert!(GuidanceSystemStatus::decode(&status_reserved_readiness).is_none());
-
-        let mut status_reserved_bits = status_reserved_readiness;
-        status_reserved_bits[2] = (2 << 4) | 2 | 0x08;
-        assert!(GuidanceSystemStatus::decode(&status_reserved_bits).is_none());
+        // Reserved bits in byte 3 set to 1 (as conformant ECUs transmit them)
+        // must be ignored, not rejected — the frame still decodes.
+        let mut machine_reserved_set = machine_bad_tail;
+        machine_reserved_set[5] = 0xFF;
+        machine_reserved_set[3] |= 0x01;
+        let decoded = GuidanceMachineInfo::decode(&machine_reserved_set)
+            .expect("reserved bits set to 1 must not reject the frame");
+        assert_eq!(
+            decoded.guidance_limit_status,
+            GuidanceLimitStatus::LimitedLow
+        );
     }
 
     #[test]
     fn curvature_encoding_clamps_and_rejects_not_available_sentinel() {
-        let low = CurvatureCommand {
-            curvature: f64::NEG_INFINITY,
-            curvature_rate: 0.0,
-        }
-        .encode();
-        assert_eq!(&low[..2], &CURVATURE_NOT_AVAILABLE_RAW.to_le_bytes());
-        assert!(CurvatureCommand::decode(&low).is_none());
-
         let high = GuidanceMachineInfo {
-            estimated_curvature: 1.0e9,
+            estimated_curvature: Signal::Value(1.0e9),
             lockout: MechanicalLockout::NotActive,
             steering_system_readiness_state: GenericSaeBs02SlotValue::DisabledOffPassive,
             steering_input_position_status: GenericSaeBs02SlotValue::DisabledOffPassive,
@@ -564,34 +460,12 @@ mod tests {
             GuidanceMachineInfo::decode(&high)
                 .unwrap()
                 .estimated_curvature,
-            CURVATURE_MAX_PER_KM
-        );
-
-        let low = GuidanceSystemStatus {
-            estimated_curvature: -1.0e9,
-            readiness: SteeringReadiness::FullyReady,
-            integrity_level: 0,
-        }
-        .encode();
-        assert_eq!(
-            GuidanceSystemStatus::decode(&low)
-                .unwrap()
-                .estimated_curvature,
-            CURVATURE_MIN_PER_KM
+            Signal::Value(CURVATURE_MAX_PER_KM)
         );
     }
 
     #[test]
     fn enums_round_trip() {
-        for r in [
-            SteeringReadiness::NotReady,
-            SteeringReadiness::MechanicalReady,
-            SteeringReadiness::FullyReady,
-            SteeringReadiness::Error,
-            SteeringReadiness::NotAvailable,
-        ] {
-            assert_eq!(SteeringReadiness::from_u8(r.as_u8()), r);
-        }
         for m in [
             MechanicalLockout::NotActive,
             MechanicalLockout::Active,
@@ -634,5 +508,54 @@ mod tests {
             assert_eq!(GuidanceLimitStatus::from_u8(reserved.as_u8()), reserved);
             assert_eq!(GuidanceLimitStatus::try_from_u8(reserved.as_u8()), None);
         }
+    }
+
+    /// H16/H63 — a steering system reporting its estimated curvature as
+    /// not-available is a normal state when it is not steering. Propagating
+    /// that with `?` dropped the **whole** PG, taking the mechanical lockout,
+    /// readiness, limit status and exit reason with it — so a steering fault
+    /// read as silence and the plugin saw a dead link instead of a report (G4).
+    #[test]
+    fn a_not_available_curvature_does_not_cost_the_rest_of_the_report() {
+        let mut data = [0xFFu8; 8];
+        data[0] = 0xFF;
+        data[1] = 0xFF; // curvature = not available
+        data[2] = 0b01_01_01_01;
+        data[3] = 0xFF; // limit status in bits 5..7 = 7
+        data[4] = 0x0A;
+
+        let info = GuidanceMachineInfo::decode(&data)
+            .expect("a not-available curvature must not drop the whole PG");
+        assert_eq!(
+            info.estimated_curvature,
+            Signal::NotAvailable,
+            "reported as absent"
+        );
+        assert_eq!(info.lockout, MechanicalLockout::try_from_u8(0x01).unwrap());
+        assert_eq!(info.guidance_system_command_exit_reason_code, 0x0A);
+
+        // And it survives a round trip as absent rather than becoming a value.
+        let reencoded = info.encode();
+        assert_eq!(
+            GuidanceMachineInfo::decode(&reencoded)
+                .unwrap()
+                .estimated_curvature,
+            Signal::NotAvailable
+        );
+
+        // C6 — the error band is a *declared fault*, not the same thing as an
+        // idle ECU that does not populate the parameter (§5.2.4). Collapsing
+        // both into `None` made a failed steering sensor invisible.
+        let mut faulted = data;
+        faulted[0..2].copy_from_slice(&0xFEFFu16.to_le_bytes());
+        let info = GuidanceMachineInfo::decode(&faulted).expect("still decodes");
+        assert_eq!(info.estimated_curvature, Signal::Error);
+        assert_eq!(
+            GuidanceMachineInfo::decode(&info.encode())
+                .unwrap()
+                .estimated_curvature,
+            Signal::Error,
+            "a declared fault must survive a round trip as a fault"
+        );
     }
 }

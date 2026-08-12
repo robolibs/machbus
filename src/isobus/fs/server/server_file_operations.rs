@@ -20,7 +20,8 @@ impl FileServer {
             open_files: Vec::new(),
             next_handle: 1,
             clients: BTreeMap::new(),
-            busy: false,
+            busy_reading: false,
+            busy_writing: false,
             status_timer_ms: 0,
             current_time_ms: 0,
             volume_state: StateMachine::new(VolumeState::Present),
@@ -235,13 +236,21 @@ impl FileServer {
         Some(self.broadcast_volume_status())
     }
 
-    pub fn set_busy(&mut self, busy: bool) {
-        self.busy = busy;
+    /// Declare a long read in progress. 4.3.3 has the status broadcast tell a
+    /// client to keep waiting past its 600 ms request timeout; without a
+    /// distinct writing flag a crate-hosted server could never say which.
+    pub const fn set_busy_reading(&mut self, busy: bool) {
+        self.busy_reading = busy;
+    }
+
+    /// Declare a long write or flush in progress (B.3 bit 1).
+    pub const fn set_busy_writing(&mut self, busy: bool) {
+        self.busy_writing = busy;
     }
 
     #[must_use]
     pub const fn is_busy(&self) -> bool {
-        self.busy
+        self.busy_reading || self.busy_writing
     }
 
     #[must_use]
@@ -276,7 +285,7 @@ impl FileServer {
         self.cleanup_disconnected_clients();
 
         self.status_timer_ms = self.status_timer_ms.saturating_add(elapsed_ms);
-        let interval = if self.busy {
+        let interval = if self.is_busy() {
             self.config.busy_status_interval_ms
         } else {
             self.config.status_broadcast_interval_ms
@@ -290,7 +299,8 @@ impl FileServer {
 
     fn broadcast_status(&self) -> FSOutbound {
         let status = FileServerStatus {
-            busy: self.busy,
+            busy_reading: self.busy_reading,
+            busy_writing: self.busy_writing,
             number_of_open_files: self.open_files.len() as u8,
         };
         FSOutbound::broadcast(status.encode().to_vec())
@@ -348,40 +358,44 @@ impl FileServer {
             return Vec::new();
         }
         let function = msg.data[0];
-        let tan = msg.data[1];
-        if tan == INVALID_TAN {
-            if function == CCM_FUNCTION_CODE {
+
+        // C.1.3 — command byte 0 from a client is a Client Connection
+        // Maintenance message. (The same byte from the server is the status
+        // broadcast, which never arrives here.) It carries no TAN.
+        if function == CCM_FUNCTION_CODE {
+            if CCMMessage::decode(&msg.data).is_none() {
                 return Vec::new();
             }
+            self.clients
+                .entry(msg.source)
+                .or_insert_with(|| ServerClientConnection::new(msg.source));
+            self.handle_ccm(msg.source);
+            return Vec::new();
+        }
+
+        let tan = msg.data[1];
+        if tan == INVALID_TAN {
             return vec![FSOutbound::to(
                 encode_error_response(function, tan, FSError::TANError),
                 msg.source,
             )];
         }
 
-        if function == CCM_FUNCTION_CODE {
-            if !fs_payload_len_is_canonical(&msg.data, 2) {
-                return Vec::new();
-            }
-            self.clients
-                .entry(msg.source)
-                .or_insert_with(|| ServerClientConnection::new(msg.source));
-            self.handle_ccm(msg.source, tan);
-            return Vec::new();
-        }
-
         self.clients
             .entry(msg.source)
             .or_insert_with(|| ServerClientConnection::new(msg.source));
 
-        // TAN cache hit → resend cached response. Per ISO 11783-13 a duplicate
-        // TAN is a retransmission and is replayed idempotently regardless of the
-        // request body (enforced by the standard test
-        // `file_server_replays_cached_tan_even_when_reused_for_different_operation`).
+        // TAN cache hit → resend the cached response, but only for a genuine
+        // retransmission: the same request, byte for byte. A TAN that has come
+        // back round to a *different* request is a new transaction, and
+        // replaying the old answer breaks Annex C's rule that a response
+        // carries the same command byte as its request — the client drops the
+        // mismatched reply and the operation is never performed.
         if let Some(cached) = self
             .clients
             .get(&msg.source)
             .and_then(|c| c.tan_cache.get(&tan))
+            .filter(|cached| cached.request_data == msg.data)
             .cloned()
         {
             return vec![FSOutbound::to(cached.response_data, msg.source)];
@@ -396,6 +410,7 @@ impl FileServer {
                     tan,
                     TANResponse {
                         tan,
+                        request_data: msg.data.clone(),
                         response_data: first.data.clone(),
                         timestamp_ms: self.current_time_ms,
                     },
@@ -411,6 +426,7 @@ impl FileServer {
                 tan,
                 TANResponse {
                     tan,
+                    request_data: msg.data.clone(),
                     response_data: response.clone(),
                     timestamp_ms: self.current_time_ms,
                 },
@@ -420,7 +436,7 @@ impl FileServer {
         vec![FSOutbound::to(response, msg.source)]
     }
 
-    fn handle_ccm(&mut self, client: Address, _tan: TAN) {
+    fn handle_ccm(&mut self, client: Address) {
         let timeout = self.config.ccm_timeout_ms;
         let now = self.current_time_ms;
         let was_connected = if let Some(c) = self.clients.get(&client) {
@@ -455,23 +471,22 @@ impl FileServer {
             FSFunction::WriteFile => self.handle_write_file(client, tan, request),
             FSFunction::SeekFile => self.handle_seek_file(client, tan, request),
             FSFunction::GetFileServerProperties => self.handle_get_properties(tan, request),
-            FSFunction::FileServerStatus => self.handle_get_status(tan, request),
             FSFunction::GetCurrentDirectory => {
                 self.handle_get_current_directory(client, tan, request)
             }
             FSFunction::ChangeDirectory => self.handle_change_directory(client, tan, request),
-            FSFunction::MakeDirectory => self.handle_make_directory(client, tan, request),
-            FSFunction::RemoveDirectory => self.handle_remove_directory(client, tan, request),
-            FSFunction::CopyFile => self.handle_copy_file(client, tan, request),
-            FSFunction::GetFileSize => self.handle_get_file_size(client, tan, request),
-            FSFunction::GetFreeSpace => self.handle_get_free_space(tan),
             FSFunction::MoveFile => self.handle_move_file(client, tan, request),
             FSFunction::DeleteFile => self.handle_delete_file(client, tan, request),
             FSFunction::GetFileAttributes => self.handle_get_file_attributes(client, tan, request),
             FSFunction::SetFileAttributes => self.handle_set_file_attributes(client, tan, request),
             FSFunction::GetFileDateTime => self.handle_get_file_date_time(client, tan, request),
             FSFunction::InitializeVolume => self.handle_initialize_volume(tan, request),
-            _ => encode_error_response(function_code, tan, FSError::NotSupported),
+            // The status broadcast is server-to-client only, and the CCM that
+            // shares its command byte was handled before dispatch; Volume
+            // Status has its own path in `handle_client_message`.
+            FSFunction::FileServerStatus | FSFunction::VolumeStatus => {
+                encode_error_response(function_code, tan, FSError::NotSupported)
+            }
         }
     }
 
@@ -506,24 +521,25 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::OpenFile, tan) {
             return response;
         }
-        if request.len() < 4 {
+        // C.3.2.2: byte 3 Flags, bytes 4-5 Path Name Length, bytes 6-n Name.
+        // The two used to be swapped and the length read as one byte, so a
+        // conformant request parsed as garbage in both fields.
+        if request.len() < 5 {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         }
-        let path_len = request[2] as usize;
-        let flags = request[3];
-        let used = 4 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
+        let flags = request[2];
+        let Some(path_bytes) = counted_path_bytes(request, 3, 5) else {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
-        }
-        let Some(requested_path) = decode_wire_path(&request[4..4 + path_len]) else {
+        };
+        let Some(requested_path) = decode_wire_path(path_bytes) else {
             return encode_error_response(
                 FSFunction::OpenFile.as_u8(),
                 tan,
@@ -540,7 +556,7 @@ impl FileServer {
         }
         let access_mode = get_access_mode(flags);
         let is_dir_listing = access_mode == OpenFlags::OpenDir.bit();
-        if is_dir_listing && !self.properties.supports_directories {
+        if is_dir_listing && !self.config.supports_directories {
             return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::NotSupported);
         }
         if has_flag(flags, OpenFlags::Append)
@@ -593,7 +609,7 @@ impl FileServer {
                 .min(self.properties.max_simultaneous_files),
         );
         if self.open_files.len() >= max_open_files_total {
-            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::MaxHandles);
+            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::TooManyOpen);
         }
 
         if is_dir_listing {
@@ -606,17 +622,37 @@ impl FileServer {
                     return encode_error_response(
                         FSFunction::OpenFile.as_u8(),
                         tan,
-                        FSError::WrongType,
+                        FSError::InvalidAccess,
                     );
                 }
-                return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::NotFound);
+                // C.3.2.2 — access mode "directory" plus the create flag is how
+                // a directory is created; ISO 11783-13 has no Make Directory
+                // command of its own.
+                if !has_flag(flags, OpenFlags::Create) {
+                    return encode_error_response(
+                        FSFunction::OpenFile.as_u8(),
+                        tan,
+                        FSError::NotFound,
+                    );
+                }
+                let parent = file_parent_directory_path(&dir_path);
+                if !self.directory_exists(&parent) {
+                    return encode_error_response(
+                        FSFunction::OpenFile.as_u8(),
+                        tan,
+                        FSError::NotFound,
+                    );
+                }
+                self.directories.push(dir_path.clone());
+                self.file_date_times
+                    .insert(dir_path, default_file_date_time());
             }
         } else {
             if self.is_file_path_directory(&path) {
                 return encode_error_response(
                     FSFunction::OpenFile.as_u8(),
                     tan,
-                    FSError::WrongType,
+                    FSError::InvalidAccess,
                 );
             }
             let exists = self.files.contains_key(&path);
@@ -649,7 +685,7 @@ impl FileServer {
                         return encode_error_response(
                             FSFunction::OpenFile.as_u8(),
                             tan,
-                            FSError::WrongType,
+                            FSError::InvalidAccess,
                         );
                     }
                     return encode_error_response(
@@ -682,7 +718,7 @@ impl FileServer {
 
         let handle = self.allocate_handle();
         if handle == INVALID_FILE_HANDLE {
-            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::MaxHandles);
+            return encode_error_response(FSFunction::OpenFile.as_u8(), tan, FSError::TooManyOpen);
         }
         self.open_files.push(OpenFile {
             handle,
@@ -953,14 +989,14 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::SeekFile, tan) {
             return response;
         }
-        if request.len() < 7 {
-            return encode_error_response(
-                FSFunction::SeekFile.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
-        if !fs_payload_len_is_canonical(request, 7) {
+        // C.3.3.2: byte 3 Handle, byte 4 Position Mode (B.17), bytes 5-8 a
+        // *signed* 32-bit Offset. The handler used to read a 7-byte request
+        // with an unsigned offset starting at byte 3, so it swallowed the mode
+        // byte as the offset's low byte: "seek 0 from the current position"
+        // (mode 1, offset 0) became an absolute seek to byte 1, and a rewind
+        // became a ~4 GB position. Nothing was range-checked and the new
+        // position was never returned, so bytes 5-8 read back as 0xFFFFFFFF.
+        if !fs_payload_len_is_canonical(request, SEEK_FILE_REQUEST_LEN) {
             return encode_error_response(
                 FSFunction::SeekFile.as_u8(),
                 tan,
@@ -968,27 +1004,67 @@ impl FileServer {
             );
         }
         let handle = request[2];
-        let position = u32::from_le_bytes(request[3..7].try_into().unwrap());
-        if let Some(f) = self
+        let mode = request[3];
+        let offset = i64::from(i32::from_le_bytes(
+            request[4..8].try_into().expect("validated 4-byte offset"),
+        ));
+
+        let Some(file) = self
             .open_files
-            .iter_mut()
+            .iter()
             .find(|f| f.handle == handle && f.owner == client)
-        {
-            if f.is_directory {
+        else {
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle);
+        };
+        if file.is_directory {
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle);
+        }
+        let position = i64::from(file.position);
+        let end = i64::from(self.files.get(&file.path).map_or(0, |d| {
+            u32::try_from(d.len()).unwrap_or(u32::MAX)
+        }));
+
+        let base = match mode {
+            SEEK_MODE_FROM_START => 0,
+            SEEK_MODE_FROM_CURRENT => position,
+            SEEK_MODE_FROM_END => end,
+            // B.17 leaves 3-255 reserved.
+            _ => {
                 return encode_error_response(
                     FSFunction::SeekFile.as_u8(),
                     tan,
-                    FSError::InvalidHandle,
+                    FSError::InvalidAccess,
                 );
             }
-            f.position = position;
-            let mut response = vec![0xFFu8; 8];
-            response[0] = FSFunction::SeekFile.as_u8();
-            response[1] = tan;
-            response[2] = FSError::Success.as_u8();
-            return response;
+        };
+        let target = base + offset;
+
+        // C.3.3.1: past the end (unless already there) or before the start is
+        // an invalid request length, and the pointer stays put on any error.
+        if target < 0 || target > end {
+            let error = if position == end && target > end {
+                FSError::EndOfFile
+            } else {
+                FSError::InvalidLength
+            };
+            return encode_error_response(FSFunction::SeekFile.as_u8(), tan, error);
         }
-        encode_error_response(FSFunction::SeekFile.as_u8(), tan, FSError::InvalidHandle)
+        let target = u32::try_from(target).expect("target is within 0..=end");
+
+        let file = self
+            .open_files
+            .iter_mut()
+            .find(|f| f.handle == handle && f.owner == client)
+            .expect("handle was just resolved");
+        file.position = target;
+
+        // C.3.3.3: byte 4 reserved, bytes 5-8 the resulting Position.
+        let mut response = vec![0xFFu8; 8];
+        response[0] = FSFunction::SeekFile.as_u8();
+        response[1] = tan;
+        response[2] = FSError::Success.as_u8();
+        response[4..8].copy_from_slice(&target.to_le_bytes());
+        response
     }
 
     fn handle_get_properties(&self, tan: TAN, request: &[u8]) -> Vec<u8> {
@@ -999,42 +1075,7 @@ impl FileServer {
                 FSError::MalformedRequest,
             );
         }
-        let props_data = self.properties.encode();
-        let mut response = vec![0xFFu8; 8];
-        response[0] = FSFunction::GetFileServerProperties.as_u8();
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        for (i, &b) in props_data.iter().enumerate() {
-            if i + 3 < response.len() {
-                response[3 + i] = b;
-            }
-        }
-        response
-    }
-
-    fn handle_get_status(&self, tan: TAN, request: &[u8]) -> Vec<u8> {
-        if !fs_payload_len_is_canonical(request, 2) {
-            return encode_error_response(
-                FSFunction::FileServerStatus.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
-        let status = FileServerStatus {
-            busy: self.busy,
-            number_of_open_files: self.open_files.len() as u8,
-        };
-        let status_data = status.encode();
-        let mut response = vec![0xFFu8; 8];
-        response[0] = FSFunction::FileServerStatus.as_u8();
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        for (i, &b) in status_data.iter().enumerate() {
-            if i + 3 < response.len() {
-                response[3 + i] = b;
-            }
-        }
-        response
+        self.properties.encode_response(tan).to_vec()
     }
 
     fn handle_get_current_directory(&self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
@@ -1049,7 +1090,7 @@ impl FileServer {
                 FSError::MalformedRequest,
             );
         }
-        if !self.properties.supports_directories {
+        if !self.config.supports_directories {
             return encode_error_response(
                 FSFunction::GetCurrentDirectory.as_u8(),
                 tan,
@@ -1068,12 +1109,20 @@ impl FileServer {
                 FSError::InvalidLength,
             );
         }
-        let mut response = vec![0u8; 4 + cwd_bytes.len()];
+        // C.2.2.3: bytes 4-7 Total Space, bytes 8-11 Free Space (both B.11, in
+        // 512-byte units), bytes 12,13 Path Name Length, bytes 14-n the path.
+        // The response used to stop after a one-byte length at byte 4, so a
+        // conformant client read the first characters of the path as the
+        // volume's capacity — and, since free space is reported nowhere else,
+        // could not tell whether a task log would fit before writing it.
+        let mut response = vec![0u8; 13 + cwd_bytes.len()];
         response[0] = FSFunction::GetCurrentDirectory.as_u8();
         response[1] = tan;
         response[2] = FSError::Success.as_u8();
-        response[3] = cwd_bytes.len() as u8;
-        response[4..].copy_from_slice(cwd_bytes);
+        response[3..7].copy_from_slice(&fs_space_blocks(self.volume_capacity_bytes).to_le_bytes());
+        response[7..11].copy_from_slice(&fs_space_blocks(self.free_bytes()).to_le_bytes());
+        response[11..13].copy_from_slice(&(cwd_bytes.len() as u16).to_le_bytes());
+        response[13..].copy_from_slice(cwd_bytes);
         response
     }
 
@@ -1081,30 +1130,22 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::ChangeDirectory, tan) {
             return response;
         }
-        if request.len() < 3 {
+        // C.2.3.2: bytes 3,4 Path Name Length; bytes 5-n Path Name.
+        let Some(path_bytes) = counted_path_bytes(request, 2, 4) else {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(
-                FSFunction::ChangeDirectory.as_u8(),
-                tan,
-                FSError::MalformedRequest,
-            );
-        }
-        if !self.properties.supports_directories {
+        };
+        if !self.config.supports_directories {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
                 FSError::NotSupported,
             );
         }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
+        let Some(requested_path) = decode_wire_path(path_bytes) else {
             return encode_error_response(
                 FSFunction::ChangeDirectory.as_u8(),
                 tan,
@@ -1152,7 +1193,7 @@ impl FileServer {
                     return encode_error_response(
                         FSFunction::ChangeDirectory.as_u8(),
                         tan,
-                        FSError::WrongType,
+                        FSError::InvalidAccess,
                     );
                 }
                 return encode_error_response(
@@ -1175,103 +1216,11 @@ impl FileServer {
         response
     }
 
-    fn handle_make_directory(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::MakeDirectory.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::MakeDirectory, tan) {
-            return response;
-        }
-        if request.len() < 3 {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        if !self.properties.supports_directories {
-            return encode_error_response(func, tan, FSError::NotSupported);
-        }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Ok(target_path) = normalize_directory_path(&requested_path, current_directory) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        // A file already occupies the path ⇒ wrong type; an existing directory
-        // is an idempotent success; otherwise create it.
-        if self.file_exists_at_directory_path(&target_path) {
-            return encode_error_response(func, tan, FSError::WrongType);
-        }
-        if !self.directories.iter().any(|d| d == &target_path) {
-            self.directories.push(target_path);
-        }
-        let mut response = vec![0xFFu8; 8];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response
-    }
-
-    fn handle_remove_directory(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::RemoveDirectory.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::RemoveDirectory, tan) {
-            return response;
-        }
-        if request.len() < 3 {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        let path_len = request[2] as usize;
-        let used = 3 + path_len;
-        if !fs_payload_len_is_canonical(request, used) {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        }
-        if !self.properties.supports_directories {
-            return encode_error_response(func, tan, FSError::NotSupported);
-        }
-        let Some(requested_path) = decode_wire_path(&request[3..3 + path_len]) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Ok(target_path) = normalize_directory_path(&requested_path, current_directory) else {
-            return encode_error_response(func, tan, FSError::InvalidSourceName);
-        };
-        // Cannot remove the root, a non-existent directory, or a non-empty one.
-        if target_path == "\\" {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        if !self.directories.iter().any(|d| d == &target_path) {
-            return encode_error_response(func, tan, FSError::NotFound);
-        }
-        // `target_path` already ends with the directory separator, so it is the
-        // child prefix. A child file or sub-directory ⇒ not empty.
-        let non_empty = self.files.keys().any(|f| f.starts_with(&target_path))
-            || self
-                .directories
-                .iter()
-                .any(|d| d != &target_path && d.starts_with(&target_path));
-        if non_empty {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        self.directories.retain(|d| d != &target_path);
-        let mut response = vec![0xFFu8; 8];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response
-    }
-
     fn handle_move_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::MoveFile, tan) {
             return response;
         }
-        if !self.properties.supports_move_file {
+        if !self.config.supports_move_file {
             return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::NotSupported);
         }
         let current_directory = self
@@ -1295,7 +1244,7 @@ impl FileServer {
             );
         }
         if self.is_file_path_directory(&source_path) {
-            return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::WrongType);
+            return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::InvalidAccess);
         }
         if self.is_path_open(&source_path) || self.is_path_open(&destination_path) {
             return encode_error_response(FSFunction::MoveFile.as_u8(), tan, FSError::AccessDenied);
@@ -1309,7 +1258,7 @@ impl FileServer {
                 return encode_error_response(
                     FSFunction::MoveFile.as_u8(),
                     tan,
-                    FSError::WrongType,
+                    FSError::InvalidAccess,
                 );
             }
             return encode_error_response(
@@ -1339,96 +1288,11 @@ impl FileServer {
         success_response(FSFunction::MoveFile, tan)
     }
 
-    fn handle_get_free_space(&self, tan: TAN) -> Vec<u8> {
-        let func = FSFunction::GetFreeSpace.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFreeSpace, tan) {
-            return response;
-        }
-        let total = u32::try_from(self.volume_capacity_bytes).unwrap_or(u32::MAX);
-        let free = u32::try_from(self.free_bytes()).unwrap_or(u32::MAX);
-        let mut response = vec![0xFFu8; 11];
-        response[0] = func;
-        response[1] = tan;
-        response[2] = FSError::Success.as_u8();
-        response[3..7].copy_from_slice(&total.to_le_bytes());
-        response[7..11].copy_from_slice(&free.to_le_bytes());
-        response
-    }
-
-    fn handle_get_file_size(&self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::GetFileSize.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFileSize, tan) {
-            return response;
-        }
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path(request, 2, current_directory) else {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        };
-        let Some(data) = self.files.get(&path) else {
-            if self.directory_exists(&path) {
-                return encode_error_response(func, tan, FSError::WrongType);
-            }
-            return encode_error_response(func, tan, FSError::NotFound);
-        };
-        let size = u32::try_from(data.len()).unwrap_or(u32::MAX);
-        let mut response = success_response(FSFunction::GetFileSize, tan);
-        response[3..7].copy_from_slice(&size.to_le_bytes());
-        response
-    }
-
-    fn handle_copy_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
-        let func = FSFunction::CopyFile.as_u8();
-        if let Some(response) = self.reject_if_volume_removed(FSFunction::CopyFile, tan) {
-            return response;
-        }
-        let current_directory = self
-            .clients
-            .get(&client)
-            .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some((source_path, destination_path)) =
-            parse_two_counted_file_paths(request, current_directory)
-        else {
-            return encode_error_response(func, tan, FSError::MalformedRequest);
-        };
-        if source_path == destination_path {
-            return encode_error_response(func, tan, FSError::InvalidDestName);
-        }
-        if self.is_file_path_directory(&source_path) {
-            return encode_error_response(func, tan, FSError::WrongType);
-        }
-        let Some(data) = self.files.get(&source_path).cloned() else {
-            return encode_error_response(func, tan, FSError::NotFound);
-        };
-        if self.files.contains_key(&destination_path) || self.directory_exists(&destination_path) {
-            return encode_error_response(func, tan, FSError::AccessDenied);
-        }
-        let destination_parent = file_parent_directory_path(&destination_path);
-        if !self.directory_exists(&destination_parent) {
-            if self.file_exists_at_directory_path(&destination_parent) {
-                return encode_error_response(func, tan, FSError::WrongType);
-            }
-            return encode_error_response(func, tan, FSError::InvalidDestName);
-        }
-        let attrs = self.file_attrs.get(&source_path).copied().unwrap_or(0);
-        let date_time = self
-            .file_date_times
-            .get(&source_path)
-            .copied()
-            .unwrap_or_else(default_file_date_time);
-        self.files.insert(destination_path.clone(), data);
-        self.file_attrs.insert(destination_path.clone(), attrs);
-        self.file_date_times.insert(destination_path, date_time);
-        success_response(FSFunction::CopyFile, tan)
-    }
-
     fn handle_delete_file(&mut self, client: Address, tan: TAN, request: &[u8]) -> Vec<u8> {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::DeleteFile, tan) {
             return response;
         }
-        if !self.properties.supports_delete_file {
+        if !self.config.supports_delete_file {
             return encode_error_response(
                 FSFunction::DeleteFile.as_u8(),
                 tan,
@@ -1439,15 +1303,40 @@ impl FileServer {
             .clients
             .get(&client)
             .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path(request, 2, current_directory) else {
+        let Some(path) = parse_counted_file_or_directory_path(request, 2, current_directory) else {
             return encode_error_response(
                 FSFunction::DeleteFile.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         };
+        // C.4.3 Delete File removes directories too; there is no Remove
+        // Directory command. A directory must be empty and must not be the
+        // volume root.
         if self.is_file_path_directory(&path) {
-            return encode_error_response(FSFunction::DeleteFile.as_u8(), tan, FSError::WrongType);
+            let directory = ensure_directory_suffix(path);
+            if directory == "\\" {
+                return encode_error_response(
+                    FSFunction::DeleteFile.as_u8(),
+                    tan,
+                    FSError::AccessDenied,
+                );
+            }
+            let non_empty = self.files.keys().any(|f| f.starts_with(&directory))
+                || self
+                    .directories
+                    .iter()
+                    .any(|d| d != &directory && d.starts_with(&directory));
+            if non_empty {
+                return encode_error_response(
+                    FSFunction::DeleteFile.as_u8(),
+                    tan,
+                    FSError::AccessDenied,
+                );
+            }
+            self.directories.retain(|d| d != &directory);
+            self.file_date_times.remove(&directory);
+            return success_response(FSFunction::DeleteFile, tan);
         }
         if self.is_path_open(&path) {
             return encode_error_response(
@@ -1479,7 +1368,7 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::GetFileAttributes, tan) {
             return response;
         }
-        if !self.properties.supports_file_attributes {
+        if !self.config.supports_file_attributes {
             return encode_error_response(
                 FSFunction::GetFileAttributes.as_u8(),
                 tan,
@@ -1517,26 +1406,25 @@ impl FileServer {
         if let Some(response) = self.reject_if_volume_removed(FSFunction::SetFileAttributes, tan) {
             return response;
         }
-        if !self.properties.supports_file_attributes {
+        if !self.config.supports_file_attributes {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
                 FSError::NotSupported,
             );
         }
-        if request.len() < 4 {
+        // C.4.5, laid out like Open File: byte 3 the operand, bytes 4,5 the
+        // B.12 Path Name Length, bytes 6-n the name.
+        if request.len() < 5 {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
                 FSError::MalformedRequest,
             );
         }
-        let new_attrs = request[3];
+        let new_attrs = request[2];
         if new_attrs
-            & !(FileAttributes::ReadOnly.bit()
-                | FileAttributes::Hidden.bit()
-                | FileAttributes::System.bit()
-                | FileAttributes::Archive.bit())
+            & !FILE_ATTRIBUTES_CLIENT_SETTABLE
             != 0
         {
             return encode_error_response(
@@ -1549,7 +1437,7 @@ impl FileServer {
             .clients
             .get(&client)
             .map_or("\\", |conn| conn.current_directory.as_str());
-        let Some(path) = parse_counted_file_path_with_count_at(request, 2, 4, current_directory)
+        let Some(path) = parse_counted_file_path_with_count_at(request, 3, 5, current_directory)
         else {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
@@ -1561,7 +1449,7 @@ impl FileServer {
             return encode_error_response(
                 FSFunction::SetFileAttributes.as_u8(),
                 tan,
-                FSError::WrongType,
+                FSError::InvalidAccess,
             );
         }
         if !self.files.contains_key(&path) {
@@ -1651,12 +1539,19 @@ impl FileServer {
         if request.len() < 5 {
             return error();
         }
-        let mode = request[2];
-        if mode & VOLUME_MODE_RESERVED_MASK != 0
-            || mode == (VOLUME_MODE_MAINTAIN | VOLUME_MODE_PREPARE_REMOVAL)
-        {
-            return error();
-        }
+        // B.30 makes bits 7-2 "Reserved, send as 000000", which binds the
+        // sender. Rejecting a request because a reserved bit is set binds the
+        // receiver too, and nothing in ISO 11783-13 says that: §4.9 scopes
+        // Error Code 47 to a message "which is shorter than expected". Masking
+        // is what keeps a later FS revision that defines bit 2 from being
+        // refused outright here — ISO 11783-7 §5.4, "All undefined bits should
+        // be received as 'don't care' (either masked out or ignored). This
+        // permits them to be defined and used in the future without causing
+        // any incompatibilities."
+        //
+        // The contradictory combination (maintain *and* prepare-for-removal)
+        // still falls through to the catch-all arm below.
+        let mode = request[2] & !VOLUME_MODE_RESERVED_MASK;
         let path_len = u16::from_le_bytes([request[3], request[4]]) as usize;
         let used = 5 + path_len;
         if !fs_payload_len_is_canonical(request, used) {
@@ -1710,7 +1605,7 @@ impl FileServer {
     }
 
     fn handle_initialize_volume(&mut self, tan: TAN, request: &[u8]) -> Vec<u8> {
-        if !self.properties.supports_volume_management {
+        if !self.config.supports_volume_management {
             return encode_error_response(
                 FSFunction::InitializeVolume.as_u8(),
                 tan,

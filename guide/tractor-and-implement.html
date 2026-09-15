@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -259,21 +259,7 @@ bus, repeat until claimed. This is exactly the <code>claim</code> anchor in the 
 example:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.is_claimed()</code> and <code>ctrl.address()</code> tell you where the node landed.
 Everything you learned about the loop still applies; the preset just rides on top

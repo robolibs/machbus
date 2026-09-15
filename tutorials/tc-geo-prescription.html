@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -316,80 +316,21 @@ prints the rate at each step. First, the map — two square zones, one at rate 1
 to the south and one at rate 200 to the north:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    tc.add_prescription_map(PrescriptionMap {
-        structure_label: "demo-map".to_string(),
-        zones: vec![
-            PrescriptionZone {
-                boundary: vec![
-                    Wgs::new(52.0, 4.0, 0.0),
-                    Wgs::new(52.0, 4.001, 0.0),
-                    Wgs::new(52.001, 4.001, 0.0),
-                    Wgs::new(52.001, 4.0, 0.0),
-                ],
-                holes: Vec::new(),
-                application_rate: 100,
-            },
-            PrescriptionZone {
-                boundary: vec![
-                    Wgs::new(52.001, 4.0, 0.0),
-                    Wgs::new(52.001, 4.001, 0.0),
-                    Wgs::new(52.002, 4.001, 0.0),
-                    Wgs::new(52.002, 4.0, 0.0),
-                ],
-                holes: Vec::new(),
-                application_rate: 200,
-            },
-        ],
-    });
+</span>{{#include ../../../examples/tc_geo_demo.rs:17:41}}
 <span class="boring">}</span></code></pre>
 <p>Then it subscribes to rate changes and walks four positions — into the south
 zone, onto the shared boundary, into the north zone, and off the map entirely —
 looking up both the raw rate and the engineering value at each:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Drive a 3-point trajectory through the field.
-    for (label, pos) in [
-        ("south zone   ", Wgs::new(52.0005, 4.0005, 0.0)),
-        ("between zones", Wgs::new(52.001, 4.0005, 0.0)),
-        ("north zone   ", Wgs::new(52.0015, 4.0005, 0.0)),
-        ("outside      ", Wgs::new(53.0, 5.0, 0.0)),
-    ] {
-        tc.set_position(GeoPoint {
-            position: pos,
-            timestamp_us: 0,
-        });
-        tc.update(0);
-        let rate = tc.get_rate_at_position(pos);
-        let rate_eng = tc
-            .get_rate_at_position_engineering(
-                pos,
-                DDI(ddi::SETPOINT_VOLUME_PER_AREA_APPLICATION_RATE),
-            )
-            .unwrap();
-        println!(
-            "  {label}: lat={:.4} lon={:.4} → raw={:?}, mm³/m²={:?}",
-            pos.latitude, pos.longitude, rate, rate_eng
-        );
-    }
-    println!("\n[events] rate transitions observed: {:?}", log.borrow());
+</span>{{#include ../../../examples/tc_geo_demo.rs:53:77}}
 <span class="boring">}</span></code></pre>
 <p>The “outside” point returns <code>None</code> from <code>get_rate_at_position</code>, which is the
 no-zone case your default policy handles. Finally it records a position and emits
 the two position process-data payloads for the controller:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Position reaches the TC over PGN_GNSS_POSITION. It used to be sent as
-    // Process Data under DDI 0x0087/0x0088, which the ISO 11783-11 dictionary
-    // assigns to Device Element Offset Y and Z in millimetres — a latitude of
-    // 52 degrees told the TC the element sat 520 km off the datum.
-    let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
-    let mut tc2 = TCGEOInterface::new();
-    tc2.set_position(GeoPoint {
-        position: position_pos,
-        timestamp_us: 0,
-    });
-    println!(
-        "\n[state] TC-GEO position: {:?}",
+</span>{{#include ../../../examples/tc_geo_demo.rs:79:90}}
 <span class="boring">}</span></code></pre>
 <p>The whole flow runs in software with no bus: you load a map, set a position,
 call <code>update</code>, and read the rate.</p>

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -341,33 +341,10 @@ the line that follows it.</p>
 <h2 id="doing-it-with-machbus"><a class="header" href="#doing-it-with-machbus">Doing it with machbus</a></h2>
 <p>The whole surface is <code>nmea::SerialGNSS</code>. Construct it, subscribe to the events
 you care about, and feed it bytes.</p>
-<pre class="playground"><code class="language-rust">fn main() {
-    println!("=== Serial GNSS (NMEA-0183) Demo ===");
-
-    let mut parser = SerialGNSS::new();
-    let positions: Rc&lt;RefCell&lt;Vec&lt;GNSSPosition&gt;&gt;&gt; = Rc::new(RefCell::new(Vec::new()));
-    let p = positions.clone();
-    parser
-        .on_position
-        .subscribe(move |&amp;pos| p.borrow_mut().push(pos));
-    parser
-        .on_cog
-        .subscribe(|c| println!("  on_cog → {:.3} rad", c));
-    parser
-        .on_sog
-        .subscribe(|s| println!("  on_sog → {:.2} m/s", s));
-
-    // GGA: position fix.
-    let gga = with_checksum("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    parser.feed_bytes(gga.as_bytes());
-
-    // RMC: speed + course.
-    let rmc = with_checksum("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W");
-    parser.feed_bytes(rmc.as_bytes());
-
-    // GSA: 3D fix DOPs.
-    let gsa = with_checksum("$GPGSA,A,3,04,05,,09,12,,,24,,,,,2.5,1.3,2.1");
-    parser.feed_bytes(gsa.as_bytes());</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>{{#include ../../../examples/serial_gnss.rs:20:46}}
+<span class="boring">}</span></code></pre>
 <p>Three events fire as sentences land:</p>
 <ul>
 <li><code>on_position</code> — a new or updated position fix is available.</li>
@@ -382,19 +359,7 @@ count, and <code>latest_utc_datetime()</code> returns the most recent <code>ZDA<
 across three <code>feed_bytes</code> calls and confirming the fix still parses:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Demonstrate split-buffer parsing (UART chunk boundaries).
-    println!("\n[chunked feed] split GGA across 3 reads:");
-    let mut p2 = SerialGNSS::new();
-    let body = with_checksum("$GPGGA,124519,4807.500,N,01132.000,E,1,06,1.2,540.0,M,46.9,M,,");
-    let bytes = body.as_bytes();
-    p2.feed_bytes(&amp;bytes[..30]);
-    p2.feed_bytes(&amp;bytes[30..50]);
-    p2.feed_bytes(&amp;bytes[50..]);
-    let last = p2.latest_position().unwrap();
-    println!(
-        "  lat={:.6}, lon={:.6} ({} sats)",
-        last.wgs.latitude, last.wgs.longitude, last.satellites_used
-    );
+</span>{{#include ../../../examples/serial_gnss.rs:63:75}}
 <span class="boring">}</span></code></pre>
 <p>The serial port itself is yours to open. <code>SerialGNSSConfig</code> carries the usual
 UART settings (<code>baud</code>, <code>data_bits</code>, <code>stop_bits</code>, <code>parity</code>) as plain pass-through

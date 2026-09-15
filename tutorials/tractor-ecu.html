@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -364,40 +364,14 @@ bundling the classification, power config, and broadcast intervals.</p>
 classification piece:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── Classification (Class 2NF) ────────────────────────────────
-    let cls = TecuClassification {
-        base_class: TecuClass::Class2,
-        navigation: true,
-        front_mounted: true,
-        ..Default::default()
-    };
-    println!("[classification] {cls}");
-
-    // ─── Class 1, 2, 3 string forms ────────────────────────────────
-    for c in [TecuClass::Class1, TecuClass::Class2, TecuClass::Class3] {
-        let inner = TecuClassification {
-            base_class: c,
-            ..Default::default()
-        };
-        println!("  {c:?} → {inner}");
-    }
+</span>{{#include ../../../examples/tractor_ecu_demo.rs:9:25}}
 <span class="boring">}</span></code></pre>
 <p><code>TecuClassification</code> is a plain struct of fields, so you set the base class and
 flip on the addenda you support. Printing it yields the canonical class string
 (<code>Class 2NF</code> here). The power-state walk:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── Power-state enum ──────────────────────────────────────────
-    println!("\n[power-state]");
-    for s in [
-        PowerState::PowerOff,
-        PowerState::IgnitionOn,
-        PowerState::ShutdownInitiated,
-        PowerState::FinalShutdown,
-    ] {
-        println!("  {s:?}");
-    }
-    println!("\n  default = {:?}  (boot state)", PowerState::default());
+</span>{{#include ../../../examples/tractor_ecu_demo.rs:27:37}}
 <span class="boring">}</span></code></pre>
 <p>To advertise facilities, build a <code>TractorFacilities</code>, fill the tiers you offer,
 and encode it onto the response PGN — the shape is:</p>

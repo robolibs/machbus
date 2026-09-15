@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -385,44 +385,14 @@ for a VT server at address <code>0x80</code>. Start by building a minimal pool �
 set object that points at one data mask — and calling <code>connect</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let pool = ObjectPool::default()
-        .with_object(create_working_set(1, &amp;WorkingSetBody::default()).with_children([10u16]))
-        .with_object(create_data_mask(10, &amp;DataMaskBody::default()));
-
-    let mut client = VTClient::new(VTClientConfig::default());
-    client.set_object_pool(pool);
-    client.connect().unwrap();
-    println!("[1] connect()    → {:?}", client.state());
-
-    // Pretend a VT server (addr 0x80) just broadcast its status.
-    let mut status = vec![cmd::VT_STATUS, 0xFF];
-    status.resize(8, 0xFF);
-    status[6] = 4; // version 4
+</span>{{#include ../../../examples/vt_client_demo.rs:16:28}}
 <span class="boring">}</span></code></pre>
 <p><code>connect</code> only arms the state machine; it does not block. From here you pump.
 When the (simulated) VT broadcasts its status, you feed it in, then call <code>update</code>
 to get the next outbound frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    println!("[2] VT_STATUS    → {:?}", client.state());
-
-    // update() emits the WS Master frame.
-    let frames = client.update(1);
-    println!(
-        "[3] update() → {} frame ({:?})",
-        frames.len(),
-        client.state()
-    );
-
-    // update() emits GET_MEMORY.
-    let frames = client.update(1);
-    println!("[4] update() → GET_MEMORY ({:?})", client.state());
-    assert_eq!(frames[0].data[0], cmd::GET_MEMORY);
-
-    // VT replies "memory OK".
-    let mut memory_response = [0xFFu8; 8];
-    memory_response[0] = cmd::GET_MEMORY_RESPONSE;
-    memory_response[1] = 0x00;
+</span>{{#include ../../../examples/vt_client_demo.rs:30:48}}
 <span class="boring">}</span></code></pre>
 <p>Each <code>update</code> returns a <code>Vec&lt;ClientOutbound&gt;</code> in emission order — usually one
 frame, but the upload step can produce the pool transfer and then, a tick later,

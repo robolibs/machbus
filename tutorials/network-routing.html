@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -393,15 +393,7 @@ couple of PGNs, blocks one, and then feeds frames through it.</p>
 <p>You configure the NIU declaratively, then start it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut niu = Niu::new(
-        NiuConfig::default()
-            .name("demo-niu")
-            .mode(NiuFilterMode::PassSpecific),
-    );
-    niu.allow_pgn(PGN_HEARTBEAT, true);
-    niu.allow_pgn_rate_limited(PGN_DM1, 100, true); // 1 frame / 100 ms
-    niu.block_pgn(PGN_REQUEST, true);
-    niu.start().unwrap();
+</span>{{#include ../../../examples/niu_demo.rs:11:19}}
 <span class="boring">}</span></code></pre>
 <p><code>NiuConfig::default().name(...).mode(...)</code> sets the policy; <code>allow_pgn</code>,
 <code>allow_pgn_rate_limited</code>, and <code>block_pgn</code> install rules; <code>start</code> flips the state
@@ -411,40 +403,7 @@ bidirectional.</p>
 forward or <code>None</code> to drop:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // 1. Heartbeat (allowed) — forwards.
-    let hb = Frame::from_message(
-        Priority::Default,
-        PGN_HEARTBEAT,
-        0x10,
-        BROADCAST_ADDRESS,
-        &amp;[1; 8],
-    );
-    println!(
-        "[hb ] tractor → forwarded? {}",
-        niu.process_frame(hb, Side::Tractor, 0).is_some()
-    );
-
-    // 2. Request PGN (explicitly blocked).
-    let req = Frame::from_message(Priority::Default, PGN_REQUEST, 0x10, 0x42, &amp;[0; 3]);
-    println!(
-        "[req] tractor → forwarded? {}",
-        niu.process_frame(req, Side::Tractor, 0).is_some()
-    );
-
-    // 3. DM1 with 100 ms rate limit.
-    let dm1 = Frame::from_message(Priority::Default, PGN_DM1, 0x10, BROADCAST_ADDRESS, &amp;[0; 8]);
-    let r1 = niu.process_frame(dm1, Side::Tractor, 50);
-    let r2 = niu.process_frame(dm1, Side::Tractor, 100);
-    let r3 = niu.process_frame(dm1, Side::Tractor, 200);
-    println!("[dm1] t=50  → {} (first allowed)", r1.is_some());
-    println!("[dm1] t=100 → {} (within window)", r2.is_some());
-    println!("[dm1] t=200 → {} (window elapsed)", r3.is_some());
-
-    println!(
-        "\n[stats] forwarded={}, blocked={}",
-        niu.forwarded(),
-        niu.blocked()
-    );
+</span>{{#include ../../../examples/niu_demo.rs:27:60}}
 <span class="boring">}</span></code></pre>
 <p>The heartbeat is allowed and forwards; the request PGN is explicitly blocked; the
 DM1 is rate-limited to one crossing per 100 ms, so the frame at <code>t=50</code> passes,

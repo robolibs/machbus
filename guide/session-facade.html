@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -239,36 +239,13 @@ events). Commands and cadenced broadcasts flow <strong>down</strong> (plugin →
 <p>Build a node, plug the subsystems you want, and split into controls + driver:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p>Then drive the loop. <code>Driver::poll_at(now)</code> does one cycle — read the transport,
 feed frames, advance timers, flush outbound — and returns the next event:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p>In a hosted real-time program you would call <code>driver.poll()</code> (which reads the
 host monotonic clock) in a loop instead of advancing <code>now</code> by hand. In
@@ -322,14 +299,7 @@ subsystem:</p>
 own methods:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    ctrl_a.with_mut::&lt;Diagnostics, _&gt;(|diag| {
-        diag.raise(Dtc {
-            spn: 1234,
-            fmi: Fmi::BelowNormal,
-            occurrence_count: 1,
-            conversion_method: false,
-        });
-    });
+</span>{{#include ../../../examples/session_minimal.rs:finecontrol}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.with::&lt;P&gt;(...)</code> / <code>ctrl.with_mut::&lt;P&gt;(...)</code> (or <code>session.get::&lt;P&gt;()</code> /
 <code>get_mut::&lt;P&gt;()</code>) return <code>None</code> if that plugin was not plugged.</p>

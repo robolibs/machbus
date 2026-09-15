@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -216,12 +216,7 @@ runs on a simulated bus today and a real one later: only the transport changes.<
 <h2 id="the-name-helper"><a class="header" href="#the-name-helper">The NAME helper</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>A <code>Name</code> is built with consuming <code>with_*</code> setters. This helper sets only three
 things and leaves the rest at default, which is fine for a demo. In a real
@@ -271,16 +266,7 @@ to <em>pump</em> it later to actually move frames between the seats.</p>
 <h2 id="building-the-session"><a class="header" href="#building-the-session">Building the session</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p>The builder reads like a sentence: this session has <em>this</em> NAME, prefers <em>this</em>
 address, has <em>this</em> plugin, and is spawned on <em>this</em> transport. The
@@ -304,21 +290,7 @@ placeholder.</p>
 carefully:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <ul>
 <li><code>start()</code> (called just above, in the build snippet) tells each session to begin
@@ -365,14 +337,7 @@ what it did.</p>
 a fault code on node A:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    ctrl_a.with_mut::&lt;Diagnostics, _&gt;(|diag| {
-        diag.raise(Dtc {
-            spn: 1234,
-            fmi: Fmi::BelowNormal,
-            occurrence_count: 1,
-            conversion_method: false,
-        });
-    });
+</span>{{#include ../../../examples/session_minimal.rs:finecontrol}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.with_mut::&lt;Diagnostics, _&gt;(|diag| ...)</code> borrows the named plugin so you can
 call its methods. This is the general escape hatch for poking at a specific

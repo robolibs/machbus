@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -232,25 +232,7 @@ serialize back to the wire format you would transmit.</li>
 <h2 id="decoding-eec1"><a class="header" href="#decoding-eec1">Decoding EEC1</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // EEC1 (PGN 61444) — engine speed, torque, driver demand.
-    // Each parameter is a `Signal`: a value, or the engine reporting it as
-    // faulted / not provided. One absent parameter no longer costs the whole PG.
-    let eec1 = Eec1 {
-        engine_speed_rpm: Signal::Value(1500.0),
-        driver_demand_percent: Signal::Value(40.0),
-        actual_engine_percent: Signal::Value(38.0),
-        engine_torque_percent: Signal::Value(35.0),
-        starter_mode: 0,
-        source_address: 0x00,
-    };
-    let bytes = eec1.encode(); // [u8; 8] you would put on the bus
-    let back = Eec1::decode(&amp;bytes).expect("valid EEC1 payload");
-    println!(
-        "EEC1: {:?} rpm, driver demand {:?}%, actual {:?}%",
-        back.engine_speed_rpm.value(),
-        back.driver_demand_percent.value(),
-        back.actual_engine_percent.value()
-    );
+</span>{{#include ../../../examples/j1939_decode.rs:eec1}}
 <span class="boring">}</span></code></pre>
 <p>Step through it:</p>
 <ul>
@@ -275,15 +257,7 @@ the codec is symmetric.</li>
 layer handed you. The second block decodes from one of those:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // If you already assembled a `Message` (pgn + data + source), decode from it:
-    let msg = Message::new(61444, bytes.to_vec(), 0x00);
-    if let Some(e) = Eec1::from_message(&amp;msg) {
-        println!(
-            "from_message: {:?} rpm from source 0x{:02X}",
-            e.engine_speed_rpm.value(),
-            msg.source
-        );
-    }
+</span>{{#include ../../../examples/j1939_decode.rs:from_message}}
 <span class="boring">}</span></code></pre>
 <ul>
 <li><code>Message::new(61444, bytes.to_vec(), 0x00)</code> builds a message for PGN 61444
@@ -305,33 +279,7 @@ and the message metadata.</li>
 with <code>DmDtcList</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // DM1 (active diagnostic trouble codes) — the J1939 "DM" family.
-    let dm1 = DmDtcList {
-        lamps: DiagnosticLamps::default(),
-        dtcs: vec![
-            Dtc {
-                spn: 110,
-                fmi: Fmi::AboveNormalModerate,
-                occurrence_count: 3,
-                conversion_method: false,
-            }, // coolant temp high
-            Dtc {
-                spn: 190,
-                fmi: Fmi::BelowNormal,
-                occurrence_count: 1,
-                conversion_method: false,
-            }, // engine speed low
-        ],
-    };
-    let payload = dm1.encode(); // variable length (TP if &gt; 8 bytes)
-    let decoded = DmDtcList::decode(&amp;payload).expect("valid DM1 payload");
-    println!("\nDM1: {} active fault(s):", decoded.dtcs.len());
-    for dtc in &amp;decoded.dtcs {
-        println!(
-            "  SPN {:&lt;5} FMI {:?} (count {})",
-            dtc.spn, dtc.fmi, dtc.occurrence_count
-        );
-    }
+</span>{{#include ../../../examples/j1939_decode.rs:dm1}}
 <span class="boring">}</span></code></pre>
 <p>Read it field by field:</p>
 <ul>

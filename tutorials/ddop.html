@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -343,19 +343,7 @@ sane values is a good self-check.</p>
 runs it through the full upload handshake. Here is the pool it builds:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p>A real sprayer extends that skeleton. The shape below is illustrative (not a
 compiled snippet) and shows how sections, geometry properties, a live rate and a

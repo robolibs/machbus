@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -238,12 +238,7 @@ identity number, which is enough to keep their NAMEs distinct — exactly the <c
 anchor from the session example:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>The topology now has <strong>three</strong> seats on <code>bus0</code> instead of two. You build it and
 take one endpoint per node, then wrap each in a transport for <code>spawn(...)</code>.</p>
@@ -287,21 +282,7 @@ only now it polls <strong>three</strong> drivers per iteration. This is the same
 from the session example, scaled up:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p>After about a simulated second all three are claimed and the program prints their
 addresses:</p>

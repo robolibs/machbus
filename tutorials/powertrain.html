@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -358,34 +358,12 @@ builds an <code>Eec1</code>, encodes it, decodes it back, and prints the enginee
 values — the canonical pattern for a callback that received a raw frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // EEC1 — Electronic Engine Controller 1.
-    let eec1 = Eec1 {
-        engine_torque_percent: Signal::Value(50.0),
-        driver_demand_percent: Signal::Value(75.0),
-        actual_engine_percent: Signal::Value(45.0),
-        engine_speed_rpm: Signal::Value(1500.0),
-        starter_mode: 1,
-        source_address: 0x00,
-    };
-    let bytes = eec1.encode();
-    let d = Eec1::decode(&amp;bytes).unwrap();
-    println!(
-        "[EEC1]  rpm={:?}, torque={:?}%, driver_demand={:?}%",
-        d.engine_speed_rpm.value(),
+</span>{{#include ../../../examples/engine_powertrain_demo.rs:11:24}}
 <span class="boring">}</span></code></pre>
 <p><code>EngineHours</code> works the same way, carrying the lifetime counters:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let fbytes = fe.encode();
-    let fd = FuelEconomy::decode(&amp;fbytes).unwrap();
-    println!(
-        "[LFE]   rate={:?} L/h, inst={:?} L/h, throttle={:?}%",
-        fd.fuel_rate_lph.value(),
-        fd.instantaneous_lph.value(),
-        fd.throttle_position.value()
-    );
-
-    // Engine hours.
+</span>{{#include ../../../examples/engine_powertrain_demo.rs:54:63}}
 <span class="boring">}</span></code></pre>
 <p>To wire these into a low-level loop, register a callback for the relevant PGN
 with <code>IsoNet::register_pgn_callback</code> and call the matching <code>decode</code> inside it.

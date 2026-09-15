@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-81116530.js";
+            window.path_to_searchindex_js = "searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-148778fb.js"></script>
@@ -3619,27 +3619,7 @@ cost.</p>
 <code>u32</code> and prints everything the identifier encodes:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>/// Pretty-print everything encoded in one 29-bit identifier.
-fn describe(raw: u32) {
-    let id = Identifier::from_raw(raw);
-    let kind = if id.is_pdu2() {
-        "PDU2 (broadcast)"
-    } else {
-        "PDU1 (peer-to-peer)"
-    };
-    print!(
-        "0x{raw:08X}  prio={}  PGN=0x{:04X} ({:&gt;6})  src=0x{:02X}  ",
-        u8::from(id.priority()),
-        id.pgn(),
-        id.pgn(),
-        id.source(),
-    );
-    if id.is_pdu2() {
-        println!("dst=ALL   {kind}");
-    } else {
-        println!("dst=0x{:02X}  {kind}", id.destination());
-    }
-}
+</span>{{#include ../../../examples/can_inspect.rs:decode}}
 <span class="boring">}</span></code></pre>
 <p>Walk through it call by call.</p>
 <ul>
@@ -3687,18 +3667,7 @@ instead.</p>
 <p>The program runs <code>describe</code> over a list of real-world 29-bit identifiers:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // A handful of real-world 29-bit identifiers:
-    let samples = [
-        0x0CF0_0400, // EEC1 (engine speed) — PDU2 broadcast, priority 3
-        0x18FE_E500, // Engine hours       — PDU2 broadcast, priority 6
-        0x18EA_FF00, // PGN request to ALL — PDU1, destination 0xFF
-        0x18EE_FF80, // Address claimed    — PDU1 broadcast from 0x80
-        0x0CFE_6CEE, // Wheel-based speed   — PDU2 broadcast
-        0x09F8_0180, // NMEA 2000 rapid position (PGN 129025)
-    ];
-    for raw in samples {
-        describe(raw);
-    }
+</span>{{#include ../../../examples/can_inspect.rs:samples}}
 <span class="boring">}</span></code></pre>
 <p>These are not toys. <code>0x0CF00400</code> is the classic EEC1 engine-speed broadcast.
 <code>0x18EAFF00</code> is a PGN request sent to the global address. <code>0x18EEFF80</code> is an
@@ -3727,20 +3696,7 @@ and <code>is_broadcast()</code> → <code>true</code>.</p>
 code:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // The PDU1/PDU2 split is the classic trap: for PDU1 (PF &lt; 240) the low
-    // byte of the PGN is actually the *destination address*; for PDU2
-    // (PF &gt;= 240) it is part of the PGN and the frame is broadcast.
-    let p2p = Identifier::from_raw(0x18EA26EE); // request, sent TO 0x26
-    assert!(!p2p.is_pdu2());
-    assert_eq!(p2p.destination(), 0x26);
-
-    let bcast = Identifier::from_raw(0x0CF00400); // EEC1, to everyone
-    assert!(bcast.is_pdu2());
-    assert!(bcast.is_broadcast());
-    println!(
-        "\nPDU1 example routes to 0x{:02X}; PDU2 example is broadcast.",
-        p2p.destination()
-    );
+</span>{{#include ../../../examples/can_inspect.rs:pdu}}
 <span class="boring">}</span></code></pre>
 <p>Read it carefully:</p>
 <ul>
@@ -3851,25 +3807,7 @@ serialize back to the wire format you would transmit.</li>
 <h2 id="decoding-eec1"><a class="header" href="#decoding-eec1">Decoding EEC1</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // EEC1 (PGN 61444) — engine speed, torque, driver demand.
-    // Each parameter is a `Signal`: a value, or the engine reporting it as
-    // faulted / not provided. One absent parameter no longer costs the whole PG.
-    let eec1 = Eec1 {
-        engine_speed_rpm: Signal::Value(1500.0),
-        driver_demand_percent: Signal::Value(40.0),
-        actual_engine_percent: Signal::Value(38.0),
-        engine_torque_percent: Signal::Value(35.0),
-        starter_mode: 0,
-        source_address: 0x00,
-    };
-    let bytes = eec1.encode(); // [u8; 8] you would put on the bus
-    let back = Eec1::decode(&amp;bytes).expect("valid EEC1 payload");
-    println!(
-        "EEC1: {:?} rpm, driver demand {:?}%, actual {:?}%",
-        back.engine_speed_rpm.value(),
-        back.driver_demand_percent.value(),
-        back.actual_engine_percent.value()
-    );
+</span>{{#include ../../../examples/j1939_decode.rs:eec1}}
 <span class="boring">}</span></code></pre>
 <p>Step through it:</p>
 <ul>
@@ -3894,15 +3832,7 @@ the codec is symmetric.</li>
 layer handed you. The second block decodes from one of those:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // If you already assembled a `Message` (pgn + data + source), decode from it:
-    let msg = Message::new(61444, bytes.to_vec(), 0x00);
-    if let Some(e) = Eec1::from_message(&amp;msg) {
-        println!(
-            "from_message: {:?} rpm from source 0x{:02X}",
-            e.engine_speed_rpm.value(),
-            msg.source
-        );
-    }
+</span>{{#include ../../../examples/j1939_decode.rs:from_message}}
 <span class="boring">}</span></code></pre>
 <ul>
 <li><code>Message::new(61444, bytes.to_vec(), 0x00)</code> builds a message for PGN 61444
@@ -3924,33 +3854,7 @@ and the message metadata.</li>
 with <code>DmDtcList</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // DM1 (active diagnostic trouble codes) — the J1939 "DM" family.
-    let dm1 = DmDtcList {
-        lamps: DiagnosticLamps::default(),
-        dtcs: vec![
-            Dtc {
-                spn: 110,
-                fmi: Fmi::AboveNormalModerate,
-                occurrence_count: 3,
-                conversion_method: false,
-            }, // coolant temp high
-            Dtc {
-                spn: 190,
-                fmi: Fmi::BelowNormal,
-                occurrence_count: 1,
-                conversion_method: false,
-            }, // engine speed low
-        ],
-    };
-    let payload = dm1.encode(); // variable length (TP if &gt; 8 bytes)
-    let decoded = DmDtcList::decode(&amp;payload).expect("valid DM1 payload");
-    println!("\nDM1: {} active fault(s):", decoded.dtcs.len());
-    for dtc in &amp;decoded.dtcs {
-        println!(
-            "  SPN {:&lt;5} FMI {:?} (count {})",
-            dtc.spn, dtc.fmi, dtc.occurrence_count
-        );
-    }
+</span>{{#include ../../../examples/j1939_decode.rs:dm1}}
 <span class="boring">}</span></code></pre>
 <p>Read it field by field:</p>
 <ul>
@@ -4085,23 +3989,7 @@ loop where messages arrive continuously and you react to them.</p>
 <h2 id="setting-up-the-interface"><a class="header" href="#setting-up-the-interface">Setting up the interface</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // A decoder listening for the GNSS navigation profile (rapid position,
-    // COG/SOG, heading, attitude, …). `NMEAConfig` chooses which PGNs to decode.
-    let mut nmea = NMEAInterface::new(NMEAConfig::default().with_gnss_navigation(true));
-
-    // Subscribe to decoded fixes. Handlers are `FnMut(&amp;T)`.
-    nmea.on_position.subscribe(|pos: &amp;GNSSPosition| {
-        println!(
-            "position: {:.6}, {:.6}  (sats {}, fix {:?})",
-            pos.wgs.latitude, pos.wgs.longitude, pos.satellites_used, pos.fix_type
-        );
-    });
-    nmea.on_cog.subscribe(|cog_rad: &amp;f64| {
-        println!("course over ground: {:.1}°", cog_rad.to_degrees());
-    });
-    nmea.on_sog.subscribe(|sog_mps: &amp;f64| {
-        println!("speed over ground: {:.1} km/h", sog_mps * 3.6);
-    });
+</span>{{#include ../../../examples/nmea2000_decode.rs:setup}}
 <span class="boring">}</span></code></pre>
 <p>Walk through it:</p>
 <ul>
@@ -4129,26 +4017,7 @@ position, course, or speed arrives.</p>
 <h2 id="feeding-messages"><a class="header" href="#feeding-messages">Feeding messages</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Build a rapid-position payload (PGN 129025) and feed it as a Message.
-    let fix = GNSSPosition {
-        wgs: Wgs::new(52.379_189, 4.899_431, 0.0), // Amsterdam
-        satellites_used: 12,
-        ..Default::default()
-    };
-    let pos_bytes = NMEAInterface::build_position(&amp;fix);
-    nmea.handle_message(&amp;Message::new(
-        PGN_GNSS_POSITION_RAPID,
-        pos_bytes.to_vec(),
-        0x80,
-    ));
-
-    // Build a course/speed payload (PGN 129026): heading ~60°, 5 m/s.
-    let cog_bytes = NMEAInterface::build_cog_sog(60.0_f64.to_radians(), 5.0);
-    nmea.handle_message(&amp;Message::new(
-        PGN_GNSS_COG_SOG_RAPID,
-        cog_bytes.to_vec(),
-        0x80,
-    ));
+</span>{{#include ../../../examples/nmea2000_decode.rs:feed}}
 <span class="boring">}</span></code></pre>
 <p>This is where the decode path fires:</p>
 <ul>
@@ -4536,16 +4405,7 @@ role, but the pattern is always the same:</p>
 <p>Conceptual Rust shape:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p>The snippet above is copied from <code>examples/session_minimal.rs</code>. Use runnable
 examples for the exact current API calls.</p>
@@ -4701,36 +4561,13 @@ events). Commands and cadenced broadcasts flow <strong>down</strong> (plugin →
 <p>Build a node, plug the subsystems you want, and split into controls + driver:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p>Then drive the loop. <code>Driver::poll_at(now)</code> does one cycle — read the transport,
 feed frames, advance timers, flush outbound — and returns the next event:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p>In a hosted real-time program you would call <code>driver.poll()</code> (which reads the
 host monotonic clock) in a loop instead of advancing <code>now</code> by hand. In
@@ -4784,14 +4621,7 @@ subsystem:</p>
 own methods:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    ctrl_a.with_mut::&lt;Diagnostics, _&gt;(|diag| {
-        diag.raise(Dtc {
-            spn: 1234,
-            fmi: Fmi::BelowNormal,
-            occurrence_count: 1,
-            conversion_method: false,
-        });
-    });
+</span>{{#include ../../../examples/session_minimal.rs:finecontrol}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.with::&lt;P&gt;(...)</code> / <code>ctrl.with_mut::&lt;P&gt;(...)</code> (or <code>session.get::&lt;P&gt;()</code> /
 <code>get_mut::&lt;P&gt;()</code>) return <code>None</code> if that plugin was not plugged.</p>
@@ -5007,12 +4837,7 @@ in the <a href="#address-claim">Address claim tutorial</a>; for now, a tiny
 helper that stamps out a NAME from an identity number is enough:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>The important part is <code>with_self_configurable(true)</code>: it tells the bus “if I
 lose a fight over an address, I am allowed to move to another one.” That keeps
@@ -5032,16 +4857,7 @@ and a preferred address; <code>.plug(...)</code> adds optional capabilities (her
 pair. We then call <code>start()</code> on the controls to begin the claim:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p><code>node_a</code> would like address <code>0x80</code>; <code>node_b</code> would like <code>0x81</code>. They do not
 conflict, so both should get their wish — but the bus does not know that yet.
@@ -5056,21 +4872,7 @@ produces) and <em>pumping</em> the bus (delivering frames between the two endpoi
 a loop:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p><code>drv.poll_at(now)</code> hands you one event at a time until there is nothing left for
 that instant; <code>built.pump_all()</code> carries the frames between endpoints. In a real
@@ -5162,12 +4964,7 @@ runs on a simulated bus today and a real one later: only the transport changes.<
 <h2 id="the-name-helper"><a class="header" href="#the-name-helper">The NAME helper</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>A <code>Name</code> is built with consuming <code>with_*</code> setters. This helper sets only three
 things and leaves the rest at default, which is fine for a demo. In a real
@@ -5217,16 +5014,7 @@ to <em>pump</em> it later to actually move frames between the seats.</p>
 <h2 id="building-the-session"><a class="header" href="#building-the-session">Building the session</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p>The builder reads like a sentence: this session has <em>this</em> NAME, prefers <em>this</em>
 address, has <em>this</em> plugin, and is spawned on <em>this</em> transport. The
@@ -5250,21 +5038,7 @@ placeholder.</p>
 carefully:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <ul>
 <li><code>start()</code> (called just above, in the build snippet) tells each session to begin
@@ -5311,14 +5085,7 @@ what it did.</p>
 a fault code on node A:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    ctrl_a.with_mut::&lt;Diagnostics, _&gt;(|diag| {
-        diag.raise(Dtc {
-            spn: 1234,
-            fmi: Fmi::BelowNormal,
-            occurrence_count: 1,
-            conversion_method: false,
-        });
-    });
+</span>{{#include ../../../examples/session_minimal.rs:finecontrol}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.with_mut::&lt;Diagnostics, _&gt;(|diag| ...)</code> borrows the named plugin so you can
 call its methods. This is the general escape hatch for poking at a specific
@@ -5785,46 +5552,7 @@ flow, and the receiver confirms when every byte has arrived.</p>
 <p>Add this block — it is the whole TP section of the example:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..40u32).map(|n| n as u8).collect();
-        let mut tx = TransportProtocol::new();
-        let mut rx = TransportProtocol::new();
-        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
-        let r = received.clone();
-        rx.on_complete
-            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
-
-        let rts = tx
-            .send(0xEF00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
-            .unwrap()[0];
-        println!(
-            "  RTS for {} bytes (≈{} packets)",
-            payload.len(),
-            payload.len().div_ceil(7)
-        );
-        let cts = rx.process_frame(&amp;rts, 0)[0];
-        println!("  CTS num={} next_seq={}", cts.data[1], cts.data[2]);
-
-        let _ = tx.process_frame(&amp;cts, 0);
-        let dt_frames = tx.get_pending_data_frames();
-        println!("  TX queued {} DT frames", dt_frames.len());
-
-        let mut eoma_seen = None;
-        for dt in &amp;dt_frames {
-            for resp in rx.process_frame(dt, 0) {
-                if resp.data[0] == machbus::net::tp::tp_cm::EOMA {
-                    eoma_seen = Some(resp);
-                }
-            }
-        }
-        let _ = tx.process_frame(&amp;eoma_seen.unwrap(), 0);
-        let got = received.borrow().clone().unwrap();
-        println!(
-            "  delivered {} bytes (equal? {})",
-            got.data.len(),
-            got.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:17:56}}
 <span class="boring">}</span></code></pre>
 <p>Run it:</p>
 <pre><code class="language-sh">cargo run --example transport_demo
@@ -5881,43 +5609,7 @@ tutorial covers it). Because that means several CTS windows, the example pumps i
 a loop until reassembly completes:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..2500u32).map(|n| (n &amp; 0xFF) as u8).collect();
-        let mut tx = ExtendedTransportProtocol::new();
-        let mut rx = ExtendedTransportProtocol::new();
-        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
-        let r = received.clone();
-        rx.on_complete
-            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
-
-        let rts = tx
-            .send(0xCA00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
-            .unwrap()[0];
-        let mut to_tx = rx.process_frame(&amp;rts, 0);
-        let mut turns = 0;
-        for turn in 0..50 {
-            for f in to_tx.drain(..) {
-                let _ = tx.process_frame(&amp;f, 0);
-            }
-            let dt = tx.get_pending_data_frames();
-            if dt.is_empty() {
-                break;
-            }
-            for f in &amp;dt {
-                to_tx.extend(rx.process_frame(f, 0));
-            }
-            turns = turn + 1;
-            if received.borrow().is_some() {
-                break;
-            }
-        }
-        let got = received.borrow().clone().unwrap();
-        println!(
-            "  converged in {turns} turns, delivered {} bytes (equal? {})",
-            got.data.len(),
-            got.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:60:96}}
 <span class="boring">}</span></code></pre>
 <p>Expected output (the <code>[ETP]</code> section):</p>
 <pre><code class="language-text">[ETP]
@@ -5957,26 +5649,7 @@ bytes. machbus speaks it too, and the API mirrors TP closely.</p>
 <p>Here we send a 30-byte GNSS-style payload as Fast Packet:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..30u32).map(|n| (n + 0x40) as u8).collect();
-        let mut tx = FastPacketProtocol::new();
-        let mut rx = FastPacketProtocol::new();
-        let frames = tx.send(PGN_GNSS_POSITION, &amp;payload, 0x10).unwrap();
-        println!("  {} frames for {} bytes", frames.len(), payload.len());
-
-        let mut got = None;
-        for f in &amp;frames {
-            if let Some(m) = rx.process_frame(f) {
-                got = Some(m);
-            }
-        }
-        let msg = got.unwrap();
-        println!(
-            "  reassembled {} bytes (equal? {})",
-            msg.data.len(),
-            msg.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:100:119}}
 <span class="boring">}</span></code></pre>
 <p>Expected output (the <code>[Fast Packet]</code> section):</p>
 <pre><code class="language-text">[Fast Packet]
@@ -6082,7 +5755,7 @@ exact same types once you wrap a session around them.</p>
 <h2 id="step-1--the-imports"><a class="header" href="#step-1--the-imports">Step 1 — the imports</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use machbus::j1939::{DiagnosticLamps, DmDtcList, Dtc, Fmi, LampStatus};
+</span>{{#include ../../../examples/diagnostic_demo.rs:4:4}}
 <span class="boring">}</span></code></pre>
 <p>Five names, one module. <code>Dtc</code> is a single fault. <code>Fmi</code> says <em>how</em> it failed.
 <code>DmDtcList</code> is the message that carries a list of faults plus a lamp panel
@@ -6109,20 +5782,7 @@ exactly three meaningful parts:</p>
 times.” Build one and watch it survive a round-trip through its 4-byte wire form:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    }
-
-    // ─── DTC field encoding ────────────────────────────────────────
-    let dtc = Dtc {
-        spn: 0x1_2345,
-        fmi: Fmi::MechanicalFail,
-        occurrence_count: 12,
-        conversion_method: false,
-    };
-    let dtc_bytes = dtc.encode();
-    let dtc_decoded = Dtc::decode(&amp;dtc_bytes).unwrap();
-    println!(
-        "\n[DTC] 4-byte field: SPN=0x{:05X} → wire {:02X?} → SPN=0x{:05X}",
-        dtc.spn, dtc_bytes, dtc_decoded.spn,
+</span>{{#include ../../../examples/diagnostic_demo.rs:48:61}}
 <span class="boring">}</span></code></pre>
 <p>The SPN here (<code>0x1_2345</code>) is wide on purpose: encoding clamps it to 19 bits and
 masks the count to 7 bits, so a <code>Dtc</code> always produces a <em>valid</em> wire field rather
@@ -6134,30 +5794,7 @@ is the value you get back.</p>
 the amber warning lamp on and two faults in the list:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── Build a DM1 with two DTCs ─────────────────────────────────
-    let dm1 = DmDtcList {
-        lamps: DiagnosticLamps {
-            amber_warning: LampStatus::On,
-            ..Default::default()
-        },
-        dtcs: vec![
-            Dtc {
-                spn: 520,
-                fmi: Fmi::VoltageLow,
-                occurrence_count: 0,
-                conversion_method: false,
-            },
-            Dtc {
-                spn: 190,
-                fmi: Fmi::AbnormalRateChange,
-                occurrence_count: 7,
-                conversion_method: false,
-            },
-        ],
-    };
-    println!(
-        "[DM1] {} active DTCs, amber={:?}",
-        dm1.dtcs.len(),
+</span>{{#include ../../../examples/diagnostic_demo.rs:9:32}}
 <span class="boring">}</span></code></pre>
 <p>The lamp panel and the DTC list are <strong>independent fields</strong>. A DTC says what is
 wrong; the lamp says how loudly to alert the operator. We lit <code>amber_warning</code> and
@@ -6170,19 +5807,7 @@ call <code>DmDtcList::decode(..)</code>. Here we do both ends in one breath so y
 the bytes survive the trip:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    );
-
-    let bytes = dm1.encode();
-    let decoded = DmDtcList::decode(&amp;bytes).unwrap();
-    println!(
-        "[encode/decode] {} bytes round-trip → {} DTCs",
-        bytes.len(),
-        decoded.dtcs.len()
-    );
-    for d in &amp;decoded.dtcs {
-        println!(
-            "  SPN=0x{:05X} FMI={:?} OC={}",
-            d.spn, d.fmi, d.occurrence_count
+</span>{{#include ../../../examples/diagnostic_demo.rs:34:46}}
 <span class="boring">}</span></code></pre>
 <p><code>encode</code> always produces at least 8 bytes (lamps, then the DTCs), and <code>decode</code>
 returns the faults back as a <code>Vec&lt;Dtc&gt;</code>.</p>
@@ -6341,19 +5966,7 @@ implement’s “name badge” on the terminal) that points at a single <strong>
 (one full-screen layout):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let pool = ObjectPool::default()
-        .with_object(create_working_set(1, &amp;WorkingSetBody::default()).with_children([10u16]))
-        .with_object(create_data_mask(10, &amp;DataMaskBody::default()));
-
-    let mut client = VTClient::new(VTClientConfig::default());
-    client.set_object_pool(pool);
-    client.connect().unwrap();
-    println!("[1] connect()    → {:?}", client.state());
-
-    // Pretend a VT server (addr 0x80) just broadcast its status.
-    let mut status = vec![cmd::VT_STATUS, 0xFF];
-    status.resize(8, 0xFF);
-    status[6] = 4; // version 4
+</span>{{#include ../../../examples/vt_client_demo.rs:16:28}}
 <span class="boring">}</span></code></pre>
 <p><code>VTClient::new</code> takes a <code>VTClientConfig</code> (the default is fine — a 6-second
 per-step timeout, VT version 4). <code>set_object_pool</code> hands it the UI tree.
@@ -6375,25 +5988,7 @@ reporting VT version 4) and feed it in with <code>handle_vt_message</code>, then
 <code>update</code> to get the first outbound frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    println!("[2] VT_STATUS    → {:?}", client.state());
-
-    // update() emits the WS Master frame.
-    let frames = client.update(1);
-    println!(
-        "[3] update() → {} frame ({:?})",
-        frames.len(),
-        client.state()
-    );
-
-    // update() emits GET_MEMORY.
-    let frames = client.update(1);
-    println!("[4] update() → GET_MEMORY ({:?})", client.state());
-    assert_eq!(frames[0].data[0], cmd::GET_MEMORY);
-
-    // VT replies "memory OK".
-    let mut memory_response = [0xFFu8; 8];
-    memory_response[0] = cmd::GET_MEMORY_RESPONSE;
-    memory_response[1] = 0x00;
+</span>{{#include ../../../examples/vt_client_demo.rs:30:48}}
 <span class="boring">}</span></code></pre>
 <p>This is the same tick-and-pump rhythm from
 <a href="#2-the-hello-world-line-by-line">chapter 2</a>, specialized for the VT: <strong>inbound frames
@@ -6411,31 +6006,7 @@ We feed back an OK reply, then pump the pool <strong>transfer</strong> and the <
 Pool</strong> marker, and finally feed the terminal’s activation reply:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>
-    // update() ships pool transfer + EOP.
-    let frames = client.update(1);
-    println!(
-        "[6] update() → {} frames (pool transfer + EOP)",
-        frames.len()
-    );
-
-    // VT activates the pool.
-    let mut end_of_pool_response = [0xFFu8; 8];
-    end_of_pool_response[0] = cmd::END_OF_POOL;
-    end_of_pool_response[1] = 0x00;
-    end_of_pool_response[6] = 0x00;
-    client.handle_vt_message(&amp;Message::new(
-        PGN_VT_TO_ECU,
-        end_of_pool_response.to_vec(),
-        0x80,
-    ));
-    assert_eq!(client.state(), VTState::Connected);
-    println!("[7] EOP ack    → {:?}  ✓", client.state());
-
-    // Now send a UI command.
-    let out = client.change_numeric_value(0xCAFE, 42).unwrap();
-    println!(
-        "\n[ui] change_numeric_value(0xCAFE, 42) → pgn=0x{:04X}, dest=0x{:02X}, len={}",
+</span>{{#include ../../../examples/vt_client_demo.rs:51:75}}
 <span class="boring">}</span></code></pre>
 <p>Notice the ordering. <code>update</code> ships the pool transfer first (on a real bus this
 is the part the transport-protocol layer fragments across many CAN frames), and
@@ -6481,9 +6052,7 @@ commands. The simplest is changing a number — the value behind an output-numbe
 object:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>        out.data.len()
-    );
-}
+</span>{{#include ../../../examples/vt_client_demo.rs:78:84}}
 <span class="boring">}</span></code></pre>
 <p><code>change_numeric_value(object_id, value)</code> returns a <code>ClientOutbound</code> addressed to
 the bound terminal. This is the everyday loop of a running implement: read your
@@ -6631,19 +6200,7 @@ will log and control. Ours is the smallest pool that means anything — one
 version) that owns one <strong>device element</strong> (the <code>Root</code> of the device tree):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p><code>TaskControllerClient::new</code> takes a <code>TCClientConfig</code> (the default is fine — a
 six-second per-step timeout, a version-4 client). <code>set_ddop</code> hands it the device
@@ -6653,10 +6210,7 @@ wire yet; it validates the DDOP, arms the state machine, and moves the client to
 waiting for the server’s status.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut client = TaskControllerClient::new(TCClientConfig::default());
-    client.set_ddop(ddop);
-    client.connect().unwrap();
-    println!("[1] connect → {:?}", client.state());
+</span>{{#include ../../../examples/tc_client_demo.rs:36:39}}
 <span class="boring">}</span></code></pre>
 <blockquote>
 <p><strong>Why so small?</strong> A real DDOP describes every boom, section, bin, and reportable
@@ -6671,17 +6225,7 @@ to that TC’s address and advances the FSM. We fake the broadcast (TC at <code>
 and feed it in with <code>handle_tc_message</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // TC server (0x33) broadcasts canonical process-data Status.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![ProcessDataCommands::Status.as_u8(), 0, 0, 0, 0, 0, 0, 0],
-        0x33,
-    ));
-    println!(
-        "[2] TC_STATUS → {:?}, tc_addr=0x{:02X}",
-        client.state(),
-        client.tc_address()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:41:51}}
 <span class="boring">}</span></code></pre>
 <p>This is the same tick-and-pump rhythm from
 <a href="#2-the-hello-world-line-by-line">chapter 2</a>, specialized for the TC: <strong>inbound frames
@@ -6695,14 +6239,7 @@ and then asks the TC what protocol version it speaks. Each <code>update</code> p
 send-side step:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // update() ships WS Master.
-    let _ = client.update(1);
-    // update() ships VERSION_REQUEST.
-    let _ = client.update(1);
-    println!(
-        "[3] sent WS Master + VERSION_REQUEST → {:?}",
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:53:60}}
 <span class="boring">}</span></code></pre>
 <p>The first <code>update</code> ships the <strong>Working Set Master</strong> announcement (member count
 one). The second ships the <strong>version request</strong>. Version negotiation comes before
@@ -6714,16 +6251,7 @@ booms and sections it can handle). We feed that reply back and read the recorded
 version:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![tc_cmd::VERSION_RESPONSE, 4, 1, 8, 0, 0xFF, 0xFF, 0xFF],
-        0x33,
-    ));
-    println!(
-        "[4] TC version={}, → {:?}",
-        client.tc_version(),
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:63:72}}
 <span class="boring">}</span></code></pre>
 <p><code>tc_version()</code> now reports what the TC told us. A malformed version reply is
 ignored and the client keeps waiting until the timeout, rather than proceeding on
@@ -6734,33 +6262,14 @@ object-pool transfer (on a real bus, large pools are fragmented across many CAN
 frames by the transport-protocol layer):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // update() ships DDOP transfer.
-    let frames = client.update(1);
-    println!(
-        "[5] DDOP frame size={} bytes → {:?}",
-        frames[0].data.len(),
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:74:80}}
 <span class="boring">}</span></code></pre>
 <p>The TC replies with a verdict on the pool — accepted or rejected — and the client
 then sends the <strong>activate</strong> command and waits for its acknowledgement. A zero
 status means success:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // POOL_RESPONSE then ACTIVATE_RESPONSE.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0),
-        0x33,
-    ));
-    let _ = client.update(1); // sends ACTIVATE_POOL
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        fixed_response(tc_cmd::ACTIVATE_RESPONSE, 0),
-        0x33,
-    ));
-    assert_eq!(client.state(), TCState::Connected);
-    println!("[6] activated → {:?}  ✓", client.state());
+</span>{{#include ../../../examples/tc_client_demo.rs:82:95}}
 <span class="boring">}</span></code></pre>
 <p>When the activation reply comes back clean, the client reaches
 <code>TCState::Connected</code>. The example asserts exactly that. Only now — pool uploaded
@@ -6980,21 +6489,7 @@ bus, repeat until claimed. This is exactly the <code>claim</code> anchor in the 
 example:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p><code>ctrl.is_claimed()</code> and <code>ctrl.address()</code> tell you where the node landed.
 Everything you learned about the loop still applies; the preset just rides on top
@@ -7517,12 +7012,7 @@ identity number, which is enough to keep their NAMEs distinct — exactly the <c
 anchor from the session example:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>The topology now has <strong>three</strong> seats on <code>bus0</code> instead of two. You build it and
 take one endpoint per node, then wrap each in a transport for <code>spawn(...)</code>.</p>
@@ -7566,21 +7056,7 @@ only now it polls <strong>three</strong> drivers per iteration. This is the same
 from the session example, scaled up:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p>After about a simulated second all three are claimed and the program prints their
 addresses:</p>
@@ -7827,16 +7303,7 @@ whole 64-bit word</em> is what decides arbitration.</p>
 <p>In <code>machbus</code> you build a NAME like this (taken from the address-claim example):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let low_name = Name::default()
-        .with_identity_number(0x100)
-        .with_manufacturer_code(42)
-        .with_function_code(25)
-        .with_self_configurable(true);
-    let high_name = Name::default()
-        .with_identity_number(0x999)
-        .with_manufacturer_code(99)
-        .with_function_code(25)
-        .with_self_configurable(true);
+</span>{{#include ../../../examples/address_claim.rs:14:23}}
 <span class="boring">}</span></code></pre>
 <p>Two rules matter most when you choose these fields:</p>
 <ol>
@@ -7861,11 +7328,7 @@ which is what makes the network predictable across power cycles.</p>
 contest, exactly as the example prints it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    println!("low.raw  = 0x{:016X}", low_name.raw);
-    println!(
-        "high.raw = 0x{:016X}  (higher → loses arbitration)",
-        high_name.raw
-    );
+</span>{{#include ../../../examples/address_claim.rs:25:29}}
 <span class="boring">}</span></code></pre>
 <h2 id="lifecycle-and-state-machine"><a class="header" href="#lifecycle-and-state-machine">Lifecycle and state machine</a></h2>
 <p>A control function moves through a small set of claim states. <code>machbus</code> exposes
@@ -7933,32 +7396,7 @@ advance time with <code>update</code>. The address-claim example shows a full co
 between two nodes that both prefer <code>0x80</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut cf_low = InternalCf::new(low_name, 0, 0x80);
-    let mut cf_high = InternalCf::new(high_name, 0, 0x80);
-    let mut clm_low = AddressClaimer::new(0);
-    let mut clm_high = AddressClaimer::new(50);
-
-    cf_low
-        .on_address_claimed
-        .subscribe(|&amp;a| println!("[low ] claimed 0x{a:02X}"));
-    cf_high
-        .on_address_claimed
-        .subscribe(|&amp;a| println!("[high] claimed 0x{a:02X}"));
-    cf_high
-        .on_address_lost
-        .subscribe(|_| println!("[high] lost — re-claiming after 50ms"));
-
-    let _ = clm_low.start(&amp;mut cf_low);
-    let _ = clm_high.start(&amp;mut cf_high);
-
-    // Each CF sees the other's claim.
-    let _ = clm_low.handle_claim(&amp;mut cf_low, 0x80, high_name);
-    let _ = clm_high.handle_claim(&amp;mut cf_high, 0x80, low_name);
-
-    for _ in 0..6 {
-        let _ = clm_low.update(&amp;mut cf_low, 60);
-        let _ = clm_high.update(&amp;mut cf_high, 60);
-    }
+</span>{{#include ../../../examples/address_claim.rs:31:56}}
 <span class="boring">}</span></code></pre>
 <p>The loser, being self-configurable, shifts from <code>0x80</code> to <code>0x81</code>; the winner
 keeps <code>0x80</code>. The claimer raises <code>on_address_claimed</code> and <code>on_address_lost</code>
@@ -8934,46 +8372,7 @@ sides are plain <code>TransportProtocol</code> engines; you pump frames between 
 hand, which makes every step visible:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..40u32).map(|n| n as u8).collect();
-        let mut tx = TransportProtocol::new();
-        let mut rx = TransportProtocol::new();
-        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
-        let r = received.clone();
-        rx.on_complete
-            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
-
-        let rts = tx
-            .send(0xEF00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
-            .unwrap()[0];
-        println!(
-            "  RTS for {} bytes (≈{} packets)",
-            payload.len(),
-            payload.len().div_ceil(7)
-        );
-        let cts = rx.process_frame(&amp;rts, 0)[0];
-        println!("  CTS num={} next_seq={}", cts.data[1], cts.data[2]);
-
-        let _ = tx.process_frame(&amp;cts, 0);
-        let dt_frames = tx.get_pending_data_frames();
-        println!("  TX queued {} DT frames", dt_frames.len());
-
-        let mut eoma_seen = None;
-        for dt in &amp;dt_frames {
-            for resp in rx.process_frame(dt, 0) {
-                if resp.data[0] == machbus::net::tp::tp_cm::EOMA {
-                    eoma_seen = Some(resp);
-                }
-            }
-        }
-        let _ = tx.process_frame(&amp;eoma_seen.unwrap(), 0);
-        let got = received.borrow().clone().unwrap();
-        println!(
-            "  delivered {} bytes (equal? {})",
-            got.data.len(),
-            got.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:17:56}}
 <span class="boring">}</span></code></pre>
 <p>Read it as the state machine in motion:</p>
 <ol>
@@ -9075,43 +8474,7 @@ waiting state.</p>
 folded into <code>get_pending_data_frames</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..2500u32).map(|n| (n &amp; 0xFF) as u8).collect();
-        let mut tx = ExtendedTransportProtocol::new();
-        let mut rx = ExtendedTransportProtocol::new();
-        let received = Rc::new(RefCell::new(None::&lt;TransportSession&gt;));
-        let r = received.clone();
-        rx.on_complete
-            .subscribe(move |s| *r.borrow_mut() = Some(s.clone()));
-
-        let rts = tx
-            .send(0xCA00, &amp;payload, 0x10, 0x20, 0, Priority::Lowest)
-            .unwrap()[0];
-        let mut to_tx = rx.process_frame(&amp;rts, 0);
-        let mut turns = 0;
-        for turn in 0..50 {
-            for f in to_tx.drain(..) {
-                let _ = tx.process_frame(&amp;f, 0);
-            }
-            let dt = tx.get_pending_data_frames();
-            if dt.is_empty() {
-                break;
-            }
-            for f in &amp;dt {
-                to_tx.extend(rx.process_frame(f, 0));
-            }
-            turns = turn + 1;
-            if received.borrow().is_some() {
-                break;
-            }
-        }
-        let got = received.borrow().clone().unwrap();
-        println!(
-            "  converged in {turns} turns, delivered {} bytes (equal? {})",
-            got.data.len(),
-            got.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:60:96}}
 <span class="boring">}</span></code></pre>
 <p><code>ExtendedTransportProtocol::receive_profile_for_advertised_size</code> lets you
 validate an advertised size against the protocol and your local receive cap
@@ -9321,26 +8684,7 @@ and watches for the completed <code>Message</code>. The <code>transport_demo</co
 ends together for a GNSS-position payload:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..30u32).map(|n| (n + 0x40) as u8).collect();
-        let mut tx = FastPacketProtocol::new();
-        let mut rx = FastPacketProtocol::new();
-        let frames = tx.send(PGN_GNSS_POSITION, &amp;payload, 0x10).unwrap();
-        println!("  {} frames for {} bytes", frames.len(), payload.len());
-
-        let mut got = None;
-        for f in &amp;frames {
-            if let Some(m) = rx.process_frame(f) {
-                got = Some(m);
-            }
-        }
-        let msg = got.unwrap();
-        println!(
-            "  reassembled {} bytes (equal? {})",
-            msg.data.len(),
-            msg.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:100:119}}
 <span class="boring">}</span></code></pre>
 <p>What the calls mean:</p>
 <ul>
@@ -9662,15 +9006,7 @@ couple of PGNs, blocks one, and then feeds frames through it.</p>
 <p>You configure the NIU declaratively, then start it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut niu = Niu::new(
-        NiuConfig::default()
-            .name("demo-niu")
-            .mode(NiuFilterMode::PassSpecific),
-    );
-    niu.allow_pgn(PGN_HEARTBEAT, true);
-    niu.allow_pgn_rate_limited(PGN_DM1, 100, true); // 1 frame / 100 ms
-    niu.block_pgn(PGN_REQUEST, true);
-    niu.start().unwrap();
+</span>{{#include ../../../examples/niu_demo.rs:11:19}}
 <span class="boring">}</span></code></pre>
 <p><code>NiuConfig::default().name(...).mode(...)</code> sets the policy; <code>allow_pgn</code>,
 <code>allow_pgn_rate_limited</code>, and <code>block_pgn</code> install rules; <code>start</code> flips the state
@@ -9680,40 +9016,7 @@ bidirectional.</p>
 forward or <code>None</code> to drop:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // 1. Heartbeat (allowed) — forwards.
-    let hb = Frame::from_message(
-        Priority::Default,
-        PGN_HEARTBEAT,
-        0x10,
-        BROADCAST_ADDRESS,
-        &amp;[1; 8],
-    );
-    println!(
-        "[hb ] tractor → forwarded? {}",
-        niu.process_frame(hb, Side::Tractor, 0).is_some()
-    );
-
-    // 2. Request PGN (explicitly blocked).
-    let req = Frame::from_message(Priority::Default, PGN_REQUEST, 0x10, 0x42, &amp;[0; 3]);
-    println!(
-        "[req] tractor → forwarded? {}",
-        niu.process_frame(req, Side::Tractor, 0).is_some()
-    );
-
-    // 3. DM1 with 100 ms rate limit.
-    let dm1 = Frame::from_message(Priority::Default, PGN_DM1, 0x10, BROADCAST_ADDRESS, &amp;[0; 8]);
-    let r1 = niu.process_frame(dm1, Side::Tractor, 50);
-    let r2 = niu.process_frame(dm1, Side::Tractor, 100);
-    let r3 = niu.process_frame(dm1, Side::Tractor, 200);
-    println!("[dm1] t=50  → {} (first allowed)", r1.is_some());
-    println!("[dm1] t=100 → {} (within window)", r2.is_some());
-    println!("[dm1] t=200 → {} (window elapsed)", r3.is_some());
-
-    println!(
-        "\n[stats] forwarded={}, blocked={}",
-        niu.forwarded(),
-        niu.blocked()
-    );
+</span>{{#include ../../../examples/niu_demo.rs:27:60}}
 <span class="boring">}</span></code></pre>
 <p>The heartbeat is allowed and forwards; the request PGN is explicitly blocked; the
 DM1 is rate-limited to one crossing per 100 ms, so the frame at <code>t=50</code> passes,
@@ -10035,44 +9338,14 @@ for a VT server at address <code>0x80</code>. Start by building a minimal pool �
 set object that points at one data mask — and calling <code>connect</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let pool = ObjectPool::default()
-        .with_object(create_working_set(1, &amp;WorkingSetBody::default()).with_children([10u16]))
-        .with_object(create_data_mask(10, &amp;DataMaskBody::default()));
-
-    let mut client = VTClient::new(VTClientConfig::default());
-    client.set_object_pool(pool);
-    client.connect().unwrap();
-    println!("[1] connect()    → {:?}", client.state());
-
-    // Pretend a VT server (addr 0x80) just broadcast its status.
-    let mut status = vec![cmd::VT_STATUS, 0xFF];
-    status.resize(8, 0xFF);
-    status[6] = 4; // version 4
+</span>{{#include ../../../examples/vt_client_demo.rs:16:28}}
 <span class="boring">}</span></code></pre>
 <p><code>connect</code> only arms the state machine; it does not block. From here you pump.
 When the (simulated) VT broadcasts its status, you feed it in, then call <code>update</code>
 to get the next outbound frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    println!("[2] VT_STATUS    → {:?}", client.state());
-
-    // update() emits the WS Master frame.
-    let frames = client.update(1);
-    println!(
-        "[3] update() → {} frame ({:?})",
-        frames.len(),
-        client.state()
-    );
-
-    // update() emits GET_MEMORY.
-    let frames = client.update(1);
-    println!("[4] update() → GET_MEMORY ({:?})", client.state());
-    assert_eq!(frames[0].data[0], cmd::GET_MEMORY);
-
-    // VT replies "memory OK".
-    let mut memory_response = [0xFFu8; 8];
-    memory_response[0] = cmd::GET_MEMORY_RESPONSE;
-    memory_response[1] = 0x00;
+</span>{{#include ../../../examples/vt_client_demo.rs:30:48}}
 <span class="boring">}</span></code></pre>
 <p>Each <code>update</code> returns a <code>Vec&lt;ClientOutbound&gt;</code> in emission order — usually one
 frame, but the upload step can produce the pool transfer and then, a tick later,
@@ -10408,18 +9681,7 @@ watching node receives.</p>
 from a <code>VTServerConfig</code>, then <code>start()</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut server = VTServer::new(
-        VTServerConfig::default()
-            .with_screen(800, 480)
-            .with_version(4),
-    );
-    server.start().unwrap();
-    println!(
-        "[boot] state={:?}, screen={}×{}",
-        server.state(),
-        server.screen_width(),
-        server.screen_height()
-    );
+</span>{{#include ../../../examples/vt_server_demo.rs:14:25}}
 <span class="boring">}</span></code></pre>
 <p>Feed each inbound message to <code>handle_ecu_message(&amp;msg)</code>, which returns the
 <code>OutboundFrame</code>s to send and applies side effects (state transitions, events).
@@ -10427,31 +9689,12 @@ The demo walks a single client at <code>0x42</code> through Get Memory, pool tra
 End of Object Pool. The upload step:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let pool = ObjectPool::default()
-        .with_object(create_working_set(1, &amp;WorkingSetBody::default()).with_children([2u16]))
-        .with_object(create_data_mask(2, &amp;DataMaskBody::default()));
-    let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
-    transfer.extend(pool.serialize().unwrap());
-    server.handle_ecu_message(&amp;Message::new(PGN_ECU_TO_VT, transfer, 0x42));
-    println!(
-        "[xfer] client {} pool uploaded? {}",
-        server.clients().len(),
-        server.clients()[0].pool_uploaded
-    );
+</span>{{#include ../../../examples/vt_server_demo.rs:39:49}}
 <span class="boring">}</span></code></pre>
 <p>And the activation step, where a success response makes the pool active:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>        "[end_of_pool] reply success={}, state={:?}",
-        out[0].data[1] == 0,
-        server.state()
-    );
-    assert_eq!(server.state(), VTServerState::Connected);
-
-    // Periodic VT status broadcast.
-    let bytes = server
-        .update(machbus::isobus::vt::VT_STATUS_INTERVAL_MS)
-        .unwrap();
+</span>{{#include ../../../examples/vt_server_demo.rs:58:67}}
 <span class="boring">}</span></code></pre>
 <p>To advertise, call <code>update(elapsed_ms)</code> each loop; when it returns <code>Some(bytes)</code>
 you broadcast those bytes. <code>clients()</code> and <code>active_working_set()</code> let you inspect
@@ -10904,31 +10147,7 @@ make test
 validates, parses it object by object, and prints the derived version string:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    //   - id=2, type=NumberVariable (21): value=0xCAFEF00D
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&amp;[0x01, 0x00]); // id = 1
-    buf.push(3); // type = Container
-    buf.extend_from_slice(&amp;[100, 0, 200, 0, 0]); // w=100, h=200, hidden=0
-    buf.extend_from_slice(&amp;[0, 0]); // num_objects=0, num_macros=0
-
-    buf.extend_from_slice(&amp;[0x02, 0x00]); // id = 2
-    buf.push(21); // type = NumberVariable
-    buf.extend_from_slice(&amp;[0x0D, 0xF0, 0xFE, 0xCA]); // value LE
-
-    println!("buffer size = {} bytes", buf.len());
-    println!("validate    = {}", validate(&amp;buf));
-
-    let objs = parse_iop_data(&amp;buf).unwrap();
-    println!("parsed {} objects:", objs.len());
-    for o in &amp;objs {
-        println!(
-            "  id=0x{:04X}, type={:&gt;2}, body_len={}",
-            o.id,
-            o.type_byte,
-            o.body.len()
-        );
-    }
-
+</span>{{#include ../../../examples/iop_parser_demo.rs:12:36}}
 <span class="boring">}</span></code></pre>
 <p><code>make test</code> exercises the full <code>vt::objects</code> suite — body encode/decode round
 trips, the duplicate-ID guard, graph validation, and serialize/deserialize — plus
@@ -11088,10 +10307,7 @@ guard on connection state and return <code>Err</code> if you call them too early
 client demo connects a client and then sends one update:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>        out.dest.unwrap_or(0),
-        out.data.len()
-    );
-}
+</span>{{#include ../../../examples/vt_client_demo.rs:77:85}}
 <span class="boring">}</span></code></pre>
 <p><code>change_numeric_value</code> returns a <code>ClientOutbound { pgn, dest, data }</code> — the
 terminal’s address in <code>dest</code>, the encoded command in <code>data</code>. You transmit that
@@ -11753,40 +10969,13 @@ underlying <code>TaskControllerClient</code> for value/command callbacks via
 building a small DDOP that names the device and one element:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p>Then create the client, hand it the pool, and begin the connection. The first TC
 status the client hears binds the server address:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut client = TaskControllerClient::new(TCClientConfig::default());
-    client.set_ddop(ddop);
-    client.connect().unwrap();
-    println!("[1] connect → {:?}", client.state());
-
-    // TC server (0x33) broadcasts canonical process-data Status.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![ProcessDataCommands::Status.as_u8(), 0, 0, 0, 0, 0, 0, 0],
-        0x33,
-    ));
-    println!(
-        "[2] TC_STATUS → {:?}, tc_addr=0x{:02X}",
-        client.state(),
-        client.tc_address()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:36:51}}
 <span class="boring">}</span></code></pre>
 <p>From there the example pumps <code>update</code> to ship the working-set announcement and
 version request, feeds the TC’s replies back with <code>handle_tc_message</code>, lets the
@@ -11960,18 +11149,7 @@ with a <code>TCServerConfig</code> and keeps a small amount of state per client.
 before the server goes live:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut server = TaskControllerServer::new(
-        TCServerConfig::default()
-            .with_number(1)
-            .with_version(4)
-            .with_booms(1)
-            .with_sections(8)
-            .with_channels(4),
-    );
-    server.start().unwrap();
-
-    // Hook a value request: gauge sensor returns 42 for any DDI.
-    server.on_value_request(|_elem, _ddi, _addr| Ok(42));
+</span>{{#include ../../../examples/tc_server_demo.rs:13:24}}
 <span class="boring">}</span></code></pre>
 <p><code>TCServerConfig::validate</code> rejects topologies the wire format cannot express — a
 zero boom count, or a section count outside the representable range. Reject
@@ -12391,19 +11569,7 @@ sane values is a good self-check.</p>
 runs it through the full upload handshake. Here is the pool it builds:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p>A real sprayer extends that skeleton. The shape below is illustrative (not a
 compiled snippet) and shows how sections, geometry properties, a live rate and a
@@ -12701,80 +11867,21 @@ prints the rate at each step. First, the map — two square zones, one at rate 1
 to the south and one at rate 200 to the north:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    tc.add_prescription_map(PrescriptionMap {
-        structure_label: "demo-map".to_string(),
-        zones: vec![
-            PrescriptionZone {
-                boundary: vec![
-                    Wgs::new(52.0, 4.0, 0.0),
-                    Wgs::new(52.0, 4.001, 0.0),
-                    Wgs::new(52.001, 4.001, 0.0),
-                    Wgs::new(52.001, 4.0, 0.0),
-                ],
-                holes: Vec::new(),
-                application_rate: 100,
-            },
-            PrescriptionZone {
-                boundary: vec![
-                    Wgs::new(52.001, 4.0, 0.0),
-                    Wgs::new(52.001, 4.001, 0.0),
-                    Wgs::new(52.002, 4.001, 0.0),
-                    Wgs::new(52.002, 4.0, 0.0),
-                ],
-                holes: Vec::new(),
-                application_rate: 200,
-            },
-        ],
-    });
+</span>{{#include ../../../examples/tc_geo_demo.rs:17:41}}
 <span class="boring">}</span></code></pre>
 <p>Then it subscribes to rate changes and walks four positions — into the south
 zone, onto the shared boundary, into the north zone, and off the map entirely —
 looking up both the raw rate and the engineering value at each:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Drive a 3-point trajectory through the field.
-    for (label, pos) in [
-        ("south zone   ", Wgs::new(52.0005, 4.0005, 0.0)),
-        ("between zones", Wgs::new(52.001, 4.0005, 0.0)),
-        ("north zone   ", Wgs::new(52.0015, 4.0005, 0.0)),
-        ("outside      ", Wgs::new(53.0, 5.0, 0.0)),
-    ] {
-        tc.set_position(GeoPoint {
-            position: pos,
-            timestamp_us: 0,
-        });
-        tc.update(0);
-        let rate = tc.get_rate_at_position(pos);
-        let rate_eng = tc
-            .get_rate_at_position_engineering(
-                pos,
-                DDI(ddi::SETPOINT_VOLUME_PER_AREA_APPLICATION_RATE),
-            )
-            .unwrap();
-        println!(
-            "  {label}: lat={:.4} lon={:.4} → raw={:?}, mm³/m²={:?}",
-            pos.latitude, pos.longitude, rate, rate_eng
-        );
-    }
-    println!("\n[events] rate transitions observed: {:?}", log.borrow());
+</span>{{#include ../../../examples/tc_geo_demo.rs:53:77}}
 <span class="boring">}</span></code></pre>
 <p>The “outside” point returns <code>None</code> from <code>get_rate_at_position</code>, which is the
 no-zone case your default policy handles. Finally it records a position and emits
 the two position process-data payloads for the controller:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Position reaches the TC over PGN_GNSS_POSITION. It used to be sent as
-    // Process Data under DDI 0x0087/0x0088, which the ISO 11783-11 dictionary
-    // assigns to Device Element Offset Y and Z in millimetres — a latitude of
-    // 52 degrees told the TC the element sat 520 km off the datum.
-    let position_pos = Wgs::new(52.0005, 4.0005, 0.0);
-    let mut tc2 = TCGEOInterface::new();
-    tc2.set_position(GeoPoint {
-        position: position_pos,
-        timestamp_us: 0,
-    });
-    println!(
-        "\n[state] TC-GEO position: {:?}",
+</span>{{#include ../../../examples/tc_geo_demo.rs:79:90}}
 <span class="boring">}</span></code></pre>
 <p>The whole flow runs in software with no bus: you load a map, set a position,
 call <code>update</code>, and read the rate.</p>
@@ -13056,40 +12163,14 @@ bundling the classification, power config, and broadcast intervals.</p>
 classification piece:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── Classification (Class 2NF) ────────────────────────────────
-    let cls = TecuClassification {
-        base_class: TecuClass::Class2,
-        navigation: true,
-        front_mounted: true,
-        ..Default::default()
-    };
-    println!("[classification] {cls}");
-
-    // ─── Class 1, 2, 3 string forms ────────────────────────────────
-    for c in [TecuClass::Class1, TecuClass::Class2, TecuClass::Class3] {
-        let inner = TecuClassification {
-            base_class: c,
-            ..Default::default()
-        };
-        println!("  {c:?} → {inner}");
-    }
+</span>{{#include ../../../examples/tractor_ecu_demo.rs:9:25}}
 <span class="boring">}</span></code></pre>
 <p><code>TecuClassification</code> is a plain struct of fields, so you set the base class and
 flip on the addenda you support. Printing it yields the canonical class string
 (<code>Class 2NF</code> here). The power-state walk:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── Power-state enum ──────────────────────────────────────────
-    println!("\n[power-state]");
-    for s in [
-        PowerState::PowerOff,
-        PowerState::IgnitionOn,
-        PowerState::ShutdownInitiated,
-        PowerState::FinalShutdown,
-    ] {
-        println!("  {s:?}");
-    }
-    println!("\n  default = {:?}  (boot state)", PowerState::default());
+</span>{{#include ../../../examples/tractor_ecu_demo.rs:27:37}}
 <span class="boring">}</span></code></pre>
 <p>To advertise facilities, build a <code>TractorFacilities</code>, fill the tiers you offer,
 and encode it onto the response PGN — the shape is:</p>
@@ -13688,34 +12769,12 @@ builds an <code>Eec1</code>, encodes it, decodes it back, and prints the enginee
 values — the canonical pattern for a callback that received a raw frame:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // EEC1 — Electronic Engine Controller 1.
-    let eec1 = Eec1 {
-        engine_torque_percent: Signal::Value(50.0),
-        driver_demand_percent: Signal::Value(75.0),
-        actual_engine_percent: Signal::Value(45.0),
-        engine_speed_rpm: Signal::Value(1500.0),
-        starter_mode: 1,
-        source_address: 0x00,
-    };
-    let bytes = eec1.encode();
-    let d = Eec1::decode(&amp;bytes).unwrap();
-    println!(
-        "[EEC1]  rpm={:?}, torque={:?}%, driver_demand={:?}%",
-        d.engine_speed_rpm.value(),
+</span>{{#include ../../../examples/engine_powertrain_demo.rs:11:24}}
 <span class="boring">}</span></code></pre>
 <p><code>EngineHours</code> works the same way, carrying the lifetime counters:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let fbytes = fe.encode();
-    let fd = FuelEconomy::decode(&amp;fbytes).unwrap();
-    println!(
-        "[LFE]   rate={:?} L/h, inst={:?} L/h, throttle={:?}%",
-        fd.fuel_rate_lph.value(),
-        fd.instantaneous_lph.value(),
-        fd.throttle_position.value()
-    );
-
-    // Engine hours.
+</span>{{#include ../../../examples/engine_powertrain_demo.rs:54:63}}
 <span class="boring">}</span></code></pre>
 <p>To wire these into a low-level loop, register a callback for the relevant PGN
 with <code>IsoNet::register_pgn_callback</code> and call the matching <code>decode</code> inside it.
@@ -14013,53 +13072,11 @@ real producer — so a trigger cannot be declared and then quietly never fire.</
 reporting halts the machine rather than only preventing re-engagement.</p>
 <h2 id="the-lifecycle-1"><a class="header" href="#the-lifecycle-1">The lifecycle</a></h2>
 <p>Plug it and claim, exactly like any other plugin:</p>
-<pre><code class="language-rust ignore">    // A driving node. `AutoDrive` supersedes `Guidance` and is mutually
-    // exclusive with it — both author PGN 0xAD00, and the builder refuses the
-    // combination rather than let one overwrite the other's safe stop.
-    let name = Name::default()
-        .with_identity_number(0x100)
-        .with_function_code(0x80)
-        .with_self_configurable(true);
-    let mut session = Session::builder(name, 0x80)
-        .plug(AutoDrive::new())
-        .build()?;
-    session.start()?;
-
-    let mut now = Instant::ZERO;
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        session.tick(now);
-        while session.poll_transmit().is_some() {} // discard claim traffic
-        if session.is_claimed() {
-            break;
-        }
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:build}}</code></pre>
 <p>Then arm, then engage. Both report the <strong>first unmet precondition</strong> rather than
 failing silently, because an autonomy client that asks to steer and is ignored
 cannot tell “commanded” from “declined”:</p>
-<pre><code class="language-rust ignore">    // Engaging before a steering ECU answers is refused, and the refusal says
-    // which precondition failed — an autonomy client that asks to steer and is
-    // silently ignored cannot tell "commanded" from "declined".
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        match d.arm() {
-            Ok(()) =&gt; println!("[armed] with no machine info — unexpected"),
-            Err(refusal) =&gt; println!("[refused] arm before any ECU answered: {}", refusal.as_str()),
-        }
-    }
-
-    // The tractor starts broadcasting. Now the preconditions are met.
-    session.feed(0, &amp;machine_info_frame(), now);
-    now = now.add_millis(50);
-    session.tick(now);
-
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        // Both report the first unmet precondition rather than failing silently.
-        d.arm().expect("preconditions met once the ECU answers");
-        d.engage().expect("engage follows a successful arm");
-        println!("[engaged] status = {:?}", d.status());
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:arm}}</code></pre>
 <p><code>arm()</code> and <code>engage()</code> check, in order: no latched stop, no held shortcut button,
 no live GNSS hazard, link alive, machine info present, then the machine’s own
 report — mechanical lockout clear and operator engage switch active.</p>
@@ -14084,77 +13101,13 @@ engaged</strong>, even with an unchanged setpoint. Miss it and <code>AutoDrive</
 <p>Tune with <code>with_command_stale_ms(ms)</code>; <code>0</code> disables the watchdog, which is only
 appropriate when something else guarantees liveness.</p>
 <p>The driving loop, then, refreshes the setpoint every cycle:</p>
-<pre><code class="language-rust ignore">    // The command is a heartbeat. While engaged the plugin re-transmits every
-    // 100 ms even when the setpoint has not changed, because that stream *is*
-    // what the steering ECU times out on. The flip side: an application that
-    // stops refreshing must not leave the machine steering forever, so
-    // `AutoDrive` stops itself after COMMAND_STALE_MS (300 ms) without a fresh
-    // command. Refresh every cycle, exactly as the drive tool does.
-    let mut steps = 0;
-    for _ in 0..10 {
-        now = now.add_millis(50);
-        session.feed(0, &amp;machine_info_frame(), now); // the ECU keeps answering
-
-        // A real controller computes this from the path and the GNSS pose; see
-        // `geo::guidance` for the pure-pursuit maths.
-        let cmd = DriveCommand {
-            speed_mps: Some(2.0),
-            curvature_km_inv: Some(20.0), // a 50 m-radius turn
-        };
-        if let Some(d) = session.get_mut::&lt;AutoDrive&gt;()
-            &amp;&amp; let Err(refusal) = d.command(cmd)
-        {
-            println!("[refused] command: {}", refusal.as_str());
-        }
-
-        session.tick(now);
-        while let Some((_, frame)) = session.poll_transmit() {
-            match frame.id.pgn() {
-                PGN_GUIDANCE_SYSTEM_CMD =&gt; steps += 1,
-                PGN_MACHINE_SELECTED_SPEED_CMD =&gt; {}
-                _ =&gt; {}
-            }
-        }
-    }
-    println!("[heartbeat] {steps} guidance commands in 500 ms of driving");</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:heartbeat}}</code></pre>
 <p>Releasing the dead-man disengages. <code>disengage()</code> is infallible and falls back to
 <code>DriveCommand::halt()</code> — and <strong>losing</strong> the dead-man has to land here too, not
 leave the last setpoint running:</p>
-<pre><code class="language-rust ignore">    // The operator releases the dead-man. `disengage` is infallible and
-    // idempotent — a disengage must never be refused — and it falls back to
-    // `DriveCommand::halt()`: zero speed, zero curvature.
-    //
-    // Losing the dead-man has to read the same as releasing it. In the drive
-    // tool that means a disconnected gamepad, or a SPACE key that stopped
-    // repeating, both land here rather than leaving the last setpoint running.
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        d.disengage(SafeStopTrigger::OperatorOverride);
-        println!(
-            "[released] status = {:?}   stop = {:?}",
-            d.status(),
-            d.stop_reason().map(SafeStopTrigger::as_str)
-        );
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:deadman}}</code></pre>
 <p>The stop is latching, so re-engaging is refused until it is explicitly cleared:</p>
-<pre><code class="language-rust ignore">    // The stop is *latching*: re-engaging is refused until it is explicitly
-    // cleared. Clearing a fault is not by itself consent to move, so it is a
-    // separate deliberate act — the `C` key in the drive tool, or a fresh
-    // 1.5 s arm hold on the gamepad.
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        match d.engage() {
-            Ok(()) =&gt; println!("[engaged] while latched — unexpected"),
-            Err(refusal) =&gt; println!("[refused] engage while latched: {}", refusal.as_str()),
-        }
-
-        // `clear_stop` itself refuses while the condition is still live, so it
-        // cannot re-arm autonomy against a held stop button or a stale fix.
-        match d.clear_stop() {
-            Ok(()) =&gt; println!("[cleared] latch released; re-engage is allowed again"),
-            Err(refusal) =&gt; println!("[refused] clear_stop: {}", refusal.as_str()),
-        }
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:clear}}</code></pre>
 <h2 id="cadence-and-tuning"><a class="header" href="#cadence-and-tuning">Cadence and tuning</a></h2>
 <div class="table-wrapper">
 <table>
@@ -14978,20 +13931,7 @@ and masks the occurrence count to 7 bits, so a DTC always round-trips through a
 valid wire field:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    }
-
-    // ─── DTC field encoding ────────────────────────────────────────
-    let dtc = Dtc {
-        spn: 0x1_2345,
-        fmi: Fmi::MechanicalFail,
-        occurrence_count: 12,
-        conversion_method: false,
-    };
-    let dtc_bytes = dtc.encode();
-    let dtc_decoded = Dtc::decode(&amp;dtc_bytes).unwrap();
-    println!(
-        "\n[DTC] 4-byte field: SPN=0x{:05X} → wire {:02X?} → SPN=0x{:05X}",
-        dtc.spn, dtc_bytes, dtc_decoded.spn,
+</span>{{#include ../../../examples/diagnostic_demo.rs:48:61}}
 <span class="boring">}</span></code></pre>
 <p>Two helpers matter for fault bookkeeping. <code>Dtc::matches</code> compares two DTCs by
 <code>(spn, fmi)</code> only, ignoring the occurrence count — that is the right notion of
@@ -15123,27 +14063,11 @@ stream. <code>examples/session_minimal.rs</code> shows exactly this — build wi
 raise a DTC, and watch a peer receive the DM1:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    ctrl_a.with_mut::&lt;Diagnostics, _&gt;(|diag| {
-        diag.raise(Dtc {
-            spn: 1234,
-            fmi: Fmi::BelowNormal,
-            occurrence_count: 1,
-            conversion_method: false,
-        });
-    });
+</span>{{#include ../../../examples/session_minimal.rs:finecontrol}}
 <span class="boring">}</span></code></pre>
 <p>The DM1 a peer sends back arrives as <code>Event::Diag(DiagEvent::Dm1Received { .. })</code>
 on <code>driver.poll()</code> (or filtered via <code>controls.drain::&lt;DiagEvent&gt;()</code>). For the
@@ -15157,43 +14081,7 @@ machine, no timer, no list management — you compose the codecs into your own
 logic. The example builds a DM1 with two DTCs, encodes it, and decodes it back:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let dm1 = DmDtcList {
-        lamps: DiagnosticLamps {
-            amber_warning: LampStatus::On,
-            ..Default::default()
-        },
-        dtcs: vec![
-            Dtc {
-                spn: 520,
-                fmi: Fmi::VoltageLow,
-                occurrence_count: 0,
-                conversion_method: false,
-            },
-            Dtc {
-                spn: 190,
-                fmi: Fmi::AbnormalRateChange,
-                occurrence_count: 7,
-                conversion_method: false,
-            },
-        ],
-    };
-    println!(
-        "[DM1] {} active DTCs, amber={:?}",
-        dm1.dtcs.len(),
-        dm1.lamps.amber_warning
-    );
-
-    let bytes = dm1.encode();
-    let decoded = DmDtcList::decode(&amp;bytes).unwrap();
-    println!(
-        "[encode/decode] {} bytes round-trip → {} DTCs",
-        bytes.len(),
-        decoded.dtcs.len()
-    );
-    for d in &amp;decoded.dtcs {
-        println!(
-            "  SPN=0x{:05X} FMI={:?} OC={}",
-            d.spn, d.fmi, d.occurrence_count
+</span>{{#include ../../../examples/diagnostic_demo.rs:10:46}}
 <span class="boring">}</span></code></pre>
 <p>This layer is right for tests, for embedded loops where you own every byte, and
 for any node that wants full control over which messages it speaks.</p>
@@ -15544,48 +14432,16 @@ against a <code>FileServer</code> directly. The client (<code>0x42</code>) creat
 <code>Write | Create</code>, gets a handle back, and writes into it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Client (0x42) opens a new file with Create+Write.
-    let mut req = vec![FSFunction::OpenFile.as_u8(), 0x01];
-    let path = b"data.bin";
-    req.push(path.len() as u8);
-    req.push(OpenFlags::Write | OpenFlags::Create);
-    req.extend_from_slice(path);
-    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, req, 0x42));
-    let handle = out[0].data[3];
-    assert_eq!(out[0].data[2], FSError::Success.as_u8());
-    println!("[open ] handle = {handle}");
+</span>{{#include ../../../examples/file_server_demo.rs:15:24}}
 <span class="boring">}</span></code></pre>
 <p>It then writes five bytes, seeks back to the start, and reads them again:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Write 5 bytes.
-    let mut wreq = vec![FSFunction::WriteFile.as_u8(), 0x02, handle];
-    wreq.extend_from_slice(&amp;5u16.to_le_bytes());
-    wreq.extend_from_slice(b"hello");
-    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, wreq, 0x42));
-    println!(
-        "[write] wrote {} bytes (success={})",
-        u16::from_le_bytes([out[0].data[3], out[0].data[4]]),
-        out[0].data[2] == 0
-    );
+</span>{{#include ../../../examples/file_server_demo.rs:26:35}}
 <span class="boring">}</span></code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Read 5 bytes back.
-    let mut rreq = vec![0xFF; 8];
-    rreq[0] = FSFunction::ReadFile.as_u8();
-    rreq[1] = 0x04;
-    rreq[2] = handle;
-    rreq[3..5].copy_from_slice(&amp;5u16.to_le_bytes());
-    let out = server.handle_client_message(&amp;Message::new(PGN_FILE_CLIENT_TO_SERVER, rreq, 0x42));
-    let read_count = u16::from_le_bytes([out[0].data[3], out[0].data[4]]) as usize;
-    let read_data = &amp;out[0].data[5..5 + read_count];
-    println!(
-        "[read ] {} bytes: {:?}",
-        read_count,
-        std::str::from_utf8(read_data).unwrap_or("?")
-    );
-    assert_eq!(read_data, b"hello");
+</span>{{#include ../../../examples/file_server_demo.rs:42:56}}
 <span class="boring">}</span></code></pre>
 <h3 id="the-session-facade-recommended-for-applications-3"><a class="header" href="#the-session-facade-recommended-for-applications-3">The session facade (recommended for applications)</a></h3>
 <p>The <a href="#first-node">session facade</a> exposes both roles
@@ -15926,25 +14782,7 @@ example wires up the listeners and drives a position-rapid, a COG/SOG, and an
 attitude message through it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // ─── 1. Position rapid (PGN 129025) ───────────────────────────
-    let pos = GNSSPosition {
-        wgs: Wgs::new(52.0123, 4.5678, 0.0),
-        ..Default::default()
-    };
-    let bytes = NMEAInterface::build_position(&amp;pos);
-    iface.handle_message(&amp;Message::new(PGN_GNSS_POSITION_RAPID, bytes.to_vec(), 0x80));
-
-    // ─── 2. COG/SOG rapid (PGN 129026) ────────────────────────────
-    let bytes = NMEAInterface::build_cog_sog(std::f64::consts::FRAC_PI_4, 12.5);
-    iface.handle_message(&amp;Message::new(PGN_GNSS_COG_SOG_RAPID, bytes.to_vec(), 0x80));
-
-    // ─── 3. Attitude (PGN 127257) — 1 byte SID + 3×i16 angles ─────
-    let mut attitude = [0xFFu8; 8];
-    attitude[0] = 0x00; // SID
-    attitude[1..3].copy_from_slice(&amp;((std::f64::consts::FRAC_PI_2 / 0.0001) as i16).to_le_bytes());
-    attitude[3..5].copy_from_slice(&amp;((0.0524 / 0.0001) as i16).to_le_bytes());
-    attitude[5..7].copy_from_slice(&amp;((-0.0349 / 0.0001) as i16).to_le_bytes());
-    iface.handle_message(&amp;Message::new(PGN_ATTITUDE, attitude.to_vec(), 0x80));
+</span>{{#include ../../../examples/gnss_monitor.rs:31:49}}
 <span class="boring">}</span></code></pre>
 <p>After those three messages the cache holds a single merged fix — position from
 the first, course and speed from the second, attitude angles from the third —
@@ -16022,18 +14860,7 @@ short trajectory around a reference origin:</li>
 </ul>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut batch = GNSSBatch::default();
-    for i in 0..5 {
-        let dlat = (i as f64) * 1e-5;
-        let dlon = (i as f64) * 2e-5;
-        batch.positions.push(GNSSPosition {
-            wgs: Wgs::new(reference.latitude + dlat, reference.longitude + dlon, 0.0),
-            ..Default::default()
-        });
-    }
-    println!("[input] {} WGS samples", batch.positions.len());
-
-    let enu = batch.to_enu_batch(reference);
+</span>{{#include ../../../examples/gnss_batch.rs:17:28}}
 <span class="boring">}</span></code></pre>
 <ul>
 <li><strong>Rate handling.</strong> Position-rapid and COG/SOG arrive faster than the detailed
@@ -16238,33 +15065,10 @@ the line that follows it.</p>
 <h2 id="doing-it-with-machbus-24"><a class="header" href="#doing-it-with-machbus-24">Doing it with machbus</a></h2>
 <p>The whole surface is <code>nmea::SerialGNSS</code>. Construct it, subscribe to the events
 you care about, and feed it bytes.</p>
-<pre class="playground"><code class="language-rust">fn main() {
-    println!("=== Serial GNSS (NMEA-0183) Demo ===");
-
-    let mut parser = SerialGNSS::new();
-    let positions: Rc&lt;RefCell&lt;Vec&lt;GNSSPosition&gt;&gt;&gt; = Rc::new(RefCell::new(Vec::new()));
-    let p = positions.clone();
-    parser
-        .on_position
-        .subscribe(move |&amp;pos| p.borrow_mut().push(pos));
-    parser
-        .on_cog
-        .subscribe(|c| println!("  on_cog → {:.3} rad", c));
-    parser
-        .on_sog
-        .subscribe(|s| println!("  on_sog → {:.2} m/s", s));
-
-    // GGA: position fix.
-    let gga = with_checksum("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    parser.feed_bytes(gga.as_bytes());
-
-    // RMC: speed + course.
-    let rmc = with_checksum("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W");
-    parser.feed_bytes(rmc.as_bytes());
-
-    // GSA: 3D fix DOPs.
-    let gsa = with_checksum("$GPGSA,A,3,04,05,,09,12,,,24,,,,,2.5,1.3,2.1");
-    parser.feed_bytes(gsa.as_bytes());</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>{{#include ../../../examples/serial_gnss.rs:20:46}}
+<span class="boring">}</span></code></pre>
 <p>Three events fire as sentences land:</p>
 <ul>
 <li><code>on_position</code> — a new or updated position fix is available.</li>
@@ -16279,19 +15083,7 @@ count, and <code>latest_utc_datetime()</code> returns the most recent <code>ZDA<
 across three <code>feed_bytes</code> calls and confirming the fix still parses:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // Demonstrate split-buffer parsing (UART chunk boundaries).
-    println!("\n[chunked feed] split GGA across 3 reads:");
-    let mut p2 = SerialGNSS::new();
-    let body = with_checksum("$GPGGA,124519,4807.500,N,01132.000,E,1,06,1.2,540.0,M,46.9,M,,");
-    let bytes = body.as_bytes();
-    p2.feed_bytes(&amp;bytes[..30]);
-    p2.feed_bytes(&amp;bytes[30..50]);
-    p2.feed_bytes(&amp;bytes[50..]);
-    let last = p2.latest_position().unwrap();
-    println!(
-        "  lat={:.6}, lon={:.6} ({} sats)",
-        last.wgs.latitude, last.wgs.longitude, last.satellites_used
-    );
+</span>{{#include ../../../examples/serial_gnss.rs:63:75}}
 <span class="boring">}</span></code></pre>
 <p>The serial port itself is yours to open. <code>SerialGNSSConfig</code> carries the usual
 UART settings (<code>baud</code>, <code>data_bits</code>, <code>stop_bits</code>, <code>parity</code>) as plain pass-through

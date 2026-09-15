@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -224,19 +224,7 @@ will log and control. Ours is the smallest pool that means anything — one
 version) that owns one <strong>device element</strong> (the <code>Root</code> of the device tree):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p><code>TaskControllerClient::new</code> takes a <code>TCClientConfig</code> (the default is fine — a
 six-second per-step timeout, a version-4 client). <code>set_ddop</code> hands it the device
@@ -246,10 +234,7 @@ wire yet; it validates the DDOP, arms the state machine, and moves the client to
 waiting for the server’s status.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut client = TaskControllerClient::new(TCClientConfig::default());
-    client.set_ddop(ddop);
-    client.connect().unwrap();
-    println!("[1] connect → {:?}", client.state());
+</span>{{#include ../../../examples/tc_client_demo.rs:36:39}}
 <span class="boring">}</span></code></pre>
 <blockquote>
 <p><strong>Why so small?</strong> A real DDOP describes every boom, section, bin, and reportable
@@ -264,17 +249,7 @@ to that TC’s address and advances the FSM. We fake the broadcast (TC at <code>
 and feed it in with <code>handle_tc_message</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // TC server (0x33) broadcasts canonical process-data Status.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![ProcessDataCommands::Status.as_u8(), 0, 0, 0, 0, 0, 0, 0],
-        0x33,
-    ));
-    println!(
-        "[2] TC_STATUS → {:?}, tc_addr=0x{:02X}",
-        client.state(),
-        client.tc_address()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:41:51}}
 <span class="boring">}</span></code></pre>
 <p>This is the same tick-and-pump rhythm from
 <a href="hello-world-explained.html">chapter 2</a>, specialized for the TC: <strong>inbound frames
@@ -288,14 +263,7 @@ and then asks the TC what protocol version it speaks. Each <code>update</code> p
 send-side step:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // update() ships WS Master.
-    let _ = client.update(1);
-    // update() ships VERSION_REQUEST.
-    let _ = client.update(1);
-    println!(
-        "[3] sent WS Master + VERSION_REQUEST → {:?}",
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:53:60}}
 <span class="boring">}</span></code></pre>
 <p>The first <code>update</code> ships the <strong>Working Set Master</strong> announcement (member count
 one). The second ships the <strong>version request</strong>. Version negotiation comes before
@@ -307,16 +275,7 @@ booms and sections it can handle). We feed that reply back and read the recorded
 version:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![tc_cmd::VERSION_RESPONSE, 4, 1, 8, 0, 0xFF, 0xFF, 0xFF],
-        0x33,
-    ));
-    println!(
-        "[4] TC version={}, → {:?}",
-        client.tc_version(),
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:63:72}}
 <span class="boring">}</span></code></pre>
 <p><code>tc_version()</code> now reports what the TC told us. A malformed version reply is
 ignored and the client keeps waiting until the timeout, rather than proceeding on
@@ -327,33 +286,14 @@ object-pool transfer (on a real bus, large pools are fragmented across many CAN
 frames by the transport-protocol layer):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // update() ships DDOP transfer.
-    let frames = client.update(1);
-    println!(
-        "[5] DDOP frame size={} bytes → {:?}",
-        frames[0].data.len(),
-        client.state()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:74:80}}
 <span class="boring">}</span></code></pre>
 <p>The TC replies with a verdict on the pool — accepted or rejected — and the client
 then sends the <strong>activate</strong> command and waits for its acknowledgement. A zero
 status means success:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    // POOL_RESPONSE then ACTIVATE_RESPONSE.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        fixed_response(tc_cmd::OBJECT_POOL_RESPONSE, 0),
-        0x33,
-    ));
-    let _ = client.update(1); // sends ACTIVATE_POOL
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        fixed_response(tc_cmd::ACTIVATE_RESPONSE, 0),
-        0x33,
-    ));
-    assert_eq!(client.state(), TCState::Connected);
-    println!("[6] activated → {:?}  ✓", client.state());
+</span>{{#include ../../../examples/tc_client_demo.rs:82:95}}
 <span class="boring">}</span></code></pre>
 <p>When the activation reply comes back clean, the client reaches
 <code>TCState::Connected</code>. The example asserts exactly that. Only now — pool uploaded

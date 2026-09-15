@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -347,53 +347,11 @@ real producer — so a trigger cannot be declared and then quietly never fire.</
 reporting halts the machine rather than only preventing re-engagement.</p>
 <h2 id="the-lifecycle"><a class="header" href="#the-lifecycle">The lifecycle</a></h2>
 <p>Plug it and claim, exactly like any other plugin:</p>
-<pre><code class="language-rust ignore">    // A driving node. `AutoDrive` supersedes `Guidance` and is mutually
-    // exclusive with it — both author PGN 0xAD00, and the builder refuses the
-    // combination rather than let one overwrite the other's safe stop.
-    let name = Name::default()
-        .with_identity_number(0x100)
-        .with_function_code(0x80)
-        .with_self_configurable(true);
-    let mut session = Session::builder(name, 0x80)
-        .plug(AutoDrive::new())
-        .build()?;
-    session.start()?;
-
-    let mut now = Instant::ZERO;
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        session.tick(now);
-        while session.poll_transmit().is_some() {} // discard claim traffic
-        if session.is_claimed() {
-            break;
-        }
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:build}}</code></pre>
 <p>Then arm, then engage. Both report the <strong>first unmet precondition</strong> rather than
 failing silently, because an autonomy client that asks to steer and is ignored
 cannot tell “commanded” from “declined”:</p>
-<pre><code class="language-rust ignore">    // Engaging before a steering ECU answers is refused, and the refusal says
-    // which precondition failed — an autonomy client that asks to steer and is
-    // silently ignored cannot tell "commanded" from "declined".
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        match d.arm() {
-            Ok(()) =&gt; println!("[armed] with no machine info — unexpected"),
-            Err(refusal) =&gt; println!("[refused] arm before any ECU answered: {}", refusal.as_str()),
-        }
-    }
-
-    // The tractor starts broadcasting. Now the preconditions are met.
-    session.feed(0, &amp;machine_info_frame(), now);
-    now = now.add_millis(50);
-    session.tick(now);
-
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        // Both report the first unmet precondition rather than failing silently.
-        d.arm().expect("preconditions met once the ECU answers");
-        d.engage().expect("engage follows a successful arm");
-        println!("[engaged] status = {:?}", d.status());
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:arm}}</code></pre>
 <p><code>arm()</code> and <code>engage()</code> check, in order: no latched stop, no held shortcut button,
 no live GNSS hazard, link alive, machine info present, then the machine’s own
 report — mechanical lockout clear and operator engage switch active.</p>
@@ -418,77 +376,13 @@ engaged</strong>, even with an unchanged setpoint. Miss it and <code>AutoDrive</
 <p>Tune with <code>with_command_stale_ms(ms)</code>; <code>0</code> disables the watchdog, which is only
 appropriate when something else guarantees liveness.</p>
 <p>The driving loop, then, refreshes the setpoint every cycle:</p>
-<pre><code class="language-rust ignore">    // The command is a heartbeat. While engaged the plugin re-transmits every
-    // 100 ms even when the setpoint has not changed, because that stream *is*
-    // what the steering ECU times out on. The flip side: an application that
-    // stops refreshing must not leave the machine steering forever, so
-    // `AutoDrive` stops itself after COMMAND_STALE_MS (300 ms) without a fresh
-    // command. Refresh every cycle, exactly as the drive tool does.
-    let mut steps = 0;
-    for _ in 0..10 {
-        now = now.add_millis(50);
-        session.feed(0, &amp;machine_info_frame(), now); // the ECU keeps answering
-
-        // A real controller computes this from the path and the GNSS pose; see
-        // `geo::guidance` for the pure-pursuit maths.
-        let cmd = DriveCommand {
-            speed_mps: Some(2.0),
-            curvature_km_inv: Some(20.0), // a 50 m-radius turn
-        };
-        if let Some(d) = session.get_mut::&lt;AutoDrive&gt;()
-            &amp;&amp; let Err(refusal) = d.command(cmd)
-        {
-            println!("[refused] command: {}", refusal.as_str());
-        }
-
-        session.tick(now);
-        while let Some((_, frame)) = session.poll_transmit() {
-            match frame.id.pgn() {
-                PGN_GUIDANCE_SYSTEM_CMD =&gt; steps += 1,
-                PGN_MACHINE_SELECTED_SPEED_CMD =&gt; {}
-                _ =&gt; {}
-            }
-        }
-    }
-    println!("[heartbeat] {steps} guidance commands in 500 ms of driving");</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:heartbeat}}</code></pre>
 <p>Releasing the dead-man disengages. <code>disengage()</code> is infallible and falls back to
 <code>DriveCommand::halt()</code> — and <strong>losing</strong> the dead-man has to land here too, not
 leave the last setpoint running:</p>
-<pre><code class="language-rust ignore">    // The operator releases the dead-man. `disengage` is infallible and
-    // idempotent — a disengage must never be refused — and it falls back to
-    // `DriveCommand::halt()`: zero speed, zero curvature.
-    //
-    // Losing the dead-man has to read the same as releasing it. In the drive
-    // tool that means a disconnected gamepad, or a SPACE key that stopped
-    // repeating, both land here rather than leaving the last setpoint running.
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        d.disengage(SafeStopTrigger::OperatorOverride);
-        println!(
-            "[released] status = {:?}   stop = {:?}",
-            d.status(),
-            d.stop_reason().map(SafeStopTrigger::as_str)
-        );
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:deadman}}</code></pre>
 <p>The stop is latching, so re-engaging is refused until it is explicitly cleared:</p>
-<pre><code class="language-rust ignore">    // The stop is *latching*: re-engaging is refused until it is explicitly
-    // cleared. Clearing a fault is not by itself consent to move, so it is a
-    // separate deliberate act — the `C` key in the drive tool, or a fresh
-    // 1.5 s arm hold on the gamepad.
-    {
-        let d = session.get_mut::&lt;AutoDrive&gt;().expect("autodrive plugged");
-        match d.engage() {
-            Ok(()) =&gt; println!("[engaged] while latched — unexpected"),
-            Err(refusal) =&gt; println!("[refused] engage while latched: {}", refusal.as_str()),
-        }
-
-        // `clear_stop` itself refuses while the condition is still live, so it
-        // cannot re-arm autonomy against a held stop button or a stale fix.
-        match d.clear_stop() {
-            Ok(()) =&gt; println!("[cleared] latch released; re-engage is allowed again"),
-            Err(refusal) =&gt; println!("[refused] clear_stop: {}", refusal.as_str()),
-        }
-    }</code></pre>
+<pre><code class="language-rust ignore">{{#include ../../../examples/autodrive_keyboard.rs:clear}}</code></pre>
 <h2 id="cadence-and-tuning"><a class="header" href="#cadence-and-tuning">Cadence and tuning</a></h2>
 <div class="table-wrapper">
 <table>

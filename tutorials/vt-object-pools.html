@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -523,31 +523,7 @@ make test
 validates, parses it object by object, and prints the derived version string:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    //   - id=2, type=NumberVariable (21): value=0xCAFEF00D
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&amp;[0x01, 0x00]); // id = 1
-    buf.push(3); // type = Container
-    buf.extend_from_slice(&amp;[100, 0, 200, 0, 0]); // w=100, h=200, hidden=0
-    buf.extend_from_slice(&amp;[0, 0]); // num_objects=0, num_macros=0
-
-    buf.extend_from_slice(&amp;[0x02, 0x00]); // id = 2
-    buf.push(21); // type = NumberVariable
-    buf.extend_from_slice(&amp;[0x0D, 0xF0, 0xFE, 0xCA]); // value LE
-
-    println!("buffer size = {} bytes", buf.len());
-    println!("validate    = {}", validate(&amp;buf));
-
-    let objs = parse_iop_data(&amp;buf).unwrap();
-    println!("parsed {} objects:", objs.len());
-    for o in &amp;objs {
-        println!(
-            "  id=0x{:04X}, type={:&gt;2}, body_len={}",
-            o.id,
-            o.type_byte,
-            o.body.len()
-        );
-    }
-
+</span>{{#include ../../../examples/iop_parser_demo.rs:12:36}}
 <span class="boring">}</span></code></pre>
 <p><code>make test</code> exercises the full <code>vt::objects</code> suite — body encode/decode round
 trips, the duplicate-ID guard, graph validation, and serialize/deserialize — plus

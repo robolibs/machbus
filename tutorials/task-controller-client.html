@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -371,40 +371,13 @@ underlying <code>TaskControllerClient</code> for value/command callbacks via
 building a small DDOP that names the device and one element:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let ddop = DDOP::default()
-        .with_device(
-            DeviceObject::default()
-                .with_id(0u16)
-                .with_designator("Sprayer 600")
-                .with_software_version("1.0.0"),
-        )
-        .with_element(
-            DeviceElement::default()
-                .with_id(2)
-                .with_type(DeviceElementType::Device)
-                .with_designator("Root"),
-        );
+</span>{{#include ../../../examples/tc_client_demo.rs:22:34}}
 <span class="boring">}</span></code></pre>
 <p>Then create the client, hand it the pool, and begin the connection. The first TC
 status the client hears binds the server address:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut client = TaskControllerClient::new(TCClientConfig::default());
-    client.set_ddop(ddop);
-    client.connect().unwrap();
-    println!("[1] connect → {:?}", client.state());
-
-    // TC server (0x33) broadcasts canonical process-data Status.
-    client.handle_tc_message(&amp;Message::new(
-        PGN_TC_TO_ECU,
-        vec![ProcessDataCommands::Status.as_u8(), 0, 0, 0, 0, 0, 0, 0],
-        0x33,
-    ));
-    println!(
-        "[2] TC_STATUS → {:?}, tc_addr=0x{:02X}",
-        client.state(),
-        client.tc_address()
-    );
+</span>{{#include ../../../examples/tc_client_demo.rs:36:51}}
 <span class="boring">}</span></code></pre>
 <p>From there the example pumps <code>update</code> to ship the working-set announcement and
 version request, feeds the TC’s replies back with <code>handle_tc_message</code>, lets the

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -335,26 +335,7 @@ and watches for the completed <code>Message</code>. The <code>transport_demo</co
 ends together for a GNSS-position payload:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    {
-        let payload: Vec&lt;u8&gt; = (0..30u32).map(|n| (n + 0x40) as u8).collect();
-        let mut tx = FastPacketProtocol::new();
-        let mut rx = FastPacketProtocol::new();
-        let frames = tx.send(PGN_GNSS_POSITION, &amp;payload, 0x10).unwrap();
-        println!("  {} frames for {} bytes", frames.len(), payload.len());
-
-        let mut got = None;
-        for f in &amp;frames {
-            if let Some(m) = rx.process_frame(f) {
-                got = Some(m);
-            }
-        }
-        let msg = got.unwrap();
-        println!(
-            "  reassembled {} bytes (equal? {})",
-            msg.data.len(),
-            msg.data == payload
-        );
-    }
+</span>{{#include ../../../examples/transport_demo.rs:100:119}}
 <span class="boring">}</span></code></pre>
 <p>What the calls mean:</p>
 <ul>

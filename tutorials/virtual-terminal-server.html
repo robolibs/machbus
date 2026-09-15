@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -377,18 +377,7 @@ watching node receives.</p>
 from a <code>VTServerConfig</code>, then <code>start()</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut server = VTServer::new(
-        VTServerConfig::default()
-            .with_screen(800, 480)
-            .with_version(4),
-    );
-    server.start().unwrap();
-    println!(
-        "[boot] state={:?}, screen={}×{}",
-        server.state(),
-        server.screen_width(),
-        server.screen_height()
-    );
+</span>{{#include ../../../examples/vt_server_demo.rs:14:25}}
 <span class="boring">}</span></code></pre>
 <p>Feed each inbound message to <code>handle_ecu_message(&amp;msg)</code>, which returns the
 <code>OutboundFrame</code>s to send and applies side effects (state transitions, events).
@@ -396,31 +385,12 @@ The demo walks a single client at <code>0x42</code> through Get Memory, pool tra
 End of Object Pool. The upload step:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let pool = ObjectPool::default()
-        .with_object(create_working_set(1, &amp;WorkingSetBody::default()).with_children([2u16]))
-        .with_object(create_data_mask(2, &amp;DataMaskBody::default()));
-    let mut transfer = vec![cmd::OBJECT_POOL_TRANSFER];
-    transfer.extend(pool.serialize().unwrap());
-    server.handle_ecu_message(&amp;Message::new(PGN_ECU_TO_VT, transfer, 0x42));
-    println!(
-        "[xfer] client {} pool uploaded? {}",
-        server.clients().len(),
-        server.clients()[0].pool_uploaded
-    );
+</span>{{#include ../../../examples/vt_server_demo.rs:39:49}}
 <span class="boring">}</span></code></pre>
 <p>And the activation step, where a success response makes the pool active:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>        "[end_of_pool] reply success={}, state={:?}",
-        out[0].data[1] == 0,
-        server.state()
-    );
-    assert_eq!(server.state(), VTServerState::Connected);
-
-    // Periodic VT status broadcast.
-    let bytes = server
-        .update(machbus::isobus::vt::VT_STATUS_INTERVAL_MS)
-        .unwrap();
+</span>{{#include ../../../examples/vt_server_demo.rs:58:67}}
 <span class="boring">}</span></code></pre>
 <p>To advertise, call <code>update(elapsed_ms)</code> each loop; when it returns <code>Some(bytes)</code>
 you broadcast those bytes. <code>clients()</code> and <code>active_working_set()</code> let you inspect

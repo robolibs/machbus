@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -251,16 +251,7 @@ whole 64-bit word</em> is what decides arbitration.</p>
 <p>In <code>machbus</code> you build a NAME like this (taken from the address-claim example):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let low_name = Name::default()
-        .with_identity_number(0x100)
-        .with_manufacturer_code(42)
-        .with_function_code(25)
-        .with_self_configurable(true);
-    let high_name = Name::default()
-        .with_identity_number(0x999)
-        .with_manufacturer_code(99)
-        .with_function_code(25)
-        .with_self_configurable(true);
+</span>{{#include ../../../examples/address_claim.rs:14:23}}
 <span class="boring">}</span></code></pre>
 <p>Two rules matter most when you choose these fields:</p>
 <ol>
@@ -285,11 +276,7 @@ which is what makes the network predictable across power cycles.</p>
 contest, exactly as the example prints it:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    println!("low.raw  = 0x{:016X}", low_name.raw);
-    println!(
-        "high.raw = 0x{:016X}  (higher → loses arbitration)",
-        high_name.raw
-    );
+</span>{{#include ../../../examples/address_claim.rs:25:29}}
 <span class="boring">}</span></code></pre>
 <h2 id="lifecycle-and-state-machine"><a class="header" href="#lifecycle-and-state-machine">Lifecycle and state machine</a></h2>
 <p>A control function moves through a small set of claim states. <code>machbus</code> exposes
@@ -357,32 +344,7 @@ advance time with <code>update</code>. The address-claim example shows a full co
 between two nodes that both prefer <code>0x80</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut cf_low = InternalCf::new(low_name, 0, 0x80);
-    let mut cf_high = InternalCf::new(high_name, 0, 0x80);
-    let mut clm_low = AddressClaimer::new(0);
-    let mut clm_high = AddressClaimer::new(50);
-
-    cf_low
-        .on_address_claimed
-        .subscribe(|&amp;a| println!("[low ] claimed 0x{a:02X}"));
-    cf_high
-        .on_address_claimed
-        .subscribe(|&amp;a| println!("[high] claimed 0x{a:02X}"));
-    cf_high
-        .on_address_lost
-        .subscribe(|_| println!("[high] lost — re-claiming after 50ms"));
-
-    let _ = clm_low.start(&amp;mut cf_low);
-    let _ = clm_high.start(&amp;mut cf_high);
-
-    // Each CF sees the other's claim.
-    let _ = clm_low.handle_claim(&amp;mut cf_low, 0x80, high_name);
-    let _ = clm_high.handle_claim(&amp;mut cf_high, 0x80, low_name);
-
-    for _ in 0..6 {
-        let _ = clm_low.update(&amp;mut cf_low, 60);
-        let _ = clm_high.update(&amp;mut cf_high, 60);
-    }
+</span>{{#include ../../../examples/address_claim.rs:31:56}}
 <span class="boring">}</span></code></pre>
 <p>The loser, being self-configurable, shifts from <code>0x80</code> to <code>0x81</code>; the winner
 keeps <code>0x80</code>. The claimer raises <code>on_address_claimed</code> and <code>on_address_lost</code>

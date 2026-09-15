@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -312,10 +312,7 @@ guard on connection state and return <code>Err</code> if you call them too early
 client demo connects a client and then sends one update:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>        out.dest.unwrap_or(0),
-        out.data.len()
-    );
-}
+</span>{{#include ../../../examples/vt_client_demo.rs:77:85}}
 <span class="boring">}</span></code></pre>
 <p><code>change_numeric_value</code> returns a <code>ClientOutbound { pgn, dest, data }</code> — the
 terminal’s address in <code>dest</code>, the encoded command in <code>data</code>. You transmit that

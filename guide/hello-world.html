@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -214,12 +214,7 @@ in the <a href="../tutorials/address-claim.html">Address claim tutorial</a>; for
 helper that stamps out a NAME from an identity number is enough:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn make_name(identity: u32) -&gt; Name {
-    Name::default()
-        .with_identity_number(identity)
-        .with_function_code(0x80)
-        .with_self_configurable(true)
-}
+</span>{{#include ../../../examples/session_minimal.rs:name}}
 <span class="boring">}</span></code></pre>
 <p>The important part is <code>with_self_configurable(true)</code>: it tells the bus “if I
 lose a fight over an address, I am allowed to move to another one.” That keeps
@@ -239,16 +234,7 @@ and a preferred address; <code>.plug(...)</code> adds optional capabilities (her
 pair. We then call <code>start()</code> on the controls to begin the claim:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let (ctrl_a, mut drv_a) = Session::builder(make_name(0x100), 0x80)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_a))?;
-
-    let (ctrl_b, mut drv_b) = Session::builder(make_name(0x999), 0x81)
-        .plug(Diagnostics::every(1000))
-        .spawn(EndpointTransport::new(0, ep_b))?;
-
-    ctrl_a.start()?;
-    ctrl_b.start()?;
+</span>{{#include ../../../examples/session_minimal.rs:build}}
 <span class="boring">}</span></code></pre>
 <p><code>node_a</code> would like address <code>0x80</code>; <code>node_b</code> would like <code>0x81</code>. They do not
 conflict, so both should get their wish — but the bus does not know that yet.
@@ -263,21 +249,7 @@ produces) and <em>pumping</em> the bus (delivering frames between the two endpoi
 a loop:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut now = Instant::ZERO;
-    let mut a_claims: Vec&lt;ClaimEvent&gt; = Vec::new();
-    for _ in 0..40 {
-        now = now.add_millis(50);
-        while let Some(event) = drv_a.poll_at(now)? {
-            if let Event::AddressClaim(claim) = event {
-                a_claims.push(claim);
-            }
-        }
-        while drv_b.poll_at(now)?.is_some() {}
-        built.pump_all().unwrap();
-        if ctrl_a.is_claimed() &amp;&amp; ctrl_b.is_claimed() {
-            break;
-        }
-    }
+</span>{{#include ../../../examples/session_minimal.rs:claim}}
 <span class="boring">}</span></code></pre>
 <p><code>drv.poll_at(now)</code> hands you one event at a time until there is nothing left for
 that instant; <code>built.pump_all()</code> carries the frames between endpoints. In a real

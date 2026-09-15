@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81116530.js";
+            window.path_to_searchindex_js = "../searchindex-449cc929.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-148778fb.js"></script>
@@ -250,18 +250,7 @@ with a <code>TCServerConfig</code> and keeps a small amount of state per client.
 before the server goes live:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>    let mut server = TaskControllerServer::new(
-        TCServerConfig::default()
-            .with_number(1)
-            .with_version(4)
-            .with_booms(1)
-            .with_sections(8)
-            .with_channels(4),
-    );
-    server.start().unwrap();
-
-    // Hook a value request: gauge sensor returns 42 for any DDI.
-    server.on_value_request(|_elem, _ddi, _addr| Ok(42));
+</span>{{#include ../../../examples/tc_server_demo.rs:13:24}}
 <span class="boring">}</span></code></pre>
 <p><code>TCServerConfig::validate</code> rejects topologies the wire format cannot express — a
 zero boom count, or a section count outside the representable range. Reject

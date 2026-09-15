@@ -6,7 +6,7 @@ published mdBook (it is not listed in `SUMMARY.md`); it is guidance for authors.
 ## Hard rules
 
 1. **Docs only.** Changes land only under `book/`. Never edit Rust, tests,
-   examples, `Makefile`, `Cargo.*`, or `PLAN.md`. To show code, reference an
+   examples, `.make.lua`, or `Cargo.*`. To show code, reference an
    existing file under `examples/` — do not add or change one.
 2. **Original words only.** Study the private standards under the author's
    private standards directory to get behavior right, then write everything in

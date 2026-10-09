@@ -33,8 +33,8 @@ jobs:
 
       - name: Checkout sibling path dependencies
         run: |
-          git clone --depth 1 https://codeberg.org/robolibs/wirebit.git wirebit
-          git clone --depth 1 https://codeberg.org/robolibs/concord.git concord
+          git clone --depth 1 https://github.com/robolibs/wirebit.git wirebit
+          git clone --depth 1 https://github.com/robolibs/concord.git concord
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

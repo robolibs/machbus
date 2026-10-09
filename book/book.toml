@@ -11,8 +11,8 @@ build-dir = "../target/mdbook/machbus"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://codeberg.org/robolibs/machbus"
-edit-url-template = "https://codeberg.org/robolibs/machbus/_edit/main/book/{path}"
+git-repository-url = "https://github.com/robolibs/machbus"
+edit-url-template = "https://github.com/robolibs/machbus/edit/main/book/{path}"
 additional-css = []
 
 [output.html.search]

@@ -54,7 +54,7 @@ const VT_EXTERNAL_REPORTS_README: &str =
     include_str!("../../fixtures/isobus/vt_external_reports/README.md");
 const PROTOCOL_MATRIX_CSV: &str =
     include_str!("../../../book/src/reference/assets/protocol_matrix.csv");
-const PROJECT_MAKEFILE: &str = include_str!("../../../Makefile");
+const PROJECT_MAKE: &str = include_str!("../../../.make.lua");
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
@@ -988,13 +988,19 @@ fn vt_external_evidence_report_template_mentions_all_phase10_gates() {
 
 #[test]
 fn vt_evidence_smoke_target_archives_static_and_trace_framebuffer_artifacts() {
-    let Some((_, smoke_target)) = PROJECT_MAKEFILE.split_once("vt-evidence-smoke:") else {
-        panic!("Makefile must define vt-evidence-smoke");
+    let Some((_, smoke_target)) = PROJECT_MAKE.split_once("name = \"vt-evidence-smoke\"") else {
+        panic!(".make.lua must define vt-evidence-smoke");
     };
     let smoke_target = smoke_target
-        .split("\nfuzz-smoke:")
+        .split("name = \"fuzz-smoke\"")
         .next()
         .expect("vt-evidence-smoke body must precede fuzz-smoke");
+    // The recipe passes each argument as its own string; read it as a command line.
+    let smoke_target = smoke_target
+        .replace(['"', ','], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
 
     for required in [
         "--example iop_inspect",

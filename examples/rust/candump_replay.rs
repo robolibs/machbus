@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn bracketed_fixture_replays_like_compact_trace() {
-        let fixture = include_str!("../tests/fixtures/traces/bracketed_time_date.candump");
+        let fixture = include_str!("../../tests/fixtures/traces/bracketed_time_date.candump");
         let captured = parse_candump_line(fixture.trim()).unwrap();
         let can = CanFrame::make_ext(captured.raw_id, &captured.data);
         let frame = Frame::from_can_frame(&can).unwrap();
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn malformed_fixture_lines_are_ignored_before_driver_conversion() {
-        let fixture = include_str!("../tests/fixtures/traces/malformed_candump.candump");
+        let fixture = include_str!("../../tests/fixtures/traces/malformed_candump.candump");
         for line in fixture.lines().filter(|line| {
             let trimmed = line.trim();
             !trimmed.is_empty() && !trimmed.starts_with('#')
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn rejection_fixture_preserves_standard_ids_without_promotion() {
-        let fixture = include_str!("../tests/fixtures/traces/standard_id_rejection.candump");
+        let fixture = include_str!("../../tests/fixtures/traces/standard_id_rejection.candump");
         let mut parsed = 0usize;
         let mut accepted = 0usize;
         let mut rejected = 0usize;

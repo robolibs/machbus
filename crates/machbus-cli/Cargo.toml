@@ -14,7 +14,7 @@ path = "src/main.rs"
 # The root crate supplies the candump frame model and the ISOBUS/J1939
 # PGN/source/destination decoder. Uses the `cli` feature (hosted build
 # WITHOUT pyo3/concord so it links cleanly in a static musl binary).
-machbus = { path = "..", default-features = false, features = ["cli"] }
+machbus = { path = "../..", default-features = false, features = ["cli"] }
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 # TUI backend for `machbus live` and `machbus term`.

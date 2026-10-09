@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.8] - 2026-10-09
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Read the vt smoke recipe from make.lua
+- Include fixtures from the moved examples
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Point the repository at github
+- Migrate to oslo config, clean up layout
+
+## [0.1.7] - 2026-08-12
+
 ## [0.1.7] - 2026-08-12
 
 ### <!-- 0 -->⛰️  Features

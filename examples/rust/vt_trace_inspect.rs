@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-const DEFAULT_TRACE_HEX: &str = include_str!("../tests/fixtures/isobus/vt_render_trace.hex");
+const DEFAULT_TRACE_HEX: &str = include_str!("../../tests/fixtures/isobus/vt_render_trace.hex");
 
 fn main() {
     println!("=== VT Trace Inspector (server replay → render runtime) ===\n");

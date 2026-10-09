@@ -1,19 +1,16 @@
 [package]
 name = "machbus"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
 license = "MIT"
 readme = "README.md"
-repository = "https://codeberg.org/robolibs/machbus"
+repository = "https://github.com/robolibs/machbus"
 publish = false
 include = [
     "Cargo.toml",
     "Cargo.lock",
     "CHANGELOG.md",
-    "Makefile",
-    "PLAN.md",
-    "PROJECT",
     "cbindgen.toml",
     "pyproject.toml",
     "README.md",
@@ -37,17 +34,17 @@ crate-type = ["rlib", "cdylib"]
 
 [[example]]
 name = "embedded_session_loop"
-path = "examples/embedded_session_loop.rs"
+path = "examples/rust/embedded_session_loop.rs"
 required-features = ["embedded"]
 
 [[example]]
 name = "embedded_hal_adapter"
-path = "examples/embedded_hal_adapter.rs"
+path = "examples/rust/embedded_hal_adapter.rs"
 required-features = ["embedded"]
 
 [[example]]
 name = "embedded_fixed_queue"
-path = "examples/embedded_fixed_queue.rs"
+path = "examples/rust/embedded_fixed_queue.rs"
 required-features = ["embedded"]
 
 # Exactly four build configurations. The no_std switch is keyed off `embedded`,
@@ -100,5 +97,141 @@ futures = "0.3"
 # member lets `make build` produce the binary into the shared `target/`
 # directory and keeps a single build cache.
 [workspace]
-members = ["tool"]
+members = ["crates/machbus-cli"]
 resolver = "2"
+
+[[example]]
+name = "address_claim"
+path = "examples/rust/address_claim.rs"
+
+[[example]]
+name = "autodrive_keyboard"
+path = "examples/rust/autodrive_keyboard.rs"
+
+[[example]]
+name = "can_inspect"
+path = "examples/rust/can_inspect.rs"
+
+[[example]]
+name = "candump_replay"
+path = "examples/rust/candump_replay.rs"
+
+[[example]]
+name = "diagnostic_demo"
+path = "examples/rust/diagnostic_demo.rs"
+
+[[example]]
+name = "engine_powertrain_demo"
+path = "examples/rust/engine_powertrain_demo.rs"
+
+[[example]]
+name = "file_server_demo"
+path = "examples/rust/file_server_demo.rs"
+
+[[example]]
+name = "functionalities_demo"
+path = "examples/rust/functionalities_demo.rs"
+
+[[example]]
+name = "gnss_batch"
+path = "examples/rust/gnss_batch.rs"
+
+[[example]]
+name = "gnss_monitor"
+path = "examples/rust/gnss_monitor.rs"
+
+[[example]]
+name = "guidance_autosteer"
+path = "examples/rust/guidance_autosteer.rs"
+
+[[example]]
+name = "guidance_s_path"
+path = "examples/rust/guidance_s_path.rs"
+
+[[example]]
+name = "heartbeat_demo"
+path = "examples/rust/heartbeat_demo.rs"
+
+[[example]]
+name = "iop_inspect"
+path = "examples/rust/iop_inspect.rs"
+
+[[example]]
+name = "iop_parser_demo"
+path = "examples/rust/iop_parser_demo.rs"
+
+[[example]]
+name = "j1939_decode"
+path = "examples/rust/j1939_decode.rs"
+
+[[example]]
+name = "main"
+path = "examples/rust/main.rs"
+
+[[example]]
+name = "niu_demo"
+path = "examples/rust/niu_demo.rs"
+
+[[example]]
+name = "nmea2000_decode"
+path = "examples/rust/nmea2000_decode.rs"
+
+[[example]]
+name = "serial_gnss"
+path = "examples/rust/serial_gnss.rs"
+
+[[example]]
+name = "session_minimal"
+path = "examples/rust/session_minimal.rs"
+
+[[example]]
+name = "socketcan_capture"
+path = "examples/rust/socketcan_capture.rs"
+
+[[example]]
+name = "speed_monitor"
+path = "examples/rust/speed_monitor.rs"
+
+[[example]]
+name = "tc_client_demo"
+path = "examples/rust/tc_client_demo.rs"
+
+[[example]]
+name = "tc_geo_demo"
+path = "examples/rust/tc_geo_demo.rs"
+
+[[example]]
+name = "tc_server_demo"
+path = "examples/rust/tc_server_demo.rs"
+
+[[example]]
+name = "tractor_ecu_demo"
+path = "examples/rust/tractor_ecu_demo.rs"
+
+[[example]]
+name = "transport_demo"
+path = "examples/rust/transport_demo.rs"
+
+[[example]]
+name = "types_demo"
+path = "examples/rust/types_demo.rs"
+
+[[example]]
+name = "virtual_can_demo"
+path = "examples/rust/virtual_can_demo.rs"
+
+[[example]]
+name = "vt_client_demo"
+path = "examples/rust/vt_client_demo.rs"
+
+[[example]]
+name = "vt_gtui_server"
+path = "examples/rust/vt_gtui_server.rs"
+
+[[example]]
+name = "vt_server_demo"
+path = "examples/rust/vt_server_demo.rs"
+
+[[example]]
+name = "vt_trace_inspect"
+path = "examples/rust/vt_trace_inspect.rs"

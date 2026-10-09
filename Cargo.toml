@@ -5,7 +5,7 @@ edition = "2024"
 description = "ISO 11783 (ISOBUS) + J1939 + NMEA2000 networking stack"
 license = "MIT"
 readme = "README.md"
-repository = "https://codeberg.org/robolibs/machbus"
+repository = "https://github.com/robolibs/machbus"
 publish = false
 include = [
     "Cargo.toml",
